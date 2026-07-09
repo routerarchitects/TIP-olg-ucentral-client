@@ -31,13 +31,16 @@ The uCentral client is a lightweight, Go-based gateway daemon that bridges a clo
 ```json
 {
   "serial": "00:11:22:33:44:55",
+  "compression_threshold_bytes": 2048,
   "cloud": {
     "url": "wss://cloud.gateway.example.com:15002",
     "connect_timeout_seconds": 10
   },
   "nats": {
-    "servers": ["nats://127.0.0.1:4222"],
-    "credentials_file": "/etc/ucentral/nats.creds"
+    "servers": ["tls://127.0.0.1:4222"],
+    "credentials_file": "/etc/ucentral/nats.creds",
+    "tls_required": true,
+    "ca_file": "/etc/ucentral/ca.pem"
   },
   "queues": {
     "ws_writer_capacity": 500,

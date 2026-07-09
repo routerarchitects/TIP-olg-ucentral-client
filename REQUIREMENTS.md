@@ -26,7 +26,7 @@ This document lists the strict, numbered requirements for the Go-based uCentral 
     *   `ucentral.v1.device.<own-serial>.capabilities.get` (Request-Reply)
     *   `ucentral.v1.device.<own-serial>.status.get` (Request-Reply)
 *   **REQ-005 (Permissive Parameter Validation):** The client must validate incoming configuration schemas using a compiled-in schema validator. It must enforce **permissive validation**: known schema parameters are strictly validated, but unknown future parameters must be passed through to NATS to preserve forward compatibility.
-*   **REQ-006 (JetStream KV Consistency Contract):** The client must write configurations to JetStream KV (`cfg_desired` bucket) under key `desired.<serial>`. The NATS configure trigger must include the target `uuid`, `kv_key`, and the NATS `kv_revision`. Downstream agents must abort if the KV revision is higher than the trigger revision, and must not apply without a matching trigger revision.
+*   **REQ-006 (JetStream KV Consistency Contract):** The client must write configurations to JetStream KV (`cfg_desired` bucket) under key `desired.<serial>`. The NATS configure trigger must carry the target `uuid`, `kv_key`, and the NATS `kv_revision` to allow the downstream agent to fetch the configuration and verify ordering. Downstream agents must abort if the KV revision is higher than the trigger revision, and must not apply without a matching trigger revision.
 
 ---
 
@@ -85,6 +85,7 @@ This document lists the strict, numbered requirements for the Go-based uCentral 
     *   `5` (Rollback Completed)
     *   `6` (Rollback Failed)
 *   **REQ-022 (Capability Caching & Lifecycle):** The daemon must fetch capabilities from the downstream agent exactly once at startup and cache them in-memory. Capabilities must not be re-fetched on NATS reconnect events to prevent broker congestion. The cache must only be refreshed upon detecting a firmware version change, receiving a specific upgrade reboot log, or receiving a valid local management signal.
-*   **REQ-023 (TLS v1.3 Security):** All NATS broker connections must enforce TLS v1.3 encryption with strict CA certificate validation. Plain text or insecure NATS connections must be rejected.
-*   **REQ-024 (Payload Compression):** Outbound payloads exceeding a configurable compression threshold (default: 2048 bytes / 2KB) must be compressed using gzip prior to WebSocket transmission. The compression threshold must be configurable via the daemon configuration file.
+*   **REQ-023 (TLS v1.3 Security):** All NATS broker connections must enforce TLS v1.3 encryption with strict CA certificate verification configured using local CA paths. Plain text or insecure NATS connections must be rejected.
+*   **REQ-024 (Payload Compression):** Outbound payloads exceeding a configurable compression threshold specified by the configuration file property `compression_threshold_bytes` (default: 2048 bytes / 2KB) must be compressed using gzip prior to WebSocket transmission.
+*   **REQ-025 (Transaction Retry Policy):** The Request Manager must implement a strict transaction retry policy: only idempotent, read-only queries (e.g., `capabilities.get`, `status.get`) are retryable for transient failures, using a randomized exponential backoff (base 2s, max 3 attempts). State-changing actions (`configure`, `reboot`, `factory`, `upgrade`) must fail fast without automatic retries.
 

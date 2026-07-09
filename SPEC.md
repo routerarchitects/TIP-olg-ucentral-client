@@ -101,12 +101,14 @@ olg-ucentral-client/
     import "encoding/json"
 
     type ConfigureCommand struct {
-    	Version   string          `json:"version"`
-    	RPCID     string          `json:"rpc_id"`
-    	Target    string          `json:"target"`
-    	UUID      string          `json:"uuid"`
-    	Payload   json.RawMessage `json:"payload"`
-    	Timestamp string          `json:"timestamp"`
+        Version     string          `json:"version"`
+        RPCID       string          `json:"rpc_id"`
+        Target      string          `json:"target"`
+        UUID        string          `json:"uuid"`
+        KVKey       string          `json:"kv_key"`
+        KVRevision  uint64          `json:"kv_revision"`
+        Payload     json.RawMessage `json:"payload"`
+        Timestamp   string          `json:"timestamp"`
     }
 
     type ActionCommand struct {
@@ -365,9 +367,16 @@ olg-ucentral-client/
     	kv   nats.KeyValue
     }
 
-    func NewNATSClient(servers []string, credsFile string) (*NATSClient, error)
+    type NATSConfig struct {
+        Servers         []string
+        CredentialsFile string
+        TLSRequired     bool
+        CAFile          string
+    }
+
+    func NewNATSClient(cfg NATSConfig) (*NATSClient, error)
     func (n *NATSClient) WriteDesiredConfig(ctx context.Context, serial string, config []byte) (uint64, error)
-    func (n *NATSClient) PublishConfigTrigger(ctx context.Context, serial string, uuid string, revision uint64) error
+    func (n *NATSClient) PublishConfigTrigger(ctx context.Context, serial string, uuid string, kvKey string, revision uint64) error
     ```
 
 #### PR 4.3: Dynamic Capabilities & Local Signal Sockets

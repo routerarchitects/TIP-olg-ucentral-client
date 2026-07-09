@@ -45,7 +45,7 @@ To decouple message routing from request lifecycles, the uCentral Client include
 *   **Correlation Tracking:** Maps outgoing NATS commands to incoming Cloud JSON-RPC requests using request IDs.
 *   **Deduplication & Cache:** Handles duplicate requests and caches responses.
 *   **Request Timeouts:** Enforces timeouts using non-blocking timers and triggers failure responses if local components do not respond in time.
-*   **Retry Handling:** Automates transaction retries for transient failures.
+*   **Retry Handling:** Automates transaction retries for transient failures. Only idempotent, read-only queries (like `capabilities.get`, `status.get`) are retryable for transient failures, using a randomized exponential backoff (e.g., base 2s, max 3 attempts). State-changing actions (`configure`, `reboot`, `factory`, `upgrade`) must fail fast without automatic retries.
 *   **Metrics Collection:** Tracks latencies, throughputs, and success/error rates per command.
 
 ---
@@ -142,7 +142,7 @@ sequenceDiagram
 
 ### 2.5 JetStream Consistency Model
 *   **Desired Configuration:** Leverages JetStream Key-Value (KV) store using `cfg_desired` bucket and key `desired.<serial>`. The client writes the desired state to KV, then publishes a lightweight trigger to the `config.apply` subject.
-*   **Revision Match Contract:** The NATS configure trigger must include the `uuid`, `kv_key`, and the NATS `kv_revision` write metadata. The downstream agent reads the NATS trigger, retrieves the KV record, and compares revisions. 
+*   **Revision Match Contract:** The NATS configure trigger must carry the `uuid`, `kv_key`, and the NATS `kv_revision` write metadata to allow the downstream agent to fetch the configuration and verify ordering. The downstream agent reads the NATS trigger, retrieves the KV record, and compares revisions.
     *   If the KV revision matches the trigger revision, it is applied.
     *   If the KV revision is higher than the trigger revision, the agent **aborts the stale trigger** and waits for the newer trigger to arrive. This prevents applying configs whose trigger publishes failed mid-sequence.
 *   **Failure Handling:**
@@ -201,7 +201,7 @@ To protect device integrity, the client divides requests into two execution clas
 To prevent hanging operations, the Request Manager enforces strict timeout thresholds:
 
 *   **Configuration Apply Timeout:** **30 seconds**. If the downstream service does not return a configuration apply status within 30s, the client returns a timeout error to the cloud and logs a warning.
-*   **Action Timeout:** **60 seconds** (default, action-specific configurations allowed, e.g., up to 120s for `wifiscan` or firmware download).
+*   **Action Timeout:** **60 seconds** (default, action-specific configurations allowed, e.g., up to 120s for `traceroute` or firmware download).
 *   **NATS Publish Timeout:** **5 seconds**.
 
 

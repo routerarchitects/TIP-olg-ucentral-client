@@ -134,7 +134,7 @@ sequenceDiagram
     NATS-->>GoClient: Deliver Reply
 ```
 
-*   **Caching Strategy:** Dynamic capability configurations are fetched **exactly once** on daemon startup and cached in-memory. They are not re-fetched on NATS reconnect events to avoid traffic congestion.
+*   **Caching Strategy:** The capability cache is populated once after the first usable NATS connection and downstream capability responder availability. If initial retrieval fails, the client retries with bounded exponential backoff until the initial cache is populated. After successful initialization, capabilities are not automatically re-fetched on subsequent NATS reconnect events to avoid traffic congestion.
 *   **Refresh Events:** The cache is refreshed only:
     1. Upon detecting a firmware version change.
     2. Upon receipt of a specific system reboot log indicating an upgrade.
@@ -146,8 +146,16 @@ sequenceDiagram
     *   If the KV revision matches the trigger revision, it is applied.
     *   If the KV revision is higher than the trigger revision, the agent **aborts the stale trigger** and waits for the newer trigger to arrive. This prevents applying configs whose trigger publishes failed mid-sequence.
 *   **Failure Handling:**
-    *   *KV write succeeds but publish fails:* The client returns an error to the cloud. The updated configuration exists in KV but remains unapplied. Upon the next periodic sync check (or next cloud configure push), the client detects the UUID mismatch and publishes a notification to reconcile.
+    *   *KV write succeeds but publish fails:* The client returns an error to the cloud. The updated configuration exists in KV but remains unapplied. The background reconciliation loop resolves this state during its next periodic run.
     *   *Publish succeeds but downstream agent cannot read KV:* The agent returns a NATS error payload. The Request Manager maps this to a configuration error response back to the cloud.
+
+### 2.6 Desired/Applied Reconciliation Loop
+The daemon runs a background reconciliation loop to recover from non-atomic split-write failures:
+1.  **Periodic Scan:** At a configured interval (default: 5 minutes), the daemon compares the desired configuration UUID stored in JetStream KV against the active configuration UUID reported by the downstream agent (retrieved from the latest state report cached in the `StateCoalescer`).
+2.  **Mismatch Detection:** If a mismatch is detected (desired UUID != active UUID), it indicates that the downstream agent is out of sync.
+3.  **Safe Re-Publishing:** The reconciler retrieves the revision metadata for the existing desired configuration from JetStream KV and publishes a new `config.apply` NATS trigger.
+4.  **No KV Write Mutation:** The reconciler must **never** write a new record to the KV bucket during this phase, preventing infinite update loops or sequence number inflation.
+5.  **Idempotence Guard:** Stale or duplicate triggers are safely ignored by the downstream agent since it validates the NATS `kv_revision` before applying any changes.
 
 ---
 
@@ -185,7 +193,7 @@ To protect device integrity, the client divides requests into two execution clas
     *   *Rule:* Query operations do not acquire the device state lock and are published to NATS immediately, even if a configuration transaction is in progress.
 
 ### 3.3 Duplicate & Overlapping Requests
-*   **Overlapping Duplicate Requests:** If the Cloud retries a command sending the exact same `rpc_id` while a transaction is already `InFlight`, the client **does not send a second message to NATS**. Instead, it attaches the new WebSocket stream as a listener to the running transaction. When the agent completes execution, both waiting streams receive the same response.
+*   **Overlapping Duplicate Requests:** If the Cloud retries a command sending the exact same `rpc_id` while a transaction is already `InFlight`, the client rejects the new request immediately with a JSON-RPC busy/internal error (`-32603`). This avoids complex fan-out/listener attachment logic and ensures predictable client behavior.
 *   **Duplicate Completed Requests:** If the request matches a cached `rpc_id` that has already completed, the Request Manager **replays the cached response** directly to the cloud.
 *   **Cache TTL by Operation Type:**
     *   `configure`: **5 minutes**
@@ -197,7 +205,15 @@ To protect device integrity, the client divides requests into two execution clas
 *   **Cloud Disconnections:** If the WAN connection to the Cloud drops while a transaction is `InFlight`, the client **continues running the operation downstream**. It does not abort the configuration or reboot.
 *   **Result Recovery:** If NATS replies while the Cloud is disconnected, the client stores the result in its transaction cache. Once the Cloud reconnects and queries the status or retries the command (using the same `rpc_id`), the client replays the cached result immediately.
 
-### 3.5 Timeout Specifications
+### 3.5 Asynchronous Upgrade Workflow & State Management
+Firmware upgrades follow a background execution model to prevent connection timeouts while ensuring concurrency safety:
+1.  **Immediate Acknowledgment:** The `"started"` status is the final JSON-RPC response for the original request, terminating the initial request-reply exchange.
+2.  **Background Operation:** The upgrade continues executing as a background operation monitored by the daemon.
+3.  **State Lock Lifetime:** The state-changing lock (`activeStateTx`) remains held until terminal completion or failure of the upgrade.
+4.  **Reconnection Resilience:** Upon WebSocket reconnection, the daemon resumes reporting the current upgrade state to the Cloud.
+5.  **Duplicate Rejection:** Any duplicate upgrade requests received while the background upgrade is active are rejected immediately as busy.
+
+### 3.6 Timeout Specifications
 To prevent hanging operations, the Request Manager enforces strict timeout thresholds:
 
 *   **Configuration Apply Timeout:** **30 seconds**. If the downstream service does not return a configuration apply status within 30s, the client returns a timeout error to the cloud and logs a warning.
@@ -205,7 +221,7 @@ To prevent hanging operations, the Request Manager enforces strict timeout thres
 *   **NATS Publish Timeout:** **5 seconds**.
 
 
-### 3.4 Configuration Validation & Application Flow
+### 3.7 Configuration Validation & Application Flow
 The validation pipeline splits structural checks from semantic checks:
 
 ```mermaid
@@ -254,12 +270,12 @@ sequenceDiagram
     end
 ```
 
-#### 3.4.1 Configuration Rollback Reporting
+#### 3.7.1 Configuration Rollback Reporting
 When the downstream agent fails to apply a configuration and triggers a rollback, the status is propagated to the cloud as follows:
 *   The downstream agent returns a result containing `result: rolled_back`, the failure details, and the `active` config UUID (the last known good configuration).
-*   The uCentral Client translates this into a JSON-RPC response containing error code `1` (application error), a message stating `"Configuration apply failed. Rolled back to active configuration UUID <uuid>"`, and lists any offending rejected configuration keys.
+*   The uCentral Client translates this into a JSON-RPC response containing error code `-32603` (Internal Error) with `application_code` equal to `5` (Rollback Completed) in the `error.data` object, a message stating `"Configuration apply failed. Rolled back to active configuration UUID <uuid>"`, and lists any offending rejected configuration keys.
 
-### 3.5 Startup & Reconnect Dependency Handling
+### 3.8 Startup & Reconnect Dependency Handling
 The client boots and connects to the Cloud and NATS **concurrently and independently** using separate background execution threads. Cloud connectivity does **not** block on NATS.
 
 ```mermaid
@@ -315,13 +331,13 @@ Queue sizes are configurable via daemon configuration file parameters.
 
 | Queue Name | Purpose / Type | Capacity | Overflow / Failure Policy |
 | :--- | :--- | :--- | :--- |
-| **Command Dispatch Buffer** | Short-lived NATS handoff buffer (Not durable). | Default: 100 messages | If full or NATS is disconnected, fails fast and rejects the Cloud request with `local_service_unavailable` (Error Code 3). |
+| **Command Dispatch Buffer** | Short-lived NATS handoff buffer (Not durable). | Default: 100 messages | If full or NATS is disconnected, fails fast and rejects the Cloud request with `local_service_unavailable` (JSON-RPC code -32603, application_code 3). |
 | **Command Result Priority Queue** | Handles NATS replies for config/action processing. | Default: 50 messages | High priority. Never dropped. If capacity is threatened, telemetry forwarding is throttled. If full, triggers critical metrics alert and fails fast. |
 | **State Coalescer** | Keeps only the latest state report (last-write-wins). | 1 Slot per Serial | Overwrites previous un-flushed stats with newer state reports. Flushes every 10 seconds. |
 | **Telemetry/Log Ring Buffer** | Bounded FIFO queue for logs and events. | Default: 500 messages | Bounded FIFO. Drops oldest low-priority events on overflow (FIFO drop). Excludes high-severity audit logs. |
 
 ### 4.2 WebSocket Outbound Scheduler
-Exposes a priority-aware message dispatch queue writing to the WebSocket connection. Commands responses are prioritized:
+Exposes a priority-aware message dispatch queue writing to the WebSocket connection. The scheduler enforces a capacity limit of `capacity` entries *per priority queue*, ensuring that low-priority traffic cannot exhaust scheduler resources or block high-priority responses. Commands responses are prioritized:
 *   **Priority 0:** JSON-RPC responses and errors (always bypasses logs/telemetry backlog).
 *   **Priority 1:** Critical audits, system crash logs, and health snapshots.
 *   **Priority 2:** Coalesced device state reports.
@@ -411,7 +427,7 @@ Upon receiving a request, the client replies with its status snapshot. Standard 
 *   **Coexistence:** Multiple version namespaces (e.g., `v1` and `v2`) can coexist on the same NATS broker. Different implementations subscribe to their specific major version prefix.
 *   **Backward Compatibility:** Within a major version namespace, backward compatibility is required. Undefined fields must be ignored by consumers, and new optional fields must be defined with safe defaults.
 *   **Version Negotiation & Fallback:** During the `connect` handshake, the uCentral client exchanges its supported subject versions (e.g. `v1`) within the `capabilities` payload. The Cloud gateway uses this information to format messages accordingly.
-    *   *Fallback rule:* If the Cloud supports `v2` only but the client supports `v1` only (or vice versa), the client remains connected but operates **only in a degraded state for health/error reporting**, rejecting all configuration and action requests with error code 3 (`local_service_unavailable`).
+    *   *Fallback rule:* If the Cloud supports `v2` only but the client supports `v1` only (or vice versa), the client remains connected but operates **only in a degraded state for health/error reporting**, rejecting all configuration and action requests with error code -32603 (`local_service_unavailable`, application_code 3).
 
 ---
 
@@ -426,13 +442,13 @@ The client maps internal failures to standard JSON-RPC 2.0 error codes:
 | **-32600** | Invalid Request | JSON-RPC request is malformed. |
 | **-32601** | Method Not Found | The requested JSON-RPC method does not exist. |
 | **-32602** | Invalid Params | Target serial mismatch, invalid UUID, or missing parameters. |
-| **-32603** | Internal Error | Internal uCentral client daemon exception. |
-| **1** | Application Error | Configuration apply failed locally on the agent. |
-| **2** | Timeout | Command execution exceeded time limits (NATS timeout). |
-| **3** | Local Service Unavailable| NATS is disconnected or no downstream agent is listening. |
-| **4** | Validation Failed | Schema check failed at the uCentral client validator. |
-| **5** | Rollback Completed | Configuration failed but rollback to previous UUID succeeded. |
-| **6** | Rollback Failed | Configuration failed and rollback to previous UUID also failed. |
+| **-32603** | Internal Error | Internal uCentral client daemon exception or application error wrapper. |
+| **-32603 (data.application_code = 1)** | Application Error | Configuration apply failed locally on the agent. |
+| **-32603 (data.application_code = 2)** | Timeout | Command execution exceeded time limits (NATS timeout). |
+| **-32603 (data.application_code = 3)** | Local Service Unavailable| NATS is disconnected or no downstream agent is listening. |
+| **-32603 (data.application_code = 4)** | Validation Failed | Schema check failed at the uCentral client validator. |
+| **-32603 (data.application_code = 5)** | Rollback Completed | Configuration failed but rollback to previous UUID succeeded. |
+| **-32603 (data.application_code = 6)** | Rollback Failed | Configuration failed and rollback to previous UUID also failed. |
 
 ### 8.2 Result Enums
 All result structures return one of the following standard values:

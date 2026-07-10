@@ -15,11 +15,11 @@ This document details the test plans, test cases, and verification strategies fo
 *   **TC-CON-002 (Error Mappings):**
     *   *Requirement Mapping:* `REQ-021` (JSON-RPC Error Mapping)
     *   *Setup:* Pass internal error enum `ErrServiceUnavailable` to JSON-RPC error encoder helper.
-    *   *Assert:* Encoder must output JSON-RPC error payload with `code = -32603` (Internal Error) and data code payload equal to `3` (Local Service Unavailable).
+    *   *Assert:* Encoder must output JSON-RPC error payload with `code = -32603` (Internal Error) and `data.application_code` equal to `3` (Local Service Unavailable).
 *   **TC-CON-003 (Version Negotiation Fallback):**
     *   *Requirement Mapping:* `REQ-003` (Version Negotiation Fallback)
     *   *Setup:* Initiate a mock WebSocket connection offering only `v2` protocol, while the client is configured for `v1` only.
-    *   *Assert:* Client must transition to `Degraded` state, remain connected for health reporting, and return `local_service_unavailable` (Error Code 3) for configuration/action commands.
+    *   *Assert:* Client must transition to `Degraded` state, remain connected for health reporting, and return `local_service_unavailable` (JSON-RPC code -32603, application_code 3) for configuration/action commands.
 *   **TC-VAL-001 (Permissive Parameter Validation):**
     *   *Requirement Mapping:* `REQ-005` (Permissive Parameter Validation)
     *   *Setup:* Submit a configuration payload containing a known schema property with an invalid type, and an unknown future schema property.
@@ -64,6 +64,14 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-024` (Payload Compression)
     *   *Setup:* Set `compression_threshold_bytes` to 2048. Generate a payload of size 1024 bytes and another of size 3072 bytes.
     *   *Assert:* The 1024-byte payload must be sent uncompressed. The 3072-byte payload must be gzipped before WebSocket transmission.
+*   **TC-BUF-006 (Command Result Queue Non-Blocking):**
+    *   *Requirement Mapping:* `REQ-013` (Command Result Priority Queue)
+    *   *Setup:* Fill the NATS command result queue (capacity 50) to maximum capacity. Attempt to publish execution results from downstream agent loops.
+    *   *Assert:* Outbound WebSocket writes or telemetry delays must not block the core NATS listener loops, ensuring execution results are processed asynchronously and independently.
+*   **TC-BUF-007 (Outbound Rate Limiting, Drop Metrics & Coalescing):**
+    *   *Requirement Mapping:* `REQ-015` (State Coalescer & Telemetry Ring Buffer)
+    *   *Setup:* Push 60 telemetry events within 1 second. Push 2 state updates within 5 seconds.
+    *   *Assert:* Outbound scheduler must rate-limit telemetry to 50 events/second (dropping 10 events) and state reports to 1 per 10 seconds. Verify that all dropped events correctly increment the `dropped_by_reason` metric map under keys `"telemetry_overflow"` and `"state_rate_limit"`.
 
 ---
 
@@ -85,17 +93,17 @@ This document details the test plans, test cases, and verification strategies fo
 *   **TC-UPG-001 (Asynchronous Upgrade Progress Stream):**
     *   *Requirement Mapping:* `REQ-011` (Asynchronous Upgrade Tracking)
     *   *Setup:* Start an upgrade transaction.
-    *   *Assert:* Client must immediately return an initial "started" status response, keep the transaction active in memory, and stream progress logs over NATS to the Cloud until a terminal state is reached.
+    *   *Assert:* Client must immediately return an initial "started" status response and close the initial JSON-RPC request-reply exchange, while the background upgrade operation remains active and logs continue to flow over NATS to the Cloud until a terminal state is reached.
 
 ### PR 3.2: Duplicate Attachment & Cache TTL Tests
-*   **TC-RM-004 (Duplicate Request Attachment):**
-    *   *Requirement Mapping:* `REQ-009` (Duplicate Transaction Attachment)
-    *   *Setup:* Start transaction `rpc_id = "tx-1"`. Call `AttachDuplicate("tx-1")` from a second thread.
-    *   *Assert:* `AttachDuplicate` must return `true` and the exact same `ResultCh` channel as the original transaction.
+*   **TC-RM-004 (Duplicate Active Request Rejection):**
+    *   *Requirement Mapping:* `REQ-009` (Duplicate Active Request Rejection)
+    *   *Setup:* Start transaction `rpc_id = "tx-1"`. Submit another request with matching `rpc_id = "tx-1"`.
+    *   *Assert:* The second request must fail immediately and return a busy error (`-32603`). The original transaction must continue execution unaffected.
 *   **TC-RM-005 (Operation-Specific Cache TTLs):**
     *   *Requirement Mapping:* `REQ-010` (Operation-Specific Caching & TTL)
-    *   *Setup:* Write `configure` result (TTL 5 mins) and `upgrade` result (TTL 60 mins) to `TransactionCache`. Mock clock time to advance 10 minutes.
-    *   *Assert:* Cache lookup for `configure` must return `false` (expired). Lookup for `upgrade` must return `true` (cached).
+    *   *Setup:* Write `configure` (TTL 5 mins), `reboot` (TTL 10 mins), `factory` (TTL 30 mins), and `upgrade` (TTL 60 mins) results to `TransactionCache`. Mock clock time to advance 15 minutes.
+    *   *Assert:* Cache lookups for `configure` and `reboot` must return `false` (expired). Lookups for `factory` and `upgrade` must return `true` (cached).
 *   **TC-RM-006 (Transaction Retry Policy & Backoff):**
     *   *Requirement Mapping:* `REQ-025` (Transaction Retry Policy)
     *   *Setup:* Mock the NATS responder to return transient errors. Submit a read-only request (`capabilities.get`) and a state-changing request (`configure`).
@@ -128,6 +136,11 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-023` (TLS v1.3 Security)
     *   *Setup:* Configure the NATS client to connect to a broker without TLS or with an invalid CA cert.
     *   *Assert:* Client must fail to connect and reject the connection attempt. Configure with a valid CA cert and TLS v1.3; the connection must succeed.
+*   **TC-NET-009 (KV Write / Trigger Publish Partial Failure Reconciliation):**
+    *   *Requirement Mapping:* `REQ-006` (KV Consistency), `REQ-026` (Reconciliation After Partial Failure)
+    *   *Setup:* Write desired config to JetStream KV successfully. Simulate NATS publish failure of the `config.apply` trigger. Cloud receives failure. Later, run the background reconciliation loop with the desired UUID present in KV and the applied UUID on the device still old.
+    *   *Assert:* Reconciler must detect the desired/applied mismatch and republish the missing `config.apply` trigger pointing to the existing KV revision *without rewriting* the KV bucket. Downstream agent must receive the trigger, retrieve the config from KV, and apply it. Stale or duplicate trigger replays must remain harmless due to revision guards.
+
 
 ### PR 4.3: Dynamic Capabilities & Sockets Tests
 *   **TC-NET-005 (Unix Socket Refresh Trigger):**
@@ -140,8 +153,20 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Assert:* Client increments `audit_delivery_failure` but does not trigger recursive log writes.
 *   **TC-NET-008 (Capability Retrieval & Caching Lifecycle):**
     *   *Requirement Mapping:* `REQ-022` (Capability Caching & Lifecycle)
-    *   *Setup:* Start the client, observe capabilities fetch on boot. Trigger a NATS reconnect event.
-    *   *Assert:* Capabilities must be fetched exactly once on boot and cached. No new fetch must be triggered on NATS reconnect. Simulate a local Unix socket capabilities refresh command; the capabilities must be updated.
+    *   *Setup:* Start the client with NATS and the downstream responder initially unavailable. Verify retry backoff. Bring NATS and the responder online. Trigger a subsequent NATS reconnect event.
+    *   *Assert:* The client must retry capability retrieval with bounded backoff until successful. Once the cache is successfully populated, no new fetch must be triggered on subsequent NATS reconnect events. Simulate a local Unix socket capabilities refresh command; the capabilities must be updated.
+*   **TC-NET-010 (Connection State Machine Transitions):**
+    *   *Requirement Mapping:* `REQ-002` (Reconnection State Machine)
+    *   *Setup:* Instantiate connection state machine. Simulate transitions: `Offline` -> `ConnectingBoth` -> `Operational` -> `Degraded`.
+    *   *Assert:* State machine must compile and transition correctly through all four connection states, invoking status callbacks and reporting correct degraded statuses.
+*   **TC-NET-011 (Unix Socket Rate Limiting & Auditing):**
+    *   *Requirement Mapping:* `REQ-017` (Local Management Signal Security), `REQ-018` (Audit Logging & Loop Prevention)
+    *   *Setup:* Send 10 capability refresh requests to the Unix socket in 1 second. Trigger sensitive actions (`reboot`, `factory`, `upgrade`).
+    *   *Assert:* The Unix socket listener must rate-limit and reject excess refresh requests. Sensitive actions must successfully emit high-severity audit logs to the Cloud.
+*   **TC-NET-012 (Syslog-Triggered Capability Refreshes):**
+    *   *Requirement Mapping:* `REQ-022` (Capability Caching & Lifecycle)
+    *   *Setup:* Input a syslog message indicating a firmware version change, and a NATS message indicating an upgrade reboot log.
+    *   *Assert:* Both trigger events must invalidate the capability cache and launch a new downstream NATS capability discovery query.
 
 ---
 
@@ -157,4 +182,41 @@ This document details the test plans, test cases, and verification strategies fo
 *   **TC-INT-002 (Config Sync and Rollback Flow):**
     *   *Requirement Mapping:* `REQ-006` (KV Consistency), `REQ-021` (Error Mapping)
     *   *Setup:* Push configuration update from mock WebSocket server. Downstream agent returns rollback result.
-    *   *Assert:* Client writes KV config, triggers `config.apply` NATS command, receives `rolled_back` reply, and returns JSON-RPC error `1` containing the active config UUID.
+    *   *Assert:* Client writes KV config, triggers `config.apply` NATS command, receives `rolled_back` reply, and returns JSON-RPC error `code = -32603` (Internal Error) with `error.data.application_code = 5` (Rollback Completed) containing the active config UUID inside the `error.data` payload.
+*   **TC-INT-003 (Concurrent Startup Loops and Independent Connections):**
+    *   *Requirement Mapping:* `REQ-001` (Concurrent Startup Loops)
+    *   *Setup:* Start the daemon with NATS connection blocked (unreachable broker) but Cloud WebSocket reachable.
+    *   *Assert:* Daemon must successfully establish connection to the Cloud WebSocket and report status as "Degraded" (due to NATS being offline) without hanging or blocking on the NATS connection loop.
+
+---
+
+## Epic 6: Requirements Traceability Matrix
+
+| Requirement ID | Requirement Name | Mapping Test Case(s) |
+| :--- | :--- | :--- |
+| **REQ-001** | Concurrent Startup Loops | `TC-INT-001`, `TC-INT-003` |
+| **REQ-002** | Reconnection State Machine | `TC-NET-001`, `TC-NET-010` |
+| **REQ-003** | Version Negotiation Fallback | `TC-CON-003` |
+| **REQ-004** | Subject Schema Versioning | `TC-CON-001` |
+| **REQ-005** | Permissive Parameter Validation | `TC-VAL-001` |
+| **REQ-006** | JetStream KV Consistency Contract | `TC-NET-003`, `TC-INT-002`, `TC-NET-009` |
+| **REQ-007** | Transaction Lifecycle | `TC-RM-001` |
+| **REQ-008** | Concurrency Serialization | `TC-RM-002`, `TC-RM-003` |
+| **REQ-009** | Duplicate Active Request Rejection | `TC-RM-004` |
+| **REQ-010** | Operation-Specific Caching & TTL | `TC-RM-005` |
+| **REQ-011** | Asynchronous Upgrade Tracking | `TC-UPG-001` |
+| **REQ-012** | Command Dispatch Buffer | `TC-BUF-003` |
+| **REQ-013** | Command Result Priority Queue | `TC-QUE-001`, `TC-BUF-006` |
+| **REQ-014** | WebSocket Outbound Priority Scheduler | `TC-SCH-001`, `TC-SCH-002` |
+| **REQ-015** | State Coalescer & Telemetry Ring Buffer | `TC-BUF-001`, `TC-BUF-002`, `TC-BUF-007` |
+| **REQ-016** | NATS Security & Target Isolation | `TC-SEC-001` |
+| **REQ-017** | Local Management Signal Security | `TC-NET-005`, `TC-NET-011` |
+| **REQ-018** | Audit Logging & Loop Prevention | `TC-NET-006`, `TC-NET-011` |
+| **REQ-019** | NATS-Native Health Reporting | `TC-NET-007` |
+| **REQ-020** | Sizing Constraints | `TC-CON-004` |
+| **REQ-021** | JSON-RPC Error Mapping | `TC-CON-002`, `TC-INT-002` |
+| **REQ-022** | Capability Caching & Lifecycle | `TC-NET-008`, `TC-NET-012` |
+| **REQ-023** | TLS v1.3 Security | `TC-SEC-002` |
+| **REQ-024** | Payload Compression | `TC-BUF-004` |
+| **REQ-025** | Transaction Retry Policy | `TC-RM-006` |
+| **REQ-026** | Desired/Applied Reconciliation | `TC-NET-009` |

@@ -57,14 +57,17 @@ olg-ucentral-client/
 
     import "encoding/json"
 
-    // Error Codes
+    // Standard JSON-RPC 2.0 Error Codes
     const (
     	ErrParse             = -32700
     	ErrInvalidRequest    = -32600
     	ErrMethodNotFound    = -32601
     	ErrInvalidParams     = -32602
-    	ErrInternal          = -32603 // Maps to Busy
-    	
+    	ErrInternal          = -32603 // Maps to Internal / Busy
+    )
+
+    // Application Sub-codes (returned in JSON-RPC error.data.application_code)
+    const (
     	ErrAppFailure        = 1
     	ErrTimeout           = 2
     	ErrServiceUnavailable = 3
@@ -190,11 +193,22 @@ olg-ucentral-client/
     	Payload  []byte
     }
 
+    // OutboundScheduler defines the priority outbound queue interface.
+    // - Push() enqueues according to msg.Priority. Returns an error if the queue is full.
+    //   Exception: Priority 0 (highest) messages bypass capacity limits and are always accepted.
+    // - Next() blocks until a message is available or the context is canceled.
+    //   Highest priority messages (0) are always selected first.
+    // - Context cancellation drives scheduler shutdown and unblocks waiting Push/Next calls.
+    type OutboundScheduler interface {
+    	Push(ctx context.Context, msg OutboundMessage) error
+    	Next(ctx context.Context) (OutboundMessage, error)
+    }
+
     type PriorityScheduler struct {
     	mu       sync.Mutex
     	cond     *sync.Cond
     	queues   [4][][]byte
-    	capacity int
+    	capacity int // maximum entries per priority queue
     }
 
     func NewPriorityScheduler(capacity int) *PriorityScheduler {
@@ -300,6 +314,26 @@ olg-ucentral-client/
     func (m *DefaultRequestManager) CreateTransaction(rpcID string, timeout time.Duration, isStateChanging bool) (*Transaction, error)
     ```
 
+*   **Reconciler Loop (`pkg/reqmgr/reconciler.go`):**
+    ```go
+    package reqmgr
+
+    import (
+    	"context"
+    	"time"
+    	"github.com/routerarchitects/olg-ucentral-client/pkg/nats"
+    )
+
+    type Reconciler struct {
+    	natsClient *nats.NATSClient
+    	interval   time.Duration
+    }
+
+    func NewReconciler(n *nats.NATSClient, interval time.Duration) *Reconciler
+    func (r *Reconciler) Start(ctx context.Context)
+    func (r *Reconciler) ReconcileDevice(ctx context.Context, serial string) error
+    ```
+
 #### PR 3.2: Duplicate Attachment & Cache TTL
 *   **Target File:** `pkg/reqmgr/cache.go`, `pkg/reqmgr/manager.go` (extensions)
 *   **Core Cache Structures:**
@@ -377,6 +411,7 @@ olg-ucentral-client/
     func NewNATSClient(cfg NATSConfig) (*NATSClient, error)
     func (n *NATSClient) WriteDesiredConfig(ctx context.Context, serial string, config []byte) (uint64, error)
     func (n *NATSClient) PublishConfigTrigger(ctx context.Context, serial string, uuid string, kvKey string, revision uint64) error
+    func (n *NATSClient) GetDesiredConfigMetadata(ctx context.Context, serial string) (uint64, string, error) // Returns (revision, uuid, error)
     ```
 
 #### PR 4.3: Dynamic Capabilities & Local Signal Sockets

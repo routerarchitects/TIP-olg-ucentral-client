@@ -10,7 +10,7 @@ This document lists the strict, numbered requirements for the Go-based uCentral 
 *   **REQ-002 (Reconnection State Machine):** The daemon must manage connection lifecycles through four states: `Offline`, `ConnectingBoth`, `Operational`, and `Degraded`. 
     *   If the Cloud connection is lost, it must transition to `ConnectingBoth` and retry in the background with randomized exponential backoff (2s to 300s).
     *   No daemon restart is allowed for connection recovery.
-*   **REQ-003 (Version Negotiation Fallback):** During connection handshake, if the Cloud and client share no common major protocol version (e.g., Cloud is v2-only, client is v1-only), the client must fall back to a Degraded state. In this state, it remains connected for health reporting only and rejects all other commands with `local_service_unavailable` (Error Code 3).
+*   **REQ-003 (Version Negotiation Fallback):** During connection handshake, if the Cloud and client share no common major protocol version (e.g., Cloud is v2-only, client is v1-only), the client must fall back to a Degraded state. In this state, it remains connected for health reporting only and rejects all other commands with `local_service_unavailable` (JSON-RPC code -32603, application_code 3).
 
 ---
 
@@ -34,19 +34,19 @@ This document lists the strict, numbered requirements for the Go-based uCentral 
 
 *   **REQ-007 (Transaction Lifecycle):** Every incoming Cloud command must be tracked by an active in-memory transaction transitioning through: `Created` $\rightarrow$ `PendingNATS` $\rightarrow$ `InFlight` $\rightarrow$ `Completed` / `Failed` / `TimedOut`.
 *   **REQ-008 (Concurrency Serialization):** The Request Manager must serialize state-changing commands (`configure`, `reboot`, `factory`, `upgrade`) for the device. If a state-changing transaction is active (`PendingNATS` or `InFlight`), new state-changing commands must be immediately rejected with a `busy` status (Error Code -32603). Read-only commands (`capabilities.get`, `status.get`) must run in parallel.
-*   **REQ-009 (Duplicate Transaction Attachment):** If a Cloud request arrives with an `rpc_id` that is already in-progress (`InFlight`), the Request Manager must attach the new stream to the existing transaction and send the single downstream response back to all waiting streams.
+*   **REQ-009 (Duplicate Active Request Rejection):** If a Cloud request arrives with an `rpc_id` that is already in-progress (`InFlight`), the Request Manager must reject the new request immediately with a standard JSON-RPC busy/internal error (`-32603`) instead of attempting to run it or attach it to the running transaction.
 *   **REQ-010 (Operation-Specific Caching & TTL):** The transaction cache must persist results in-memory with TTLs categorized by command type:
     *   `configure`: 5 minutes
     *   `reboot`: 10 minutes
     *   `factory`: 30 minutes
     *   `upgrade` (Firmware): 60 minutes
-*   **REQ-011 (Asynchronous Upgrade Tracking):** Firmware upgrades must run as asynchronous actions. The client must reply immediately with an initial "started" status and stream subsequent progress update logs to the Cloud.
+*   **REQ-011 (Asynchronous Upgrade Tracking):** Firmware upgrades must run as a background operation. The initial `"started"` response must close the initial JSON-RPC request-reply exchange. The state-changing lock (`activeStateTx`) must remain held until terminal completion or failure of the upgrade. Upon WebSocket reconnection, the daemon must resume reporting the current upgrade state to the Cloud. Any duplicate upgrade requests received while the background upgrade is active must be rejected immediately as busy.
 
 ---
 
 ## 4. Queues & Outbound Traffic Scheduling
 
-*   **REQ-012 (Command Dispatch Buffer):** The client must use a configurable, short-lived NATS dispatch buffer (default size: 100). If NATS is down or the buffer is full, incoming commands must fail fast with `local_service_unavailable` (Error Code 3).
+*   **REQ-012 (Command Dispatch Buffer):** The client must use a configurable, short-lived NATS dispatch buffer (default size: 100). If NATS is down or the buffer is full, incoming commands must fail fast with `local_service_unavailable` (JSON-RPC code -32603, application_code 3).
 *   **REQ-013 (Command Result Priority Queue):** NATS command execution results must be processed through a result queue (default size: 50). This queue must never block core network loops. If it nears capacity, telemetry/log forwarding must be throttled.
 *   **REQ-014 (WebSocket Outbound Priority Scheduler):** Outbound WebSocket traffic must be written via a priority scheduler:
     *   `Priority 0 (Highest)`: JSON-RPC responses (always bypasses backlog).
@@ -72,20 +72,23 @@ This document lists the strict, numbered requirements for the Go-based uCentral 
 ## 6. Sizing & Error Mapping
 
 *   **REQ-020 (Sizing Constraints):** Maximum uncompressed JSON payload sizes must be strictly enforced: Configuration (10MB), State (1MB), Telemetry (256KB), Logs (64KB). Payloads exceeding these limits must be discarded.
-*   **REQ-021 (JSON-RPC Error Mapping):** Internal errors must map to standard JSON-RPC 2.0 error codes:
-    *   `-32700` (Parse Error)
-    *   `-32600` (Invalid Request)
-    *   `-32601` (Method Not Found)
-    *   `-32602` (Invalid Params)
-    *   `-32603` (Internal / Busy Error)
-    *   `1` (Application Error)
-    *   `2` (Timeout)
-    *   `3` (Local Service Unavailable)
-    *   `4` (Validation Failed)
-    *   `5` (Rollback Completed)
-    *   `6` (Rollback Failed)
-*   **REQ-022 (Capability Caching & Lifecycle):** The daemon must fetch capabilities from the downstream agent exactly once at startup and cache them in-memory. Capabilities must not be re-fetched on NATS reconnect events to prevent broker congestion. The cache must only be refreshed upon detecting a firmware version change, receiving a specific upgrade reboot log, or receiving a valid local management signal.
+*   **REQ-021 (JSON-RPC Error Mapping):** Internal and application errors must map to standard JSON-RPC 2.0 error codes. For application execution errors, the top-level error code must be `-32603` (Internal Error) and the specific application-level code must be returned in the `error.data` object under the `application_code` key:
+    *   Standard JSON-RPC wire codes:
+        *   `-32700` (Parse Error)
+        *   `-32600` (Invalid Request)
+        *   `-32601` (Method Not Found)
+        *   `-32602` (Invalid Params)
+        *   `-32603` (Internal / Busy Error)
+    *   Application-specific subcodes carried in `error.data.application_code`:
+        *   `1` (Application Error)
+        *   `2` (Timeout)
+        *   `3` (Local Service Unavailable)
+        *   `4` (Validation Failed)
+        *   `5` (Rollback Completed)
+        *   `6` (Rollback Failed)
+*   **REQ-022 (Capability Caching & Lifecycle):** The daemon must populate the capability cache once after the first successful NATS connection and downstream capability responder availability. If initial retrieval fails due to broker/responder unavailability or timeout, the daemon must retry with bounded exponential backoff (e.g., base 2s, max 300s) until the initial cache is populated. After successful initialization, capabilities must not be automatically re-fetched on later NATS reconnect events. The cache must only be refreshed upon detecting a firmware version change, receiving a specific upgrade reboot log, or receiving a valid local management signal.
 *   **REQ-023 (TLS v1.3 Security):** All NATS broker connections must enforce TLS v1.3 encryption with strict CA certificate verification configured using local CA paths. Plain text or insecure NATS connections must be rejected.
 *   **REQ-024 (Payload Compression):** Outbound payloads exceeding a configurable compression threshold specified by the configuration file property `compression_threshold_bytes` (default: 2048 bytes / 2KB) must be compressed using gzip prior to WebSocket transmission.
 *   **REQ-025 (Transaction Retry Policy):** The Request Manager must implement a strict transaction retry policy: only idempotent, read-only queries (e.g., `capabilities.get`, `status.get`) are retryable for transient failures, using a randomized exponential backoff (base 2s, max 3 attempts). State-changing actions (`configure`, `reboot`, `factory`, `upgrade`) must fail fast without automatic retries.
+*   **REQ-026 (Desired/Applied Reconciliation After Partial Publish Failure):** If a desired configuration write to JetStream KV succeeds but publication of the corresponding `config.apply` trigger fails, the daemon must retain the desired configuration in KV, return a failure to the Cloud, and later reconcile desired versus applied configuration state. The reconciler must periodically detect UUID mismatch, safely republish the missing NATS trigger without rewriting the desired configuration, and tolerate duplicate or stale triggers without causing incorrect application.
 

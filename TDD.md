@@ -29,7 +29,7 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Setup:* Generate payloads of varying sizes for Configuration, State, Telemetry, and Logs. Send payloads exceeding their respective limits (10MB, 1MB, 256KB, 64KB).
     *   *Assert:* Client must reject/discard the oversized payloads and increment corresponding drop/error metrics. Payloads within limits must be successfully processed.
 *   **TC-CON-005 (JSON-RPC ID Preservation):**
-    *   *Requirement Mapping:* `REQ-005` (Permissive Parameter Validation)
+    *   *Requirement Mapping:* `REQ-027` (JSON-RPC ID Preservation)
     *   *Setup:* Send valid JSON-RPC requests containing `ID` as an integer (e.g., `42`) and `ID` as a string (e.g., `"42"`).
     *   *Assert:* The client must successfully parse both formats, track them through the transaction manager, and return the exact matching original format (numeric or string) in the JSON-RPC response without mutation.
 
@@ -106,6 +106,10 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-011` (Asynchronous Upgrade Tracking)
     *   *Setup:* Start an upgrade transaction.
     *   *Assert:* Client must immediately return an initial "started" status response and close the initial JSON-RPC request-reply exchange, while the background upgrade operation remains active and logs continue to flow over NATS to the Cloud until a terminal state is reached.
+*   **TC-UPG-002 (Upgrade Crash Recovery via Startup Query):**
+    *   *Requirement Mapping:* `REQ-011`
+    *   *Setup:* Simulate a daemon crash/restart while an upgrade is active downstream. On boot, the daemon queries the downstream device status.
+    *   *Assert:* The daemon must detect the active upgrade from the status report, immediately re-acquire the in-memory `activeStateTx` lock, and correctly reject any new state-changing commands (e.g., `reboot`) until the upgrade completes.
 
 ### PR 3.2: Duplicate Attachment & Cache TTL Tests
 *   **TC-RM-004 (Duplicate Active Request Rejection):**
@@ -148,10 +152,6 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-023` (TLS v1.3 Security)
     *   *Setup:* Configure the NATS client to connect to a broker without TLS or with an invalid CA cert.
     *   *Assert:* Client must fail to connect and reject the connection attempt. Configure with a valid CA cert and TLS v1.3; the connection must succeed.
-*   **TC-NET-009 (KV Write / Trigger Publish Partial Failure Reconciliation):**
-    *   *Requirement Mapping:* `REQ-006` (KV Consistency), `REQ-026` (Reconciliation After Partial Failure)
-    *   *Setup:* Write desired config to JetStream KV successfully. Simulate NATS publish failure of the `config.apply` trigger. Cloud receives failure. Later, run the background reconciliation loop with the desired UUID present in KV and the applied UUID on the device still old.
-    *   *Assert:* Reconciler must detect the desired/applied mismatch and republish the missing `config.apply` trigger pointing to the existing KV revision *without rewriting* the KV bucket. Downstream agent must receive the trigger, retrieve the config from KV, and apply it. Stale or duplicate trigger replays must remain harmless due to revision guards.
 
 
 ### PR 4.3: Dynamic Capabilities & Sockets Tests
@@ -214,13 +214,13 @@ This document details the test plans, test cases, and verification strategies fo
 | **REQ-002** | Reconnection State Machine | `TC-NET-001`, `TC-NET-010` |
 | **REQ-003** | Version Negotiation Fallback | `TC-CON-003` |
 | **REQ-004** | Subject Schema Versioning | `TC-CON-001` |
-| **REQ-005** | Permissive Parameter Validation | `TC-VAL-001`, `TC-CON-005` |
-| **REQ-006** | JetStream KV Consistency Contract | `TC-NET-003`, `TC-INT-002`, `TC-NET-009` |
+| **REQ-005** | Permissive Parameter Validation | `TC-VAL-001` |
+| **REQ-006** | JetStream KV Consistency Contract | `TC-NET-003`, `TC-INT-002` |
 | **REQ-007** | Transaction Lifecycle | `TC-RM-001` |
 | **REQ-008** | Concurrency Serialization | `TC-RM-002`, `TC-RM-003` |
 | **REQ-009** | Duplicate Active Request Rejection | `TC-RM-004` |
 | **REQ-010** | Operation-Specific Caching & TTL | `TC-RM-005` |
-| **REQ-011** | Asynchronous Upgrade Tracking | `TC-UPG-001` |
+| **REQ-011** | Asynchronous Upgrade Tracking & Crash Recovery | `TC-UPG-001`, `TC-UPG-002` |
 | **REQ-012** | Command Dispatch Buffer | `TC-BUF-003` |
 | **REQ-013** | Command Result Priority Queue | `TC-QUE-001`, `TC-BUF-006`, `TC-INT-004` |
 | **REQ-014** | WebSocket Outbound Priority Scheduler | `TC-SCH-001`, `TC-SCH-002`, `TC-SCH-003`, `TC-SCH-004`, `TC-INT-004` |
@@ -234,5 +234,6 @@ This document details the test plans, test cases, and verification strategies fo
 | **REQ-022** | Capability Caching & Lifecycle | `TC-NET-008`, `TC-NET-012` |
 | **REQ-023** | TLS v1.3 Security | `TC-SEC-002` |
 | **REQ-024** | Payload Compression | `TC-BUF-004` |
-| **REQ-025** | Transaction Retry Policy | `TC-RM-006` |
-| **REQ-026** | Desired/Applied Reconciliation | `TC-NET-009` |
+| **REQ-025** | Request Manager Retry Policy | `TC-RM-006` |
+| **REQ-026** | Desired/Applied Cloud Reconciliation Contract | `N/A` |
+| **REQ-027** | JSON-RPC ID Preservation | `TC-CON-005` |

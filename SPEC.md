@@ -317,26 +317,6 @@ olg-ucentral-client/
     func (m *DefaultRequestManager) CreateTransaction(rpcID string, timeout time.Duration, isStateChanging bool) (*Transaction, error)
     ```
 
-*   **Reconciler Loop (`pkg/reqmgr/reconciler.go`):**
-    ```go
-    package reqmgr
-
-    import (
-    	"context"
-    	"time"
-    	"github.com/routerarchitects/olg-ucentral-client/pkg/nats"
-    )
-
-    type Reconciler struct {
-    	natsClient *nats.NATSClient
-    	interval   time.Duration
-    }
-
-    func NewReconciler(n *nats.NATSClient, interval time.Duration) *Reconciler
-    func (r *Reconciler) Start(ctx context.Context)
-    func (r *Reconciler) ReconcileDevice(ctx context.Context, serial string) error
-    ```
-
 #### PR 3.2: Duplicate Attachment & Cache TTL
 *   **Target File:** `pkg/reqmgr/cache.go`, `pkg/reqmgr/manager.go` (extensions)
 *   **Core Cache Structures:**
@@ -439,9 +419,7 @@ olg-ucentral-client/
 *   **Target File:** `cmd/ucentral-client/main.go`
 *   **Initialization & Signal Handling:**
     *   Loads JSON configuration.
-    *   Instantiates Queues, Request Manager, WebSocket client, and NATS wrapper.
-    *   Instantiates `Reconciler` with the NATS client and reconciliation interval.
-    *   Starts the background Reconciler loop with the main application context.
+    *   Instantiates Queues, Request Manager, WebSocket client, NATS wrapper.
     *   Launches parallel reconnection threads.
     *   Listens for `SIGINT` / `SIGTERM` to perform graceful resource teardowns.
 

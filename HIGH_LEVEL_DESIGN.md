@@ -147,16 +147,8 @@ sequenceDiagram
     *   If the KV revision matches the trigger revision, it is applied.
     *   If the KV revision is higher than the trigger revision, the agent **aborts the stale trigger** and waits for the newer trigger to arrive. This prevents applying configs whose trigger publishes failed mid-sequence.
 *   **Failure Handling:**
-    *   *KV write succeeds but publish fails:* The client returns an error to the cloud. The updated configuration exists in KV but remains unapplied. The background reconciliation loop resolves this state during its next periodic run.
+    *   *KV write succeeds but publish fails:* The client returns an error to the cloud. The updated configuration exists in KV but remains unapplied. The cloud control plane is responsible for recovering from this failure state.
     *   *Publish succeeds but downstream agent cannot read KV:* The agent returns a NATS error payload. The Request Manager maps this to a configuration error response back to the cloud.
-
-### 2.6 Desired/Applied Reconciliation Loop
-The daemon runs a background reconciliation loop to recover from non-atomic split-write failures:
-1.  **Periodic Scan:** At a configured interval (default: 5 minutes), the daemon compares the desired configuration UUID stored in JetStream KV against the active configuration UUID reported by the downstream agent (retrieved from the latest state report cached in the `StateCoalescer`).
-2.  **Mismatch Detection:** If a mismatch is detected (desired UUID != active UUID), it indicates that the downstream agent is out of sync.
-3.  **Safe Re-Publishing:** The reconciler retrieves the revision metadata for the existing desired configuration from JetStream KV and publishes a new `config.apply` NATS trigger.
-4.  **No KV Write Mutation:** The reconciler must **never** write a new record to the KV bucket during this phase, preventing infinite update loops or sequence number inflation.
-5.  **Idempotence Guard:** Stale or duplicate triggers are safely ignored by the downstream agent since it validates the NATS `kv_revision` before applying any changes.
 
 ---
 
@@ -212,7 +204,8 @@ Firmware upgrades follow a background execution model to prevent connection time
 2.  **Background Operation:** The upgrade continues executing as a background operation monitored by the daemon.
 3.  **State Lock Lifetime:** The state-changing lock (`activeStateTx`) remains held until terminal completion or failure of the upgrade.
 4.  **Reconnection Resilience:** Upon WebSocket reconnection, the daemon resumes reporting the current upgrade state to the Cloud.
-5.  **Duplicate Rejection:** Any duplicate upgrade requests received while the background upgrade is active are rejected immediately as busy.
+5.  **Crash Recovery (Startup Query):** To prevent losing the in-memory state lock if the daemon process crashes during an upgrade, the daemon must query the downstream device's status (`status.get`) immediately on boot. If the device reports it is currently upgrading, the daemon immediately re-acquires the `activeStateTx` lock.
+6.  **Duplicate Rejection:** Any duplicate upgrade requests received while the background upgrade is active are rejected immediately as busy.
 
 ### 3.6 Timeout Specifications
 To prevent hanging operations, the Request Manager enforces strict timeout thresholds:

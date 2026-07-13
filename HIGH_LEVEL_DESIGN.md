@@ -57,14 +57,15 @@ The client leverages standard structures, helper APIs, and connection wrappers d
 ### 2.1 Common Message Envelopes
 To ensure interoperability, the uCentral client standardizes on standard envelopes:
 
-#### Outgoing Configuration Envelope (ConfigureCommand / DesiredConfigRecord)
+#### Outgoing Configuration Trigger (ConfigureCommand)
 ```json
 {
   "version": "1.0",
   "rpc_id": "8bc92d11-536c-4860-9d8a-6809694b78ba",
   "target": "00:11:22:33:44:55",
   "uuid": "1687588800",
-  "payload": { ... },
+  "kv_key": "desired.00:11:22:33:44:55",
+  "kv_revision": 42,
   "timestamp": "2026-06-25T12:00:00Z"
 }
 ```

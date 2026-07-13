@@ -205,15 +205,17 @@ olg-ucentral-client/
     }
 
     type PriorityScheduler struct {
-    	mu       sync.Mutex
-    	cond     *sync.Cond
-    	queues   [4][][]byte
-    	capacity int // maximum entries per priority queue
+    	mu           sync.Mutex
+    	cond         *sync.Cond
+    	queues       [4][][]byte
+    	capacity     int // maximum entries for Priority 1, 2, and 3
+    	emergencyCap int // maximum entries for the Priority 0 emergency queue
     }
 
-    func NewPriorityScheduler(capacity int) *PriorityScheduler {
+    func NewPriorityScheduler(capacity int, emergencyCap int) *PriorityScheduler {
     	s := &PriorityScheduler{
-    		capacity: capacity,
+    		capacity:     capacity,
+    		emergencyCap: emergencyCap,
     	}
     	s.cond = sync.NewCond(&s.mu)
     	return s

@@ -40,7 +40,7 @@ This document details the test plans, test cases, and verification strategies fo
 ### PR 2.1: Priority Outbound Scheduler Tests
 *   **TC-SCH-001 (Priority Outbound Ordering):**
     *   *Requirement Mapping:* `REQ-014` (Outbound Priority Scheduler)
-    *   *Setup:* Instantiate `PriorityScheduler` with a capacity of 10. Push 5 messages of `PriorityLow` (Priority 3). Push 1 message of `PriorityHighest` (Priority 0).
+    *   *Setup:* Instantiate `PriorityScheduler` with a capacity of 10 and an emergency capacity of 100. Push 5 messages of `PriorityLow` (Priority 3). Push 1 message of `PriorityHighest` (Priority 0).
     *   *Assert:* Calling `Next()` must return the `PriorityHighest` message first. Subsequent calls must return `PriorityLow` messages in FIFO order.
 *   **TC-SCH-002 (Scheduler Blocking and Wakeup):**
     *   *Requirement Mapping:* `REQ-014` (Outbound Priority Scheduler)
@@ -128,10 +128,10 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Assert:* Reconnect delays must fall within exponential bounds (e.g. attempt 2 delay is between `3.6s` and `4.8s` given base `4s` and `10-20%` randomized jitter).
 
 ### PR 4.2: NATS Integration Client Tests
-*   **TC-NET-003 (JetStream KV Revision Guard):**
+*   **TC-NET-003 (JetStream KV Revision Guard & Trigger Contract):**
     *   *Requirement Mapping:* `REQ-006` (JetStream KV Consistency Contract)
-    *   *Setup:* Write config payload to JetStream KV. Retrieve the KV sequence revision and publish the `config.apply` NATS trigger. Simulate a downstream agent attempting to process the trigger while the KV store contains a newer, higher revision payload.
-    *   *Assert:* The daemon must correctly populate `kv_revision` in the trigger. The simulated downstream agent must explicitly abort the apply process when it detects the KV revision mismatch, proving the consistency contract.
+    *   *Setup:* Write config payload to JetStream KV. Retrieve the sequence revision and publish the `config.apply` NATS trigger. Intercept the serialized trigger. Then, simulate a downstream agent processing the trigger under two conditions: (A) when the KV store revision exactly matches the trigger `kv_revision`, and (B) when the KV store contains a newer, higher revision payload.
+    *   *Assert:* The intercepted trigger must contain `uuid`, `kv_key`, `kv_revision`, `target`, and `rpc_id` while strictly omitting the full configuration `payload`. In condition A (exact match), the simulated agent must successfully download and apply the configuration. In condition B (mismatch), the agent must explicitly abort the apply process, completely fulfilling the consistency contract.
 *   **TC-SEC-001 (Target Subject Isolation Constraints):**
     *   *Requirement Mapping:* `REQ-016` (NATS Security & Target Isolation)
     *   *Setup:* Attempt to publish or subscribe to a subject with a different target serial (e.g. `ucentral.v1.device.different-serial.state`).

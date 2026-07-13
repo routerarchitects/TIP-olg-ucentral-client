@@ -28,6 +28,10 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-020` (Sizing Constraints)
     *   *Setup:* Generate payloads of varying sizes for Configuration, State, Telemetry, and Logs. Send payloads exceeding their respective limits (10MB, 1MB, 256KB, 64KB).
     *   *Assert:* Client must reject/discard the oversized payloads and increment corresponding drop/error metrics. Payloads within limits must be successfully processed.
+*   **TC-CON-005 (JSON-RPC ID Preservation):**
+    *   *Requirement Mapping:* `REQ-005` (Permissive Parameter Validation)
+    *   *Setup:* Send valid JSON-RPC requests containing `ID` as an integer (e.g., `42`) and `ID` as a string (e.g., `"42"`).
+    *   *Assert:* The client must successfully parse both formats, track them through the transaction manager, and return the exact matching original format (numeric or string) in the JSON-RPC response without mutation.
 
 ---
 
@@ -42,6 +46,10 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-014` (Outbound Priority Scheduler)
     *   *Setup:* Call `Next()` on an empty `PriorityScheduler` in a separate goroutine.
     *   *Assert:* Goroutine must block. Push a message into the scheduler from the main thread; goroutine must unblock and receive the message.
+*   **TC-SCH-003 (Priority 0 Bounded Emergency Queue):**
+    *   *Requirement Mapping:* `REQ-014`
+    *   *Setup:* Instantiate `PriorityScheduler` with per-priority capacity and a bounded emergency limit for Priority 0. Block the consumer to simulate a stalled WebSocket writer. Push Priority 0 messages until the emergency limit is reached.
+    *   *Assert:* `Push()` must return an explicit overflow error once the Priority 0 emergency limit is exhausted. Queue growth must remain bounded.
 
 ### PR 2.2: Buffers, Coalescers & Ring Buffer Tests
 *   **TC-BUF-001 (Telemetry Ring Buffer FIFO Drop):**
@@ -122,8 +130,8 @@ This document details the test plans, test cases, and verification strategies fo
 ### PR 4.2: NATS Integration Client Tests
 *   **TC-NET-003 (JetStream KV Revision Guard):**
     *   *Requirement Mapping:* `REQ-006` (JetStream KV Consistency Contract)
-    *   *Setup:* Write config payload to JetStream KV. Verify sequence metadata.
-    *   *Assert:* The client must retrieve the KV sequence revision and append it to the NATS trigger notification payload as `kv_revision`.
+    *   *Setup:* Write config payload to JetStream KV. Retrieve the KV sequence revision and publish the `config.apply` NATS trigger. Simulate a downstream agent attempting to process the trigger while the KV store contains a newer, higher revision payload.
+    *   *Assert:* The daemon must correctly populate `kv_revision` in the trigger. The simulated downstream agent must explicitly abort the apply process when it detects the KV revision mismatch, proving the consistency contract.
 *   **TC-SEC-001 (Target Subject Isolation Constraints):**
     *   *Requirement Mapping:* `REQ-016` (NATS Security & Target Isolation)
     *   *Setup:* Attempt to publish or subscribe to a subject with a different target serial (e.g. `ucentral.v1.device.different-serial.state`).
@@ -187,6 +195,10 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-001` (Concurrent Startup Loops)
     *   *Setup:* Start the daemon with NATS connection blocked (unreachable broker) but Cloud WebSocket reachable.
     *   *Assert:* Daemon must successfully establish connection to the Cloud WebSocket and report status as "Degraded" (due to NATS being offline) without hanging or blocking on the NATS connection loop.
+*   **TC-INT-004 (Priority 0 Overflow Recovery):**
+    *   *Requirement Mapping:* `REQ-013`, `REQ-014`
+    *   *Setup:* Simulate a stalled WebSocket writer while the daemon continues generating Priority 0 responses.
+    *   *Assert:* The daemon treats the WebSocket writer path as unhealthy and triggers recovery, fails affected transactions, and increments the overflow metric instead of allowing unbounded memory growth.
 
 ---
 
@@ -198,7 +210,7 @@ This document details the test plans, test cases, and verification strategies fo
 | **REQ-002** | Reconnection State Machine | `TC-NET-001`, `TC-NET-010` |
 | **REQ-003** | Version Negotiation Fallback | `TC-CON-003` |
 | **REQ-004** | Subject Schema Versioning | `TC-CON-001` |
-| **REQ-005** | Permissive Parameter Validation | `TC-VAL-001` |
+| **REQ-005** | Permissive Parameter Validation | `TC-VAL-001`, `TC-CON-005` |
 | **REQ-006** | JetStream KV Consistency Contract | `TC-NET-003`, `TC-INT-002`, `TC-NET-009` |
 | **REQ-007** | Transaction Lifecycle | `TC-RM-001` |
 | **REQ-008** | Concurrency Serialization | `TC-RM-002`, `TC-RM-003` |
@@ -206,8 +218,8 @@ This document details the test plans, test cases, and verification strategies fo
 | **REQ-010** | Operation-Specific Caching & TTL | `TC-RM-005` |
 | **REQ-011** | Asynchronous Upgrade Tracking | `TC-UPG-001` |
 | **REQ-012** | Command Dispatch Buffer | `TC-BUF-003` |
-| **REQ-013** | Command Result Priority Queue | `TC-QUE-001`, `TC-BUF-006` |
-| **REQ-014** | WebSocket Outbound Priority Scheduler | `TC-SCH-001`, `TC-SCH-002` |
+| **REQ-013** | Command Result Priority Queue | `TC-QUE-001`, `TC-BUF-006`, `TC-INT-004` |
+| **REQ-014** | WebSocket Outbound Priority Scheduler | `TC-SCH-001`, `TC-SCH-002`, `TC-SCH-003`, `TC-INT-004` |
 | **REQ-015** | State Coalescer & Telemetry Ring Buffer | `TC-BUF-001`, `TC-BUF-002`, `TC-BUF-007` |
 | **REQ-016** | NATS Security & Target Isolation | `TC-SEC-001` |
 | **REQ-017** | Local Management Signal Security | `TC-NET-005`, `TC-NET-011` |

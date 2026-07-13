@@ -343,6 +343,8 @@ Exposes a priority-aware message dispatch queue writing to the WebSocket connect
 *   **Priority 2:** Coalesced device state reports.
 *   **Priority 3:** Standard telemetry events and syslog logs.
 
+**Circuit Breaker on Priority 0 Overflow:** Priority 0 (JSON-RPC responses) bypasses lower-priority backlog but remains bounded by a fixed emergency queue limit to prevent unbounded memory growth when the WebSocket path is stalled. When this limit is exhausted, the daemon must treat the WebSocket writer path as unhealthy and trigger recovery if needed, fail affected transactions, and increment an overflow metric.
+
 ### 4.3 Rate Limiting & Sizing Constraints
 *   State updates (statistics) are rate-limited to a maximum of **one message per 10 seconds** per device.
 *   Telemetry events are rate-limited to **50 events per second**.

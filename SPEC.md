@@ -80,14 +80,14 @@ olg-ucentral-client/
     	JSONRPC string          `json:"jsonrpc"`
     	Method  string          `json:"method"`
     	Params  json.RawMessage `json:"params"`
-    	ID      string          `json:"id"`
+    	ID      json.RawMessage `json:"id"`
     }
 
     type JSONRPCResponse struct {
     	JSONRPC string          `json:"jsonrpc"`
     	Result  json.RawMessage `json:"result,omitempty"`
     	Error   *JSONRPCError   `json:"error,omitempty"`
-    	ID      string          `json:"id"`
+    	ID      json.RawMessage `json:"id"`
     }
 
     type JSONRPCError struct {
@@ -105,18 +105,17 @@ olg-ucentral-client/
 
     type ConfigureCommand struct {
         Version     string          `json:"version"`
-        RPCID       string          `json:"rpc_id"`
+        RPCID       json.RawMessage `json:"rpc_id"`
         Target      string          `json:"target"`
         UUID        string          `json:"uuid"`
         KVKey       string          `json:"kv_key"`
         KVRevision  uint64          `json:"kv_revision"`
-        Payload     json.RawMessage `json:"payload"`
         Timestamp   string          `json:"timestamp"`
     }
 
     type ActionCommand struct {
     	Version     string          `json:"version"`
-    	RPCID       string          `json:"rpc_id"`
+    	RPCID       json.RawMessage `json:"rpc_id"`
     	Target      string          `json:"target"`
     	CommandType string          `json:"command_type"`
     	Action      string          `json:"action"`
@@ -126,7 +125,7 @@ olg-ucentral-client/
 
     type ResultEnvelope struct {
     	Version     string          `json:"version"`
-    	RPCID       string          `json:"rpc_id"`
+    	RPCID       json.RawMessage `json:"rpc_id"`
     	Target      string          `json:"target"`
     	CommandType string          `json:"command_type"`
     	UUID        string          `json:"uuid,omitempty"` // Omitted for Action
@@ -194,8 +193,9 @@ olg-ucentral-client/
     }
 
     // OutboundScheduler defines the priority outbound queue interface.
-    // - Push() enqueues according to msg.Priority. Returns an error if the queue is full.
-    //   Exception: Priority 0 (highest) messages bypass capacity limits and are always accepted.
+    // - Pushes append the message to the corresponding priority queue.
+    // - If a queue exceeds its capacity, the push blocks.
+    //   Exception: Priority 0 messages bypass lower-priority backlog, but do not use an unbounded queue. They are placed in a dedicated bounded emergency queue. If that queue reaches its hard limit, Push() returns an overflow error so the caller can treat the WebSocket writer path as unhealthy and trigger recovery if needed, fail affected transactions, and record an overflow metric.
     // - Next() blocks until a message is available or the context is canceled.
     //   Highest priority messages (0) are always selected first.
     // - Context cancellation drives scheduler shutdown and unblocks waiting Push/Next calls.

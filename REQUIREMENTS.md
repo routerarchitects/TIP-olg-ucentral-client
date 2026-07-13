@@ -49,7 +49,7 @@ This document lists the strict, numbered requirements for the Go-based uCentral 
 *   **REQ-012 (Command Dispatch Buffer):** The client must use a configurable, short-lived NATS dispatch buffer (default size: 100). If NATS is down or the buffer is full, incoming commands must fail fast with `local_service_unavailable` (JSON-RPC code -32603, application_code 3).
 *   **REQ-013 (Command Result Priority Queue):** NATS command execution results must be processed through a result queue (default size: 50). This queue must never block core network loops. If it nears capacity, telemetry/log forwarding must be throttled.
 *   **REQ-014 (WebSocket Outbound Priority Scheduler):** Outbound WebSocket traffic must be written via a priority scheduler:
-    *   `Priority 0 (Highest)`: JSON-RPC responses (always bypasses backlog).
+    *   `Priority 0 (Highest)`: JSON-RPC responses. Bypasses lower-priority backlog but uses a dedicated bounded emergency queue. If exhausted, it triggers path recovery, fails affected transactions, and records an overflow metric.
     *   `Priority 1`: Audits, system crash logs, and health snapshots.
     *   `Priority 2`: Coalesced state metrics.
     *   `Priority 3 (Lowest)`: Telemetry events and standard logs.

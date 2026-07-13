@@ -7,11 +7,10 @@ This document details the test plans, test cases, and verification strategies fo
 ## Epic 1: Scaffold & Base Types
 
 ### PR 1.1: Shared Contracts & Serialization Tests
-*   **TC-CON-001 (Envelope Serialization):**
+*   **TC-CON-001 (Subject Schema Versioning & Isolation):**
     *   *Requirement Mapping:* `REQ-004` (Subject Schema Versioning)
-    *   *Setup:* Create instances of `ConfigureCommand`, `ActionCommand`, and `ResultEnvelope`.
-    *   *Input:* `ActionCommand` with `Action = "reboot"`, `RPCID = "123"`.
-    *   *Assert:* Marshalling to JSON must produce exact keys `version`, `rpc_id`, `target`, `command_type`, `action`, `payload`, `timestamp`.
+    *   *Setup:* Attempt to generate NATS subjects using the subject-builder for the daemon's own serial (`<own-serial>`), and attempt to generate subjects for a different serial.
+    *   *Assert:* The builder must strictly produce subjects formatted as `ucentral.v1.device.<own-serial>.<action>` containing the `v1` version prefix, and it must explicitly reject or fail to produce cross-serial subjects to enforce target isolation.
 *   **TC-CON-002 (Error Mappings):**
     *   *Requirement Mapping:* `REQ-021` (JSON-RPC Error Mapping)
     *   *Setup:* Pass internal error enum `ErrServiceUnavailable` to JSON-RPC error encoder helper.
@@ -152,6 +151,10 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-023` (TLS v1.3 Security)
     *   *Setup:* Configure the NATS client to connect to a broker without TLS or with an invalid CA cert.
     *   *Assert:* Client must fail to connect and reject the connection attempt. Configure with a valid CA cert and TLS v1.3; the connection must succeed.
+*   **TC-NET-013 (Partial Publish Failure Propagation):**
+    *   *Requirement Mapping:* `REQ-026` (Desired/Applied Cloud Reconciliation Contract)
+    *   *Setup:* Intercept and mock the NATS client to succeed on the JetStream KV write, but intentionally return a network error when publishing the `config.apply` trigger.
+    *   *Assert:* The client must not crash. The Request Manager must trap the publish error, leave the KV record intact, and successfully formulate and return a JSON-RPC failure response to the Cloud.
 
 
 ### PR 4.3: Dynamic Capabilities & Sockets Tests
@@ -235,5 +238,5 @@ This document details the test plans, test cases, and verification strategies fo
 | **REQ-023** | TLS v1.3 Security | `TC-SEC-002` |
 | **REQ-024** | Payload Compression | `TC-BUF-004` |
 | **REQ-025** | Request Manager Retry Policy | `TC-RM-006` |
-| **REQ-026** | Desired/Applied Cloud Reconciliation Contract | `N/A` |
+| **REQ-026** | Desired/Applied Cloud Reconciliation Contract | `TC-NET-013` |
 | **REQ-027** | JSON-RPC ID Preservation | `TC-CON-005` |

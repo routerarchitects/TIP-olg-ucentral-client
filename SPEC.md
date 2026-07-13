@@ -195,7 +195,8 @@ olg-ucentral-client/
     // OutboundScheduler defines the priority outbound queue interface.
     // - Pushes append the message to the corresponding priority queue.
     // - If a queue exceeds its capacity, the push blocks.
-    //   Exception: Priority 0 messages bypass lower-priority backlog, but do not use an unbounded queue. They are placed in a dedicated bounded emergency queue. If that queue reaches its hard limit, Push() returns an overflow error so the caller can treat the WebSocket writer path as unhealthy and trigger recovery if needed, fail affected transactions, and record an overflow metric.
+    //   Exception 1: Priority 0 messages bypass lower-priority backlog, but do not use an unbounded queue. They are placed in a dedicated bounded emergency queue. If that queue reaches its hard limit, Push() returns an overflow error so the caller can treat the WebSocket writer path as unhealthy and trigger recovery if needed, fail affected transactions, and record an overflow metric.
+    //   Exception 2: Priority 1 (Audits/Crash logs) must be non-blocking to prevent deadlocking core NATS handlers. If Priority 1 reaches capacity, Push() returns a fast error immediately.
     // - Next() blocks until a message is available or the context is canceled.
     //   Highest priority messages (0) are always selected first.
     // - Context cancellation drives scheduler shutdown and unblocks waiting Push/Next calls.
@@ -438,7 +439,9 @@ olg-ucentral-client/
 *   **Target File:** `cmd/ucentral-client/main.go`
 *   **Initialization & Signal Handling:**
     *   Loads JSON configuration.
-    *   Instantiates Queues, Request Manager, WebSocket client, NATS wrapper.
+    *   Instantiates Queues, Request Manager, WebSocket client, and NATS wrapper.
+    *   Instantiates `Reconciler` with the NATS client and reconciliation interval.
+    *   Starts the background Reconciler loop with the main application context.
     *   Launches parallel reconnection threads.
     *   Listens for `SIGINT` / `SIGTERM` to perform graceful resource teardowns.
 

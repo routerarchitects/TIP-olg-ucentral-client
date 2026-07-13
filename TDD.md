@@ -50,6 +50,10 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-014`
     *   *Setup:* Instantiate `PriorityScheduler` with per-priority capacity and a bounded emergency limit for Priority 0. Block the consumer to simulate a stalled WebSocket writer. Push Priority 0 messages until the emergency limit is reached.
     *   *Assert:* `Push()` must return an explicit overflow error once the Priority 0 emergency limit is exhausted. Queue growth must remain bounded.
+*   **TC-SCH-004 (Non-Blocking Priority 1 Overflow):**
+    *   *Requirement Mapping:* `REQ-014`
+    *   *Setup:* Instantiate `PriorityScheduler`. Fill the Priority 1 queue to maximum capacity. Attempt to push one more Priority 1 message from a separate goroutine.
+    *   *Assert:* The `Push()` call must return immediately with a fast error and must **not** block the calling goroutine.
 
 ### PR 2.2: Buffers, Coalescers & Ring Buffer Tests
 *   **TC-BUF-001 (Telemetry Ring Buffer FIFO Drop):**
@@ -79,7 +83,7 @@ This document details the test plans, test cases, and verification strategies fo
 *   **TC-BUF-007 (Outbound Rate Limiting, Drop Metrics & Coalescing):**
     *   *Requirement Mapping:* `REQ-015` (State Coalescer & Telemetry Ring Buffer)
     *   *Setup:* Push 60 telemetry events within 1 second. Push 2 state updates within 5 seconds.
-    *   *Assert:* Outbound scheduler must rate-limit telemetry to 50 events/second (dropping 10 events) and state reports to 1 per 10 seconds. Verify that all dropped events correctly increment the `dropped_by_reason` metric map under keys `"telemetry_overflow"` and `"state_rate_limit"`.
+    *   *Assert:* Outbound scheduler must rate-limit telemetry to 50 events/second (dropping 10 events) and state reports to 1 per 10 seconds. Verify that dropped events correctly increment the `dropped_by_reason` metric map using the standardized keys `rate_limited`, `queue_full`, and `cloud_disconnected` as applicable.
 
 ---
 
@@ -219,7 +223,7 @@ This document details the test plans, test cases, and verification strategies fo
 | **REQ-011** | Asynchronous Upgrade Tracking | `TC-UPG-001` |
 | **REQ-012** | Command Dispatch Buffer | `TC-BUF-003` |
 | **REQ-013** | Command Result Priority Queue | `TC-QUE-001`, `TC-BUF-006`, `TC-INT-004` |
-| **REQ-014** | WebSocket Outbound Priority Scheduler | `TC-SCH-001`, `TC-SCH-002`, `TC-SCH-003`, `TC-INT-004` |
+| **REQ-014** | WebSocket Outbound Priority Scheduler | `TC-SCH-001`, `TC-SCH-002`, `TC-SCH-003`, `TC-SCH-004`, `TC-INT-004` |
 | **REQ-015** | State Coalescer & Telemetry Ring Buffer | `TC-BUF-001`, `TC-BUF-002`, `TC-BUF-007` |
 | **REQ-016** | NATS Security & Target Isolation | `TC-SEC-001` |
 | **REQ-017** | Local Management Signal Security | `TC-NET-005`, `TC-NET-011` |

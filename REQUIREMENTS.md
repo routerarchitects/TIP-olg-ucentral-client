@@ -50,7 +50,7 @@ This document lists the strict, numbered requirements for the Go-based uCentral 
 *   **REQ-013 (Command Result Priority Queue):** NATS command execution results must be processed through a result queue (default size: 50). This queue must never block core network loops. If it nears capacity, telemetry/log forwarding must be throttled.
 *   **REQ-014 (WebSocket Outbound Priority Scheduler):** Outbound WebSocket traffic must be written via a priority scheduler:
     *   `Priority 0 (Highest)`: JSON-RPC responses. Bypasses lower-priority backlog but uses a dedicated bounded emergency queue. If exhausted, it triggers path recovery, fails affected transactions, and records an overflow metric.
-    *   `Priority 1`: Audits, system crash logs, and health snapshots.
+    *   `Priority 1`: Audits, system crash logs, and health snapshots. To prevent blocking core NATS handler execution, `Push()` operations to Priority 1 must be non-blocking. If the queue reaches capacity, it must return a fast error and record an `audit_delivery_failure` metric instead of blocking the caller.
     *   `Priority 2`: Coalesced state metrics.
     *   `Priority 3 (Lowest)`: Telemetry events and standard logs.
 *   **REQ-015 (State Coalescer & Telemetry Ring Buffer):** 

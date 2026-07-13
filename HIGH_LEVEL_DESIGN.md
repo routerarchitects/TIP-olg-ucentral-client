@@ -346,6 +346,7 @@ Exposes a priority-aware message dispatch queue writing to the WebSocket connect
 
 **Circuit Breaker on Priority 0 Overflow:** Priority 0 (JSON-RPC responses) bypasses lower-priority backlog but remains bounded by a fixed emergency queue limit to prevent unbounded memory growth when the WebSocket path is stalled. When this limit is exhausted, the daemon must treat the WebSocket writer path as unhealthy and trigger recovery if needed, fail affected transactions, and increment an overflow metric.
 
+**Non-Blocking Safety on Priority 1:** To prevent deadlocking the core NATS handler loop during critical downstream operations, pushes to the Priority 1 queue must be strictly non-blocking. If the queue reaches capacity (e.g., due to a stalled WebSocket), it must return a fast error and record an `audit_delivery_failure` metric instead of blocking the caller.
 ### 4.3 Rate Limiting & Sizing Constraints
 *   State updates (statistics) are rate-limited to a maximum of **one message per 10 seconds** per device.
 *   Telemetry events are rate-limited to **50 events per second**.

@@ -28,7 +28,8 @@ olg-ucentral-client/
     ├── queues/                     # Priority queues, buffers, & scheduler
     │   ├── scheduler.go            # Priority Outbound WebSocket Scheduler
     │   ├── buffer.go               # Bounded Ring Buffer & NATS Dispatch Buffer
-    │   └── coalescer.go            # State message coalescer (last-write-wins)
+    │   ├── coalescer.go            # State message coalescer (last-write-wins)
+    │   └── results.go              # High-priority bounded result buffer
     ├── reqmgr/                     # Request Manager & Cache
     │   ├── manager.go              # Request lifecycle coordinator
     │   ├── transaction.go          # Transaction state machine
@@ -227,7 +228,7 @@ olg-ucentral-client/
     ```
 
 #### PR 2.2: Buffers, Coalescer & Telemetry Ring Buffer
-*   **Target File:** `pkg/queues/buffer.go`, `pkg/queues/coalescer.go`
+*   **Target File:** `pkg/queues/buffer.go`, `pkg/queues/coalescer.go`, `pkg/queues/results.go`
 *   **Core Structures:**
     ```go
     package queues
@@ -269,7 +270,30 @@ olg-ucentral-client/
     func NewNATSDispatchBuffer(capacity int) *NATSDispatchBuffer
     func (d *NATSDispatchBuffer) Push(ctx context.Context, payload []byte) error
     func (d *NATSDispatchBuffer) Pop(ctx context.Context) ([]byte, error)
+
+    // ErrQueueFull is returned when a push fails due to the non-blocking capacity limit.
+    var ErrQueueFull = errors.New("command result queue is at maximum capacity")
+
+    // CommandResultQueue acts as a bounded, high-priority ingress buffer for JSON-RPC 
+    // command execution results arriving from the downstream NATS agents.
+    type CommandResultQueue struct {
+    	mu       sync.Mutex
+    	items    [][]byte
+    	capacity int
+    }
+
+    func NewCommandResultQueue(capacity int) *CommandResultQueue
+    func (q *CommandResultQueue) Push(payload []byte) error
+    func (q *CommandResultQueue) Pop() ([]byte, bool)
+    func (q *CommandResultQueue) Utilization() float64
     ```
+
+**Command Result Queue Lifecycle & Ownership Rules:**
+*   **Ownership:** The queue is populated (`Push`) by the asynchronous NATS Subscriber goroutines. It is consumed (`Pop`) exclusively by the Main WebSocket Writer goroutine (pulling it into the Priority 0 Outbound Scheduler).
+*   **Overflow Policy (Reject):** The queue is strictly non-blocking. If a NATS subscriber attempts to push to a full queue, the queue immediately rejects it by returning `ErrQueueFull`. The NATS subscriber must log an overflow error and drop the result to protect the router from backpressure.
+*   **Telemetry Throttling (Activation & Release):** The Main loop polls `Utilization()` before processing telemetry.
+    *   **Activation:** If `Utilization() >= 0.90` (90% capacity, e.g., 45/50 items), the daemon engages telemetry throttling, pausing all reads from the `TelemetryRingBuffer`.
+    *   **Release:** Throttling remains engaged until `Utilization() <= 0.50` (queue drops to 50% capacity), creating a hysteresis loop to prevent rapid toggling, at which point telemetry forwarding resumes.
 
 ---
 
@@ -298,8 +322,13 @@ olg-ucentral-client/
     	TxTimedOut
     )
 
+    type RPCID struct {
+    	Raw json.RawMessage // exact ID bytes for response/NATS propagation
+    	Key string          // canonical internal map key (e.g. "string:42" or "number:42")
+    }
+
     type Transaction struct {
-    	RPCID     string
+    	RPCID     RPCID
     	State     TransactionState
     	CreatedAt time.Time
     	ResultCh  chan []byte
@@ -310,11 +339,11 @@ olg-ucentral-client/
     	mu           sync.Mutex
     	transactions map[string]*Transaction
     	stateLock    sync.Mutex // Enforces serialized state-changing commands
-    	activeStateTx string    // RPC ID holding the state lock
+    	activeStateTx string    // Canonical key holding the state lock
     }
 
     func NewRequestManager() *DefaultRequestManager
-    func (m *DefaultRequestManager) CreateTransaction(rpcID string, timeout time.Duration, isStateChanging bool) (*Transaction, error)
+    func (m *DefaultRequestManager) CreateTransaction(rpcID RPCID, timeout time.Duration, isStateChanging bool) (*Transaction, error)
     ```
 
 #### PR 3.2: Duplicate Attachment & Cache TTL
@@ -336,8 +365,8 @@ olg-ucentral-client/
     }
 
     func NewTransactionCache() *TransactionCache
-    func (c *TransactionCache) Set(rpcID string, payload []byte, ttlSeconds int)
-    func (c *TransactionCache) Get(rpcID string) ([]byte, bool)
+    func (c *TransactionCache) Set(rpcID RPCID, payload []byte, ttlSeconds int)
+    func (c *TransactionCache) Get(rpcID RPCID) ([]byte, bool)
     ```
 
 ---
@@ -384,13 +413,16 @@ olg-ucentral-client/
     	kv   nats.KeyValue
     }
 
+    // NATSConfig defines the mandatory secure connection parameters for the NATS bus.
     type NATSConfig struct {
-        Servers         []string
-        CredentialsFile string
-        TLSRequired     bool
-        CAFile          string
+        Servers         []string // Must strictly use tls:// scheme. nats:// is rejected.
+        CredentialsFile string   // Path to NATS credentials (NKEY/JWT).
+        CAFile          string   // Mandatory path to the trusted Root CA. Cannot be empty.
     }
 
+    // NewNATSClient initializes a NATS connection.
+    // SECURITY CONTRACT: This constructor MUST enforce tls.Config{MinVersion: tls.VersionTLS13}.
+    // It must return a fatal error if CAFile is empty, or if any Server URL is insecure.
     func NewNATSClient(cfg NATSConfig) (*NATSClient, error)
     func (n *NATSClient) WriteDesiredConfig(ctx context.Context, serial string, config []byte) (uint64, error)
     func (n *NATSClient) PublishConfigTrigger(ctx context.Context, serial string, uuid string, kvKey string, revision uint64) error

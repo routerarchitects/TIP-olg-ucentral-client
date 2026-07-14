@@ -7,10 +7,11 @@ This document details the test plans, test cases, and verification strategies fo
 ## Epic 1: Scaffold & Base Types
 
 ### PR 1.1: Shared Contracts & Serialization Tests
-*   **TC-CON-001 (Subject Schema Versioning & Isolation):**
-    *   *Requirement Mapping:* `REQ-004` (Subject Schema Versioning)
-    *   *Setup:* Attempt to generate NATS subjects using the subject-builder for the daemon's own serial (`<own-serial>`), and attempt to generate subjects for a different serial.
-    *   *Assert:* The builder must strictly produce subjects formatted as `ucentral.v1.device.<own-serial>.<action>` containing the `v1` version prefix, and it must explicitly reject or fail to produce cross-serial subjects to enforce target isolation.
+*   **TC-CON-001 (Envelope Serialization):**
+    *   *Requirement Mapping:* `REQ-028` (NATS Envelope Serialization Contract)
+    *   *Setup:* Create instances of `ConfigureCommand`, `ActionCommand`, and `ResultEnvelope`.
+    *   *Input:* `ActionCommand` with `Action = "reboot"`, `RPCID = "123"`.
+    *   *Assert:* Marshalling to JSON must produce exact keys `version`, `rpc_id`, `target`, `command_type`, `action`, `payload`, `timestamp`.
 *   **TC-CON-002 (Error Mappings):**
     *   *Requirement Mapping:* `REQ-021` (JSON-RPC Error Mapping)
     *   *Setup:* Pass internal error enum `ErrServiceUnavailable` to JSON-RPC error encoder helper.
@@ -140,7 +141,7 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Setup:* Write config payload to JetStream KV. Retrieve the sequence revision and publish the `config.apply` NATS trigger. Intercept the serialized trigger. Then, simulate a downstream agent processing the trigger under two conditions: (A) when the KV store revision exactly matches the trigger `kv_revision`, and (B) when the KV store contains a newer, higher revision payload.
     *   *Assert:* The intercepted trigger must contain `uuid`, `kv_key`, `kv_revision`, `target`, and `rpc_id` while strictly omitting the full configuration `payload`. In condition A (exact match), the simulated agent must successfully download and apply the configuration. In condition B (mismatch), the agent must explicitly abort the apply process, completely fulfilling the consistency contract.
 *   **TC-SEC-001 (Target Subject Isolation Constraints):**
-    *   *Requirement Mapping:* `REQ-016` (NATS Security & Target Isolation)
+    *   *Requirement Mapping:* `REQ-004` (Subject Schema Versioning), `REQ-016` (NATS Security & Target Isolation)
     *   *Setup:* Attempt to publish or subscribe to a subject with a different target serial (e.g. `ucentral.v1.device.different-serial.state`).
     *   *Assert:* Connection/authorization must block or reject the operation, ensuring target-serial isolation.
 *   **TC-NET-007 (NATS-Native Health Check & Status Endpoints):**
@@ -216,7 +217,7 @@ This document details the test plans, test cases, and verification strategies fo
 | **REQ-001** | Concurrent Startup Loops | `TC-INT-001`, `TC-INT-003` |
 | **REQ-002** | Reconnection State Machine | `TC-NET-001`, `TC-NET-010` |
 | **REQ-003** | Version Negotiation Fallback | `TC-CON-003` |
-| **REQ-004** | Subject Schema Versioning | `TC-CON-001` |
+| **REQ-004** | Subject Schema Versioning | `TC-SEC-001` |
 | **REQ-005** | Permissive Parameter Validation | `TC-VAL-001` |
 | **REQ-006** | JetStream KV Consistency Contract | `TC-NET-003`, `TC-INT-002` |
 | **REQ-007** | Transaction Lifecycle | `TC-RM-001` |
@@ -240,3 +241,4 @@ This document details the test plans, test cases, and verification strategies fo
 | **REQ-025** | Request Manager Retry Policy | `TC-RM-006` |
 | **REQ-026** | Desired/Applied Cloud Reconciliation Contract | `TC-NET-013` |
 | **REQ-027** | JSON-RPC ID Preservation | `TC-CON-005` |
+| **REQ-028** | NATS Envelope Serialization Contract | `TC-CON-001` |

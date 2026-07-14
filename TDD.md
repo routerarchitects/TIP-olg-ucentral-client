@@ -190,7 +190,7 @@ This document details the test plans, test cases, and verification strategies fo
 
 ### PR 5.1: Main Loop Tests
 *   **TC-INT-001 (Graceful Teardown):**
-    *   *Requirement Mapping:* `REQ-001` (Concurrent Startup Loops)
+    *   *Requirement Mapping:* `REQ-029` (Graceful Teardown)
     *   *Setup:* Boot main client. Send `SIGTERM` signal.
     *   *Assert:* Client must gracefully flush scheduler queues, close WebSocket connections, close NATS, and terminate process with exit code 0.
 
@@ -214,7 +214,7 @@ This document details the test plans, test cases, and verification strategies fo
 
 | Requirement ID | Requirement Name | Mapping Test Case(s) |
 | :--- | :--- | :--- |
-| **REQ-001** | Concurrent Startup Loops | `TC-INT-001`, `TC-INT-003` |
+| **REQ-001** | Concurrent Startup Loops | `TC-INT-003` |
 | **REQ-002** | Reconnection State Machine | `TC-NET-001`, `TC-NET-010` |
 | **REQ-003** | Version Negotiation Fallback | `TC-CON-003` |
 | **REQ-004** | Subject Schema Versioning | `TC-SEC-001` |
@@ -242,3 +242,4 @@ This document details the test plans, test cases, and verification strategies fo
 | **REQ-026** | Desired/Applied Cloud Reconciliation Contract | `TC-NET-013` |
 | **REQ-027** | JSON-RPC ID Preservation | `TC-CON-005` |
 | **REQ-028** | NATS Envelope Serialization Contract | `TC-CON-001` |
+| **REQ-029** | Graceful Teardown | `TC-INT-001` |

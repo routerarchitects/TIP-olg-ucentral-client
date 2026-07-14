@@ -25,9 +25,9 @@ graph TD
     NATS_Client <-->|Pub/Sub & JetStream KV| NATS_Bus[NATS Message Bus]
 
     %% Other Client Microservices
-    NATS_Bus <-->|ucentral.v1.device.config.*| VyOS_Client[VyOS NATS Client]
-    NATS_Bus <-->|ucentral.v1.device.state.*| Telemetry_Service[State/Telemetry Collectors]
-    NATS_Bus <-->|ucentral.v1.device.log.*| Logging_Service[System Log Forwarder]
+    NATS_Bus <-->|"ucentral.v1.device.<own-serial>.config.apply"| VyOS_Client[VyOS NATS Client]
+    NATS_Bus <-->|"ucentral.v1.device.<own-serial>.state"| Telemetry_Service[State/Telemetry Collectors]
+    NATS_Bus <-->|"ucentral.v1.device.<own-serial>.log"| Logging_Service[System Log Forwarder]
 ```
 
 ### 1.1 Ownership Boundaries
@@ -353,7 +353,7 @@ Exposes a priority-aware message dispatch queue writing to the WebSocket connect
 *   **Authentication:** Authenticates with the NATS bus using **NKeys/Seed files** or **JWT Tokens** specified in the daemon configuration file.
 *   **TLS Requirements:** TLS v1.3 is enforced on the NATS connection with CA certificates validation.
 *   **Authorization & Access Control (ACLs):** The client runs under restricted NATS credentials enforcing target isolation:
-    *   *Publish:* `ucentral.v1.device.<own-serial>.config.apply`, `ucentral.v1.device.<own-serial>.action.*`
+    *   *Publish:* `ucentral.v1.device.<own-serial>.config.apply`, `ucentral.v1.device.<own-serial>.action.*`, `ucentral.v1.device.<own-serial>.capabilities.get`, `ucentral.v1.device.<own-serial>.status.get`
     *   *Subscribe:* `ucentral.v1.device.<own-serial>.state`, `ucentral.v1.device.<own-serial>.telemetry`, `ucentral.v1.device.<own-serial>.log`, `ucentral.v1.device.<own-serial>.health`
     
     *Security Constraint:* The client is explicitly restricted from accessing wildcard subjects `ucentral.v1.device.*` to prevent accidental cross-device actions.
@@ -415,7 +415,7 @@ Upon receiving a request, the client replies with its status snapshot. Standard 
 }
 ```
 *   **Liveness (`liveness`):** `ok` as long as the uCentral Client daemon process is running and executing its main loop.
-*   **Readiness (`readiness`):** `ready` if NATS and Cloud are both connected; `degraded` if NATS is down or Cloud is disconnected. Helper tools use this to routes traffic.
+*   **Readiness (`readiness`):** `ready` if NATS and Cloud are both connected; `degraded` if NATS is down or Cloud is disconnected. Helper tools use this to route traffic.
 
 ---
 

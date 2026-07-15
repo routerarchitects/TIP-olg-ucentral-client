@@ -189,7 +189,7 @@ To protect device integrity, the client divides requests into two execution clas
     *   *Ownership:* `status.get` is a downstream device/local-agent query. The uCentral client sends the request and waits for the downstream response; it does not serve responses on this subject.
 
 ### 3.3 Duplicate & Overlapping Requests
-*   **Overlapping Duplicate Requests:** If the Cloud retries a command sending the exact same `rpc_id` while a transaction is already `InFlight`, the client rejects the new request immediately with a JSON-RPC busy/internal error (`-32603`). This avoids complex fan-out/listener attachment logic and ensures predictable client behavior.
+*   **Overlapping Duplicate Requests:** If the Cloud retries a command sending the exact same `rpc_id` while a transaction is already active (`Created`, `PendingNATS`, or `InFlight`), the client rejects the new request immediately with a JSON-RPC busy/internal error (`-32603`). This avoids complex fan-out/listener attachment logic and ensures predictable client behavior.
 *   **Duplicate Completed Requests:** If the request matches a cached `rpc_id` that has already completed, the Request Manager **replays the cached response** directly to the cloud.
 *   **Cache TTL by Operation Type:**
     *   `configure`: **5 minutes**
@@ -301,6 +301,7 @@ stateDiagram-v2
     
     state GlobalState {
         SystemConnecting --> Offline : Cloud != Connected AND NATS != Connected
+        SystemConnecting --> ProtocolNegotiating : CloudConnected + NATSConnected + NegotiationPending
         SystemConnecting --> Operational : CloudConnected + NATSConnected + NegotiationReady
         SystemConnecting --> CloudDegraded : CloudConnecting + NATSConnected
         SystemConnecting --> NATSDegraded : CloudConnected + NATSConnecting

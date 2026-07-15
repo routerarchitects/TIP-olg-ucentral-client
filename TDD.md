@@ -10,8 +10,10 @@ This document details the test plans, test cases, and verification strategies fo
 *   **TC-CON-001 (Envelope Serialization):**
     *   *Requirement Mapping:* `REQ-028` (NATS Envelope Serialization Contract)
     *   *Setup:* Create instances of `ConfigureCommand`, `ActionCommand`, and `ResultEnvelope`.
-    *   *Input:* `ActionCommand` with `Action = "reboot"`, `RPCID = "123"`.
-    *   *Assert:* Marshalling to JSON must produce exact keys `version`, `rpc_id`, `target`, `command_type`, `action`, `payload`, `timestamp`.
+    *   *Assert:* Marshalling to JSON must produce exact keys for each envelope type:
+        *   `ActionCommand`: `version`, `rpc_id`, `target`, `command_type`, `action`, `payload`, `timestamp`.
+        *   `ConfigureCommand`: `version`, `rpc_id`, `target`, `uuid`, `kv_key`, `kv_revision`, `timestamp`. Must assert that the raw `payload` is absent.
+        *   `ResultEnvelope`: `version`, `rpc_id`, `target`, `status`, `data`.
 *   **TC-CON-002 (Error Mappings):**
     *   *Requirement Mapping:* `REQ-021` (JSON-RPC Error Mapping)
     *   *Setup:* Pass internal error enum `ErrServiceUnavailable` to JSON-RPC error encoder helper.
@@ -139,8 +141,8 @@ This document details the test plans, test cases, and verification strategies fo
 ### PR 3.2: Duplicate Attachment & Cache TTL Tests
 *   **TC-RM-004 (Duplicate Active Request Rejection):**
     *   *Requirement Mapping:* `REQ-009` (Duplicate Active Request Rejection)
-    *   *Setup:* Start transaction `rpc_id = "tx-1"`. Submit another request with matching `rpc_id = "tx-1"`.
-    *   *Assert:* The second request must fail immediately and return a busy error (`-32603`). The original transaction must continue execution unaffected.
+    *   *Setup:* Start transaction `rpc_id = "tx-1"` and hold it in `Created` state. Submit duplicate request. Advance original to `PendingNATS` and submit duplicate. Advance to `InFlight` and submit duplicate.
+    *   *Assert:* In all three active states (`Created`, `PendingNATS`, `InFlight`), the duplicate request must fail immediately and return a busy error (`-32603`) without overwriting the map entry, altering timeouts, or triggering a second downstream execution.
 *   **TC-RM-005 (Operation-Specific Cache TTLs):**
     *   *Requirement Mapping:* `REQ-010` (Operation-Specific Caching & TTL)
     *   *Setup:* Write `configure` (TTL 5 mins), `reboot` (TTL 10 mins), `factory` (TTL 30 mins), and `upgrade` (TTL 60 mins) results to `TransactionCache`. Mock clock time to advance 15 minutes.
@@ -201,6 +203,7 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Setup:* Independently change Cloud, NATS, and protocol-negotiation states.
     *   *Assert:*
         * Cloud Connected + NATS Connected + Negotiation Ready = `Operational`.
+        * Cloud Connected + NATS Connected + Negotiation Pending = `ProtocolNegotiating`.
         * Cloud Offline/Connecting + NATS Connected = `CloudDegraded`.
         * Cloud Connected + NATS Offline/Connecting = `NATSDegraded`.
         * Neither connection Connected = `Offline`.

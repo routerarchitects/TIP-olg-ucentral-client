@@ -8,6 +8,7 @@ This document lists the strict, numbered requirements for the Go-based uCentral 
 
 *   **REQ-001 (Concurrent Startup Loops):** The daemon must launch separate, independent, concurrent connection loops to NATS and the Cloud WebSocket at boot. A failure or delay in NATS connection must not block the Cloud connection, and vice versa.
 *   **REQ-002 (Decoupled Connection State Machine):** The daemon must manage the Cloud and NATS connection lifecycles entirely independently. Their individual connection states (`Offline` $\rightarrow$ `Connecting` $\rightarrow$ `Connected`) must be evaluated continuously to form a composite Global State:
+    *   `ProtocolNegotiating`: Cloud is `Connected`, NATS is `Connected`, but protocol negotiation is `Pending`.
     *   `Operational`: Cloud is `Connected`, NATS is `Connected`, and protocol negotiation is `Ready`.
     *   `CloudDegraded`: Cloud is `Offline`/`Connecting`, but NATS is `Connected`. (Daemon safely buffers telemetry locally; reconnects to Cloud with randomized exponential backoff of 2s-300s).
     *   `NATSDegraded`: NATS is `Offline`/`Connecting`, but Cloud is `Connected`. (Daemon fast-fails incoming Cloud commands with `local_service_unavailable`).
@@ -38,7 +39,7 @@ This document lists the strict, numbered requirements for the Go-based uCentral 
 
 *   **REQ-007 (Transaction Lifecycle):** Every incoming Cloud command must be tracked by an active in-memory transaction transitioning through: `Created` $\rightarrow$ `PendingNATS` $\rightarrow$ `InFlight` $\rightarrow$ `Completed` / `Failed` / `TimedOut`.
 *   **REQ-008 (Concurrency Serialization):** The Request Manager must serialize state-changing commands (`configure`, `reboot`, `factory`, `upgrade`) for the device. If a state-changing transaction is active (`PendingNATS` or `InFlight`), new state-changing commands must be immediately rejected with a `busy` status (Error Code -32603). Read-only downstream queries (`capabilities.get`, `status.get`) must run in parallel and must not acquire the device state lock. The `status.get` subject is owned by the downstream device/local agent; the uCentral client must only publish requests to it and must not respond on it.
-*   **REQ-009 (Duplicate Active Request Rejection):** If a Cloud request arrives with an `rpc_id` that is already in-progress (`InFlight`), the Request Manager must reject the new request immediately with a standard JSON-RPC busy/internal error (`-32603`) instead of attempting to run it or attach it to the running transaction.
+*   **REQ-009 (Duplicate Active Request Rejection):** If a Cloud request arrives with an `rpc_id` that matches a transaction currently in any active state (`Created`, `PendingNATS`, or `InFlight`), the Request Manager must reject the new request immediately with a standard JSON-RPC busy/internal error (`-32603`) instead of attempting to run it or attach it to the running transaction.
 *   **REQ-010 (Operation-Specific Caching & TTL):** The transaction cache must persist results in-memory with TTLs categorized by command type to support duplicate request replay and reconnection recovery:
     *   `configure`: 5 minutes
     *   `reboot`: 10 minutes

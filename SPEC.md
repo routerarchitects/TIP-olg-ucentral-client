@@ -69,12 +69,13 @@ olg-ucentral-client/
 
     // Application Sub-codes (returned in JSON-RPC error.data.application_code)
     const (
-    	ErrAppFailure        = 1
-    	ErrTimeout           = 2
-    	ErrServiceUnavailable = 3
-    	ErrValidationFailed  = 4
-    	ErrRollbackSuccess   = 5
-    	ErrRollbackFailed    = 6
+    	ErrAppFailure          = 1
+    	ErrTimeout             = 2
+    	ErrServiceUnavailable  = 3
+    	ErrValidationFailed    = 4
+    	ErrRollbackSuccess     = 5
+    	ErrRollbackFailed      = 6
+    	ErrResultDeliveryFailed = 7 // Queue overflow maps to this, not ErrAppFailure
     )
 
     type JSONRPCRequest struct {
@@ -199,7 +200,9 @@ olg-ucentral-client/
     //   Exception 1: Priority 0 messages bypass lower-priority backlog, but do not use an unbounded queue. They are placed in a dedicated bounded emergency queue. If that queue reaches its hard limit, Push() returns an overflow error so the caller can treat the WebSocket writer path as unhealthy and trigger recovery if needed, fail affected transactions, and record an overflow metric.
     //   Exception 2: Priority 1 (Audits/Crash logs) must be non-blocking to prevent deadlocking core NATS handlers. If Priority 1 reaches capacity, Push() returns a fast error immediately.
     // - Next() blocks until a message is available or the context is canceled.
-    //   Highest priority messages (0) are always selected first.
+    //   Highest priority messages (0) are selected first, but to prevent starvation of lower priorities,
+    //   a strict yield mechanism is enforced: after 10 consecutive Priority 0 messages are yielded, 
+    //   the scheduler must yield at least one available message from the next highest populated queue (1, 2, or 3).
     // - Context cancellation drives scheduler shutdown and unblocks waiting Push/Next calls.
     type OutboundScheduler interface {
     	Push(ctx context.Context, msg OutboundMessage) error
@@ -290,7 +293,7 @@ olg-ucentral-client/
 
 **Command Result Queue Lifecycle & Ownership Rules:**
 *   **Ownership:** The queue is populated (`Push`) by the asynchronous NATS Subscriber goroutines. It is consumed (`Pop`) exclusively by the Main WebSocket Writer goroutine (pulling it into the Priority 0 Outbound Scheduler).
-*   **Overflow Policy (Reject):** The queue is strictly non-blocking. If a NATS subscriber attempts to push to a full queue, the queue immediately rejects it by returning `ErrQueueFull`. The NATS subscriber must log an overflow error and drop the result to protect the router from backpressure.
+* **Overflow Policy (Exceptional Local Delivery Failure):** The command result queue is bounded and non-blocking to protect core NATS subscriber loops. Because state-changing commands are serialized, overflow is not expected during normal operation. If a NATS subscriber attempts to push to a full queue, `Push()` returns `ErrQueueFull`. The subscriber must not silently drop a correlated command result. It must log the overflow with the `rpc_id`, command type, and subject, increment a `command_result_overflow` metric, and notify the Request Manager so the matching Cloud transaction is completed with an indeterminate local delivery error. This error means the uCentral client could not process the downstream result locally; it must not claim that the downstream operation itself failed. If the result cannot be correlated to an active transaction, it may be discarded after logging and metric emission.
 *   **Telemetry Throttling (Activation & Release):** The Main loop polls `Utilization()` before processing telemetry.
     *   **Activation:** If `Utilization() >= 0.90` (90% capacity, e.g., 45/50 items), the daemon engages telemetry throttling, pausing all reads from the `TelemetryRingBuffer`.
     *   **Release:** Throttling remains engaged until `Utilization() <= 0.50` (queue drops to 50% capacity), creating a hysteresis loop to prevent rapid toggling, at which point telemetry forwarding resumes.
@@ -427,7 +430,24 @@ olg-ucentral-client/
     func (n *NATSClient) WriteDesiredConfig(ctx context.Context, serial string, config []byte) (uint64, error)
     func (n *NATSClient) PublishConfigTrigger(ctx context.Context, serial string, uuid string, kvKey string, revision uint64) error
     func (n *NATSClient) GetDesiredConfigMetadata(ctx context.Context, serial string) (uint64, string, error) // Returns (revision, uuid, error)
+    
+    type DeviceStatus struct {
+    	Version     string          `json:"version"`
+    	RPCID       json.RawMessage `json:"rpc_id,omitempty"`
+    	OperationID string          `json:"operation_id,omitempty"` // Identifies the long-running async operation
+    	Target      string          `json:"target"`
+    	Operation string          `json:"operation,omitempty"`
+    	Active    bool            `json:"active,omitempty"`
+    	Stage     string          `json:"stage,omitempty"`
+    	Status    string          `json:"status"`
+    	Message   string          `json:"message,omitempty"`
+    	Timestamp string          `json:"timestamp"`
+    }
+    
+    func (n *NATSClient) QueryDeviceStatus(ctx context.Context, serial string) (*DeviceStatus, error)
     ```
+
+The uCentral client must not register a NATS responder for `ucentral.v1.device.<own-serial>.status.get`. This subject is queried by the uCentral client and served by the downstream device/local agent.
 
 #### PR 4.3: Dynamic Capabilities & Local Signal Sockets
 *   **Target File:** `pkg/nats/capabilities.go`

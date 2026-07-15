@@ -24,14 +24,27 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-005` (Permissive Parameter Validation)
     *   *Setup:* Submit a configuration payload containing a known schema property with an invalid type, and an unknown future schema property.
     *   *Assert:* Schema validator must reject the request due to the invalid known parameter. Submit another payload containing only valid known parameters and unknown future parameters; the validator must pass the unknown parameters through to NATS unmodified.
-*   **TC-CON-004 (Payload Sizing Constraints Checks):**
-    *   *Requirement Mapping:* `REQ-020` (Sizing Constraints)
-    *   *Setup:* Generate payloads of varying sizes for Configuration, State, Telemetry, and Logs. Send payloads exceeding their respective limits (10MB, 1MB, 256KB, 64KB).
-    *   *Assert:* Client must reject/discard the oversized payloads and increment corresponding drop/error metrics. Payloads within limits must be successfully processed.
-*   **TC-CON-005 (JSON-RPC ID Preservation):**
-    *   *Requirement Mapping:* `REQ-027` (JSON-RPC ID Preservation)
-    *   *Setup:* Send valid JSON-RPC requests containing `ID` as an integer (e.g., `42`) and `ID` as a string (e.g., `"42"`).
-    *   *Assert:* The client must successfully parse both formats, track them through the transaction manager, and return the exact matching original format (numeric or string) in the JSON-RPC response without mutation.
+*   **TC-CON-004 (Sizing Constraints, Bounded Readers, and Decompression Bombs):**
+    *   *Requirement Mapping:* `REQ-020` (Sizing Constraints & Memory Protection)
+    *   *Setup:* Send the following payloads to the client over WebSocket:
+        1. A small compressed payload that decompresses into a massive 15MB configuration string (Decompression bomb).
+        2. A continuous, unbounded stream of garbage JSON where no `id` is present within the first 10MB.
+        3. A valid JSON-RPC request containing a valid `id`, but where the `params` payload exceeds 10MB.
+    *   *Assert:* The client must use a bounded reader that terminates decompression and reading exactly at the uncompressed limit, before full memory allocation or JSON unmarshalling.
+        * For Scenario 1 and 2, the client must forcefully reject/close the request without attempting to return a JSON-RPC error, and emit a metric.
+        * For Scenario 3, the client must successfully parse the `id`, abort the rest of the payload, and return a JSON-RPC `-32602` (Invalid Params) with `error.data.application_code = 4` (Validation Failed).
+*   **TC-CON-005 (JSON-RPC ID Preservation & Edge Cases):**
+    *   *Requirement Mapping:* `REQ-027` (JSON-RPC ID Preservation & Edge Cases)
+    *   *Setup:* Send a series of JSON-RPC requests containing:
+        1. `id` as an integer (`42`) and string (`"42"`).
+        2. No `id` field (Notification).
+        3. `id` as an object (`{"id": 1}`) and array (`[1, 2]`).
+        4. A previously completed valid `id`.
+    *   *Assert:* 
+        * For (1), the client must successfully parse, track, and return the exact matching original format in the response.
+        * For (2), the client must execute the command but send no WebSocket response.
+        * For (3), the client must reject the request with `-32600` or `-32700` and return `id: null`.
+        * For (4), the client must not re-execute the command and must replay the cached JSON-RPC response.
 
 ---
 
@@ -42,6 +55,10 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-014` (Outbound Priority Scheduler)
     *   *Setup:* Instantiate `PriorityScheduler` with a capacity of 10 and an emergency capacity of 100. Push 5 messages of `PriorityLow` (Priority 3). Push 1 message of `PriorityHighest` (Priority 0).
     *   *Assert:* Calling `Next()` must return the `PriorityHighest` message first. Subsequent calls must return `PriorityLow` messages in FIFO order.
+*   **TC-SCH-005 (Anti-Starvation Yield Limit):**
+    *   *Requirement Mapping:* `REQ-014` (Outbound Priority Scheduler)
+    *   *Setup:* Pre-fill the scheduler with 20 `PriorityHighest` (Priority 0) messages and 5 `PriorityLow` (Priority 3) messages.
+    *   *Assert:* Calling `Next()` repeatedly must yield exactly 10 consecutive `PriorityHighest` messages, followed by 1 `PriorityLow` message, followed by the remaining 10 `PriorityHighest` messages, before draining the rest of `PriorityLow`.
 *   **TC-SCH-002 (Scheduler Blocking and Wakeup):**
     *   *Requirement Mapping:* `REQ-014` (Outbound Priority Scheduler)
     *   *Setup:* Call `Next()` on an empty `PriorityScheduler` in a separate goroutine.
@@ -72,6 +89,10 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-013` (Command Result Priority Queue)
     *   *Setup:* Fill the NATS command result queue (capacity 50) to 90% capacity. Send telemetry events.
     *   *Assert:* The client must throttle/delay telemetry forwarding to prioritize command results, ensuring core loops do not block.
+*   **TC-QUE-002 (Command Result Queue Overflow Produces Indeterminate Result):**
+    *   *Requirement Mapping:* `REQ-013`, `REQ-021`
+    *   *Setup:* Fill the Command Result Priority Queue to capacity. Simulate a correlated downstream command result arriving with a known `rpc_id`.
+    *   *Assert:* `Push()` must return `ErrQueueFull`; the daemon must log the `rpc_id`, command type, and subject, increment `command_result_overflow`, and complete the matching Cloud transaction with JSON-RPC `-32603` and `error.data.application_code = 7` (`Result Delivery Failed`). The response must state that the downstream result could not be processed locally and must not claim that the downstream operation failed.
 *   **TC-BUF-004 (Gzip Compression Trigger Threshold):**
     *   *Requirement Mapping:* `REQ-024` (Payload Compression)
     *   *Setup:* Set `compression_threshold_bytes` to 2048. Generate a payload of size 1024 bytes and another of size 3072 bytes.
@@ -106,10 +127,10 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-011` (Asynchronous Upgrade Tracking)
     *   *Setup:* Start an upgrade transaction.
     *   *Assert:* Client must immediately return an initial "started" status response and close the initial JSON-RPC request-reply exchange, while the background upgrade operation remains active and logs continue to flow over NATS to the Cloud until a terminal state is reached.
-*   **TC-UPG-002 (Upgrade Crash Recovery via Startup Query):**
+*   **TC-UPG-002 (Upgrade Crash Recovery via Downstream Status Query):**
     *   *Requirement Mapping:* `REQ-011`
-    *   *Setup:* Simulate a daemon crash/restart while an upgrade is active downstream. On boot, the daemon queries the downstream device status.
-    *   *Assert:* The daemon must detect the active upgrade from the status report, immediately re-acquire the in-memory `activeStateTx` lock, and correctly reject any new state-changing commands (e.g., `reboot`) until the upgrade completes.
+    *   *Setup:* Simulate a daemon crash/restart while an upgrade is active downstream. Mock a downstream device/local-agent responder on `ucentral.v1.device.<own-serial>.status.get`.
+    *   *Assert:* On boot, the daemon must publish a request to `status.get`, receive the downstream status response, detect the active upgrade, immediately re-acquire the in-memory `activeStateTx` lock, and reject new state-changing commands until the upgrade completes. The uCentral client itself must not subscribe to or respond on `status.get`.
 
 ### PR 3.2: Duplicate Attachment & Cache TTL Tests
 *   **TC-RM-004 (Duplicate Active Request Rejection):**
@@ -144,10 +165,10 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-004` (Subject Schema Versioning), `REQ-016` (NATS Security & Target Isolation)
     *   *Setup:* Attempt to publish or subscribe to a subject with a different target serial (e.g. `ucentral.v1.device.different-serial.state`).
     *   *Assert:* Connection/authorization must block or reject the operation, ensuring target-serial isolation.
-*   **TC-NET-007 (NATS-Native Health Check & Status Endpoints):**
-    *   *Requirement Mapping:* `REQ-019` (NATS-Native Health Reporting)
-    *   *Setup:* Publish a query to the `status.get` subject.
-    *   *Assert:* The client must respond with a health snapshot containing daemon uptime, metrics, liveness ("ok"), and readiness status ("ready" when connected, "degraded" if NATS or Cloud is down).
+*   **TC-NET-007 (Device Health Forwarding and No Daemon Status Responder):**
+    *   *Requirement Mapping:* `REQ-019`
+    *   *Setup:* Publish a valid device health snapshot to `ucentral.v1.device.<own-serial>.health`. Separately, publish/request `ucentral.v1.device.<own-serial>.status.get` with only the uCentral client running and no downstream status responder.
+    *   *Assert:* The client must subscribe to `.health`, validate/rate-limit the payload, and enqueue accepted health updates for Cloud forwarding. The client must not respond to `status.get` with daemon liveness/readiness, Cloud connectivity, queue depth, uptime, or metrics.
 *   **TC-SEC-002 (TLS v1.3 and CA Verification):**
     *   *Requirement Mapping:* `REQ-023` (TLS v1.3 Security)
     *   *Setup:* Configure the NATS client to connect to a broker without TLS or with an invalid CA cert.
@@ -189,10 +210,10 @@ This document details the test plans, test cases, and verification strategies fo
 ## Epic 5: Main Entry Point & Assembly
 
 ### PR 5.1: Main Loop Tests
-*   **TC-INT-001 (Graceful Teardown):**
+*   **TC-INT-001 (Graceful Teardown and Priority Deadline):**
     *   *Requirement Mapping:* `REQ-029` (Graceful Teardown)
-    *   *Setup:* Boot main client. Send `SIGTERM` signal.
-    *   *Assert:* Client must gracefully flush scheduler queues, close WebSocket connections, close NATS, and terminate process with exit code 0.
+    *   *Setup:* Boot main client. Populate the outbound scheduler with Priority 0, 1, and 3 messages. Simulate a slow WebSocket connection that cannot flush all messages within 5 seconds. Send `SIGTERM` signal.
+    *   *Assert:* The client must preferentially flush Priority 0 messages first. It must enforce a strict 5-second deadline. It must discard lower-priority messages if the deadline expires, force-close WebSocket and NATS connections exactly at or before the 5-second mark, and terminate the process with exit code 0.
 
 ### PR 5.2: End-to-End Integration Tests
 *   **TC-INT-002 (Config Sync and Rollback Flow):**
@@ -226,15 +247,15 @@ This document details the test plans, test cases, and verification strategies fo
 | **REQ-010** | Operation-Specific Caching & TTL | `TC-RM-005` |
 | **REQ-011** | Asynchronous Upgrade Tracking & Crash Recovery | `TC-UPG-001`, `TC-UPG-002` |
 | **REQ-012** | Command Dispatch Buffer | `TC-BUF-003` |
-| **REQ-013** | Command Result Priority Queue | `TC-QUE-001`, `TC-BUF-006`, `TC-INT-004` |
-| **REQ-014** | WebSocket Outbound Priority Scheduler | `TC-SCH-001`, `TC-SCH-002`, `TC-SCH-003`, `TC-SCH-004`, `TC-INT-004` |
+| **REQ-013** | Command Result Priority Queue | `TC-QUE-001`, `TC-BUF-006`, `TC-QUE-002`, `TC-INT-004` |
+| **REQ-014** | WebSocket Outbound Priority Scheduler | `TC-SCH-001`, `TC-SCH-002`, `TC-SCH-003`, `TC-SCH-004`, `TC-SCH-005`, `TC-INT-004` |
 | **REQ-015** | State Coalescer & Telemetry Ring Buffer | `TC-BUF-001`, `TC-BUF-002`, `TC-BUF-007` |
 | **REQ-016** | NATS Security & Target Isolation | `TC-SEC-001` |
 | **REQ-017** | Local Management Signal Security | `TC-NET-005`, `TC-NET-011` |
 | **REQ-018** | Audit Logging & Loop Prevention | `TC-NET-006`, `TC-NET-011` |
 | **REQ-019** | NATS-Native Health Reporting | `TC-NET-007` |
 | **REQ-020** | Sizing Constraints | `TC-CON-004` |
-| **REQ-021** | JSON-RPC Error Mapping | `TC-CON-002`, `TC-INT-002` |
+| **REQ-021** | JSON-RPC Error Mapping | `TC-CON-002`, `TC-QUE-002`, `TC-INT-002` |
 | **REQ-022** | Capability Caching & Lifecycle | `TC-NET-008`, `TC-NET-012` |
 | **REQ-023** | TLS v1.3 Security | `TC-SEC-002` |
 | **REQ-024** | Payload Compression | `TC-BUF-004` |

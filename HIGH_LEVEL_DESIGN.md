@@ -45,7 +45,7 @@ To decouple message routing from request lifecycles, the uCentral Client include
 *   **Correlation Tracking:** Maps outgoing NATS commands to incoming Cloud JSON-RPC requests using request IDs.
 *   **Deduplication & Cache:** Handles duplicate requests and caches responses.
 *   **Request Timeouts:** Enforces timeouts using non-blocking timers and triggers failure responses if local components do not respond in time.
-*   **Retry Handling:** Automates transaction retries for transient failures. Only idempotent, read-only queries (like `capabilities.get`, `status.get`) are retryable for transient failures, using a randomized exponential backoff (e.g., base 2s, max 3 attempts). State-changing actions (`configure`, `reboot`, `factory`, `upgrade`) must fail fast without automatic retries.
+*   **Retry Handling:** Automates transaction retries for transient failures. Only idempotent, read-only downstream queries, such as `capabilities.get` and `status.get`, are retryable for transient failures, using a randomized exponential backoff (e.g., base 2s, max 3 attempts). State-changing actions (`configure`, `reboot`, `factory`, `upgrade`) must fail fast without automatic retries. The `status.get` subject is owned by the downstream device/local agent; the uCentral client publishes requests to it and must not subscribe to or respond on it.
 *   **Metrics Collection:** Tracks latencies, throughputs, and success/error rates per command.
 
 ---
@@ -115,7 +115,9 @@ To facilitate future protocol evolutions and enforce strict security boundaries,
 *   **Log Publish:** `ucentral.v1.device.<own-serial>.log` (Pub-Sub)
 *   **Health Publish:** `ucentral.v1.device.<own-serial>.health` (Pub-Sub)
 *   **Capability Discovery:** `ucentral.v1.device.<own-serial>.capabilities.get` (Request-Reply)
-*   **Status Query:** `ucentral.v1.device.<own-serial>.status.get` (Request-Reply)
+*   **Device Status Query:** `ucentral.v1.device.<own-serial>.status.get` (Request-Reply)
+
+The `status.get` subject is owned by the downstream device/local agent. The uCentral client publishes request-reply queries to this subject for current device/platform status and upgrade recovery. The uCentral client must not subscribe to or respond on this subject.
 
 *Security Boundary:* Read-only metadata calls (such as capability and status retrieval) are mapped to their own explicit subject namespaces, keeping them separate from destructive/operational `action.*` subjects. The daemon is restricted to `<own-serial>` topics to prevent cross-device actions.
 
@@ -182,8 +184,9 @@ To protect device integrity, the client divides requests into two execution clas
 1.  **State-Changing Commands (Serialized):** Commands that modify device state (`configure`, `reboot`, `factory`, `upgrade`) are **serialized** (one at a time per device).
     *   *Rule:* If a state-changing transaction is currently `InFlight` or `PendingNATS`, any new configuration or action request (with a different `rpc_id`) is immediately rejected with a `busy` status (Error Code -32603 / Result: `busy`).
     *   *Benefit:* Eliminates the overhead of complex command queue backlogs and prevents race conditions.
-2.  **Read-Only Commands (Parallel):** Metadata and query operations (`capabilities.get`, `status.get`) are **processed in parallel**.
+2.  **Read-Only Commands (Parallel):** Metadata and query operations (`capabilities.get`, `status.get`) are processed in parallel.
     *   *Rule:* Query operations do not acquire the device state lock and are published to NATS immediately, even if a configuration transaction is in progress.
+    *   *Ownership:* `status.get` is a downstream device/local-agent query. The uCentral client sends the request and waits for the downstream response; it does not serve responses on this subject.
 
 ### 3.3 Duplicate & Overlapping Requests
 *   **Overlapping Duplicate Requests:** If the Cloud retries a command sending the exact same `rpc_id` while a transaction is already `InFlight`, the client rejects the new request immediately with a JSON-RPC busy/internal error (`-32603`). This avoids complex fan-out/listener attachment logic and ensures predictable client behavior.
@@ -198,14 +201,16 @@ To protect device integrity, the client divides requests into two execution clas
 *   **Cloud Disconnections:** If the WAN connection to the Cloud drops while a transaction is `InFlight`, the client **continues running the operation downstream**. It does not abort the configuration or reboot.
 *   **Result Recovery:** If NATS replies while the Cloud is disconnected, the client stores the result in its transaction cache. Once the Cloud reconnects and queries the status or retries the command (using the same `rpc_id`), the client replays the cached result immediately.
 
-### 3.5 Asynchronous Upgrade Workflow & State Management
-Firmware upgrades follow a background execution model to prevent connection timeouts while ensuring concurrency safety:
-1.  **Immediate Acknowledgment:** The `"started"` status is the final JSON-RPC response for the original request, terminating the initial request-reply exchange.
-2.  **Background Operation:** The upgrade continues executing as a background operation monitored by the daemon.
-3.  **State Lock Lifetime:** The state-changing lock (`activeStateTx`) remains held until terminal completion or failure of the upgrade.
-4.  **Reconnection Resilience:** Upon WebSocket reconnection, the daemon resumes reporting the current upgrade state to the Cloud.
-5.  **Crash Recovery (Startup Query):** To prevent losing the in-memory state lock if the daemon process crashes during an upgrade, the daemon must query the downstream device's status (`status.get`) immediately on boot. If the device reports it is currently upgrading, the daemon immediately re-acquires the `activeStateTx` lock.
-6.  **Duplicate Rejection:** Any duplicate upgrade requests received while the background upgrade is active are rejected immediately as busy.
+### 3.5 Asynchronous Upgrades (Firmware)
+Firmware upgrades take minutes to complete and cannot block the Request Manager or hold the WebSocket connection open. The architecture defines the following cross-component contracts for upgrades:
+
+1.  **Operation ID:** A persistent `operation_id` must be generated to identify the long-running upgrade process independently of the original JSON-RPC `rpc_id`.
+2.  **Initial Response:** The client receives the `upgrade` command, validates it, and immediately returns a JSON-RPC "started" response (closing the JSON-RPC exchange) to the Cloud.
+3.  **Background Tracking & Authoritative Status:** The upgrade continues executing asynchronously. The downstream agent must expose structured, authoritative upgrade status. The uCentral client must use this structured status to determine completion; **system logs must not be used as a completion signal**.
+4.  **State Lock Lifetime:** The state-changing lock (`activeStateTx`) remains held until a defined terminal upgrade state (e.g., success, failed) is received from the downstream agent.
+5.  **Reconnection Resilience:** Upon WebSocket reconnection, the daemon resumes reporting the current upgrade state to the Cloud using the persistent `operation_id`.
+6.  **Crash Recovery (Startup Query):** To prevent losing the in-memory state lock if the daemon process crashes, the daemon must query the downstream agent via `ucentral.v1.device.<own-serial>.status.get` on boot. It must restore the `activeStateTx` lock if the operation is still running, and release the lock if a terminal state is observed. The uCentral client is only the requester for this subject; it must not subscribe to or respond on `status.get`.
+7.  **Duplicate Rejection:** Any state-changing commands received while the background upgrade is active are rejected immediately as busy.
 
 ### 3.6 Timeout Specifications
 To prevent hanging operations, the Request Manager enforces strict timeout thresholds:
@@ -326,7 +331,7 @@ Queue sizes are configurable via daemon configuration file parameters.
 | Queue Name | Purpose / Type | Capacity | Overflow / Failure Policy |
 | :--- | :--- | :--- | :--- |
 | **Command Dispatch Buffer** | Short-lived NATS handoff buffer (Not durable). | Default: 100 messages | If full or NATS is disconnected, fails fast and rejects the Cloud request with `local_service_unavailable` (JSON-RPC code -32603, application_code 3). |
-| **Command Result Priority Queue** | Handles NATS replies for config/action processing. | Default: 50 messages | High priority. Never dropped. If capacity is threatened, telemetry forwarding is throttled. If full, triggers critical metrics alert and fails fast. |
+| **Command Result Priority Queue** | Handles NATS replies for config/action processing. | Default: 50 messages | High priority and bounded. Because state-changing commands are serialized per device, this queue is not expected to fill during normal operation. Command results must not be silently dropped. If overflow occurs, it is treated as an exceptional local result-delivery failure: the client records an overflow metric, logs the `rpc_id`, command type, and subject, and completes the matching Cloud transaction with an indeterminate local delivery error. The error must state that the downstream result could not be processed locally and must not claim that the downstream operation itself failed. If the result cannot be correlated to an active transaction, it may be discarded after logging and metric emission. |
 | **State Coalescer** | Keeps only the latest state report (last-write-wins). | 1 Slot per Serial | Overwrites previous un-flushed stats with newer state reports. Flushes every 10 seconds. |
 | **Telemetry/Log Ring Buffer** | Bounded FIFO queue for logs and events. | Default: 500 messages | Bounded FIFO. Drops oldest low-priority events on overflow (FIFO drop). Excludes high-severity audit logs. |
 
@@ -370,52 +375,20 @@ Exposes a priority-aware message dispatch queue writing to the WebSocket connect
 To keep the daemon resource-efficient and secure, it does **not** expose local HTTP ports (such as Prometheus or health endpoints) on the router VM. Monitoring and health checks are integrated directly into NATS.
 
 ### 6.1 NATS Health Reporting
-The embedded NATS client periodically publishes its health metrics directly to the NATS bus on:
+The downstream device or local device agent, such as the VyOS NATS agent, periodically publishes device health metrics directly to the NATS bus on:
 `ucentral.v1.device.<own-serial>.health`
 
-The payload matches the `HealthSnapshot` envelope defined by the NATS agent library:
+The uCentral client subscribes to this subject, validates and rate-limits the device health payload, and forwards accepted health updates to the Cloud through the internal WebSocket outbound scheduler. The payload is a device-health payload produced by the downstream device/local agent. It is distinct from the uCentral client's own NATS connection health snapshot. The exact schema is owned by the downstream device-health contract.
 
-```json
-{
-  "state": "connected",
-  "connected_url": "nats://127.0.0.1:4222",
-  "jetstream_ready": true,
-  "kv_ready": true,
-  "registered_subscriptions": 4,
-  "active_subscriptions": 4,
-  "last_error": ""
-}
-```
+### 6.2 Device Status Query
 
-### 6.2 NATS Status Endpoint (Liveness vs Readiness)
-The uCentral client listens for status queries on the request-reply topic:
+The `status.get` request-reply subject is owned by the downstream device/local agent:
+
 `ucentral.v1.device.<own-serial>.status.get`
 
-Upon receiving a request, the client replies with its status snapshot. Standard watchdog scripts or VM hypervisors can query this subject using standard NATS request tools to determine the liveness and readiness of the daemon:
+The uCentral client sends requests to this subject when it needs current device/platform status, including upgrade state, apply progress, rollback state, firmware version, and operational readiness. This subject is also used during startup crash recovery to determine whether a firmware upgrade is already active downstream.
 
-```json
-{
-  "status": "healthy",
-  "liveness": "ok",
-  "readiness": "ready",
-  "cloud": "connected",
-  "nats": "connected",
-  "uptime": 345600,
-  "version": "1.0.0",
-  "metrics": {
-    "queue_depth": 0,
-    "dropped_messages": 0,
-    "dropped_by_reason": {
-      "rate_limited": 0,
-      "queue_full": 0,
-      "cloud_disconnected": 0
-    },
-    "last_error": ""
-  }
-}
-```
-*   **Liveness (`liveness`):** `ok` as long as the uCentral Client daemon process is running and executing its main loop.
-*   **Readiness (`readiness`):** `ready` if NATS and Cloud are both connected; `degraded` if NATS is down or Cloud is disconnected. Helper tools use this to route traffic.
+The uCentral client must not subscribe to or respond on this subject. Its own daemon liveness/readiness, Cloud connectivity, NATS connectivity, queue depths, uptime, and local metrics are internal daemon state and are reported to the Cloud through the WebSocket control path, not through the device-owned NATS status subject.
 
 ---
 
@@ -446,6 +419,7 @@ The client maps internal failures to standard JSON-RPC 2.0 error codes:
 | **-32603 (data.application_code = 4)** | Validation Failed | Schema check failed at the uCentral client validator. |
 | **-32603 (data.application_code = 5)** | Rollback Completed | Configuration failed but rollback to previous UUID succeeded. |
 | **-32603 (data.application_code = 6)** | Rollback Failed | Configuration failed and rollback to previous UUID also failed. |
+| **-32603 (data.application_code = 7)** | Result Delivery Failed | Downstream operation outcome is indeterminate because the uCentral client could not process or deliver the result locally. |
 
 ### 8.2 Result Enums
 All result structures return one of the following standard values:

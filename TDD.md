@@ -13,7 +13,7 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Assert:* Marshalling to JSON must produce exact keys for each envelope type:
         *   `ActionCommand`: `version`, `rpc_id`, `target`, `command_type`, `action`, `payload`, `timestamp`.
         *   `ConfigureCommand`: `version`, `rpc_id`, `target`, `uuid`, `kv_key`, `kv_revision`, `timestamp`. Must assert that the raw `payload` is absent.
-        *   `ResultEnvelope`: `version`, `rpc_id`, `target`, `status`, `data`.
+        *   `ResultEnvelope`: `version`, `rpc_id`, `target`, `command_type`, `result`, `message`, `timestamp`. Additionally verify that `operation_id` is serialized for upgrade operations, `uuid` is serialized for configure operations, and omitted fields are absent from the JSON.
 *   **TC-CON-002 (Error Mappings):**
     *   *Requirement Mapping:* `REQ-021` (JSON-RPC Error Mapping)
     *   *Setup:* Pass internal error enum `ErrServiceUnavailable` to JSON-RPC error encoder helper.

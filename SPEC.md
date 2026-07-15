@@ -292,7 +292,7 @@ olg-ucentral-client/
     ```
 
 **Command Result Queue Lifecycle & Ownership Rules:**
-*   **Ownership:** The queue is populated (`Push`) by the asynchronous NATS Subscriber goroutines. It is consumed (`Pop`) exclusively by the Main WebSocket Writer goroutine (pulling it into the Priority 0 Outbound Scheduler).
+*   **Ownership:** The queue is populated (`Push`) by the asynchronous NATS Subscriber goroutines. It is consumed (`Pop`) exclusively by a dedicated Request Manager processing loop. The Request Manager must correlate the NATS result, transition the transaction state, release any held locks, cache the final response, and then push the finalized JSON-RPC response payload into the Priority 0 Outbound Scheduler.
 * **Overflow Policy (Exceptional Local Delivery Failure):** The command result queue is bounded and non-blocking to protect core NATS subscriber loops. Because state-changing commands are serialized, overflow is not expected during normal operation. If a NATS subscriber attempts to push to a full queue, `Push()` returns `ErrQueueFull`. The subscriber must not silently drop a correlated command result. It must log the overflow with the `rpc_id`, command type, and subject, increment a `command_result_overflow` metric, and notify the Request Manager so the matching Cloud transaction is completed with an indeterminate local delivery error. This error means the uCentral client could not process the downstream result locally; it must not claim that the downstream operation itself failed. If the result cannot be correlated to an active transaction, it may be discarded after logging and metric emission.
 *   **Telemetry Throttling (Activation & Release):** The Main loop polls `Utilization()` before processing telemetry.
     *   **Activation:** If `Utilization() >= 0.90` (90% capacity, e.g., 45/50 items), the daemon engages telemetry throttling, pausing all reads from the `TelemetryRingBuffer`.
@@ -347,7 +347,14 @@ olg-ucentral-client/
 
     func NewRequestManager() *DefaultRequestManager
     func (m *DefaultRequestManager) CreateTransaction(rpcID RPCID, timeout time.Duration, isStateChanging bool) (*Transaction, error)
-    ```
+    func (m *DefaultRequestManager) MarkPending(rpcID RPCID) error
+    func (m *DefaultRequestManager) MarkInFlight(rpcID RPCID) error
+    // Terminal methods must atomically insert into the transaction cache,
+    // cleanup the active transaction, and release the activeStateTx lock if held.
+    func (m *DefaultRequestManager) Complete(rpcID RPCID, response []byte) error
+    func (m *DefaultRequestManager) Fail(rpcID RPCID, errResponse []byte) error
+    func (m *DefaultRequestManager) Timeout(rpcID RPCID) error
+    func (m *DefaultRequestManager) Cancel(rpcID RPCID) error
 
 #### PR 3.2: Duplicate Attachment & Cache TTL
 *   **Target File:** `pkg/reqmgr/cache.go`, `pkg/reqmgr/manager.go` (extensions)

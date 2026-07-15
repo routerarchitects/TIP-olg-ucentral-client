@@ -42,7 +42,7 @@ This document details the test plans, test cases, and verification strategies fo
         4. A previously completed valid `id`.
     *   *Assert:* 
         * For (1), the client must successfully parse, track, and return the exact matching original format in the response.
-        * For (2), the client must execute the command but send no WebSocket response.
+        * For (2), the client must execute the command but send no WebSocket response, internally generating a unique correlation ID to safely acquire locks and prevent transaction collisions.
         * For (3), the client must reject the request with `-32600` or `-32700` and return `id: null`.
         * For (4), the client must not re-execute the command and must replay the cached JSON-RPC response.
 

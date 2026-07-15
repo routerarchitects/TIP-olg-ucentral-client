@@ -1,6 +1,6 @@
 # High-Level Design: uCentral Client with NATS Integration (Language-Agnostic)
 
-This document outlines the High-Level Design (HLD) for the **uCentral Client** (`olg-ucentral-client`). This client acts as a gateway/bridge between a cloud-based management platform (via the uCentral WebSocket/JSON-RPC protocol) and local device services (such as the VyOS NATS Client) using a local **NATS message bus**.
+This document outlines the High-Level Design (HLD) for the **uCentral Client** (`TIP-olg-ucentral-client`). This client acts as a gateway/bridge between a cloud-based management platform (via the uCentral WebSocket/JSON-RPC protocol) and local device services (such as the VyOS NATS Client) using a local **NATS message bus**.
 
 ---
 
@@ -365,7 +365,7 @@ Exposes a priority-aware message dispatch queue writing to the WebSocket connect
 *   **TLS Requirements:** TLS v1.3 is enforced on the NATS connection with CA certificates validation.
 *   **Authorization & Access Control (ACLs):** The client runs under restricted NATS credentials enforcing target isolation:
     *   *Publish:* `ucentral.v1.device.<own-serial>.config.apply`, `ucentral.v1.device.<own-serial>.action.*`, `ucentral.v1.device.<own-serial>.capabilities.get`, `ucentral.v1.device.<own-serial>.status.get`
-    *   *Subscribe:* `ucentral.v1.device.<own-serial>.state`, `ucentral.v1.device.<own-serial>.telemetry`, `ucentral.v1.device.<own-serial>.log`, `ucentral.v1.device.<own-serial>.health`
+    *   *Subscribe:* `ucentral.v1.device.<own-serial>.state`, `ucentral.v1.device.<own-serial>.telemetry`, `ucentral.v1.device.<own-serial>.log`, `ucentral.v1.device.<own-serial>.health`, `_INBOX.>`
     
     *Security Constraint:* The client is explicitly restricted from accessing wildcard subjects `ucentral.v1.device.*` to prevent accidental cross-device actions.
 

@@ -1,6 +1,6 @@
 # Technical Specification: uCentral Client Daemon
 
-This document details the code layout, interface signatures, data structures, and protocol contracts for the Go-based uCentral Client daemon (`olg-ucentral-client`).
+This document details the code layout, interface signatures, data structures, and protocol contracts for the Go-based uCentral Client daemon (`TIP-olg-ucentral-client`).
 
 ---
 
@@ -9,7 +9,7 @@ This document details the code layout, interface signatures, data structures, an
 The project follows standard Go layout guidelines:
 
 ```text
-olg-ucentral-client/
+TIP-olg-ucentral-client/
 ├── go.mod
 ├── go.sum
 ├── HIGH_LEVEL_DESIGN.md
@@ -401,7 +401,10 @@ olg-ucentral-client/
     ```go
     package reqmgr
 
-    import "sync"
+    import (
+    	"encoding/json"
+    	"sync"
+    )
 
     type CacheEntry struct {
     	Payload   []byte
@@ -453,7 +456,7 @@ olg-ucentral-client/
     import (
     	"context"
     	"github.com/gorilla/websocket"
-    	"github.com/routerarchitects/olg-ucentral-client/pkg/queues"
+    	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/queues"
     )
 
     type WSClient struct {

@@ -1,4 +1,4 @@
-# uCentral Client Daemon (`olg-ucentral-client`)
+# uCentral Client Daemon (`TIP-olg-ucentral-client`)
 
 The uCentral client is a lightweight, Go-based gateway daemon that bridges a cloud management platform (via the uCentral WebSocket/JSON-RPC 2.0 protocol) with local device microservices using a local **NATS message bus**.
 

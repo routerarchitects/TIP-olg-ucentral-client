@@ -1,6 +1,6 @@
 # Test-Driven Development (TDD) Specification
 
-This document details the test plans, test cases, and verification strategies for each phase of development of the uCentral Client (`olg-ucentral-client`).
+This document details the test plans, test cases, and verification strategies for each phase of development of the uCentral Client (`TIP-olg-ucentral-client`).
 
 ---
 

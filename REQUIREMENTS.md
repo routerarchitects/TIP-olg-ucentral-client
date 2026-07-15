@@ -1,6 +1,6 @@
 # Requirements Specification: uCentral Client Daemon
 
-This document lists the strict, numbered requirements for the Go-based uCentral Client daemon (`olg-ucentral-client`). All architectural designs, specifications, code implementations, and test suites must map directly back to these requirements.
+This document lists the strict, numbered requirements for the Go-based uCentral Client daemon (`TIP-olg-ucentral-client`). All architectural designs, specifications, code implementations, and test suites must map directly back to these requirements.
 
 ---
 
@@ -71,7 +71,7 @@ This document lists the strict, numbered requirements for the Go-based uCentral 
 
 ## 5. Security & Observability
 
-*   **REQ-016 (NATS Security & Target Isolation):** The daemon must connect using NKeys or JWT credentials and restrict its publish/subscribe permissions to subjects containing its `<own-serial>` only.
+*   **REQ-016 (NATS Security & Target Isolation):** The daemon must connect using NKeys or JWT credentials and restrict its publish/subscribe permissions to subjects containing its `<own-serial>` only, and must explicitly include subscribe permissions for reply-inboxes (`_INBOX.>`) to support NATS request-reply flows.
 *   **REQ-017 (Local Management Signal Security):** The local capability refresh trigger must be exposed as a Unix domain socket. Access must be restricted to root-only file permissions, and must be rate-limited and audit logged.
 *   **REQ-018 (Audit Logging & Loop Prevention):** Every sensitive action (`reboot`, `factory`, `upgrade`) must generate a high-severity audit log forwarded to the Cloud. If forwarding fails, the client must increment `audit_delivery_failure` but must not generate another log, preventing recursive logging loops.
 *   **REQ-019 (NATS-Native Health Reporting):** To maintain security and efficiency, the client must not expose HTTP ports. It must subscribe to device health snapshots on `ucentral.v1.device.<own-serial>.health` for Cloud forwarding. The uCentral client must not serve daemon liveness/readiness as a NATS responder on `ucentral.v1.device.<own-serial>.status.get`; that subject is reserved for downstream device/local-agent status queries. The daemon's own liveness, readiness, Cloud connectivity, NATS connectivity, queue depth, uptime, and local metrics must be tracked internally and reported to the Cloud through the WebSocket control path.

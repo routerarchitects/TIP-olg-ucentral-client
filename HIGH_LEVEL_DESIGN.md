@@ -195,7 +195,7 @@ To protect device integrity, the client divides requests into two execution clas
     *   `configure`: **5 minutes**
     *   `reboot`: **10 minutes**
     *   `factory`: **30 minutes**
-    *   `upgrade` (Firmware): **60 minutes** (or until terminal status is reached). Firmware upgrades are processed as **asynchronous actions**—the client returns an immediate "started" status and forwards progress updates to the cloud.
+    *   `upgrade` (Firmware): **60 minutes from completion**. Firmware upgrades are processed as **asynchronous actions**—the client returns an immediate "started" status and forwards progress updates to the cloud.
 
 ### 3.4 Behavior Across Reconnects
 *   **Cloud Disconnections:** If the WAN connection to the Cloud drops while a transaction is `InFlight`, the client **continues running the operation downstream**. It does not abort the configuration or reboot.
@@ -209,7 +209,7 @@ Firmware upgrades take minutes to complete and cannot block the Request Manager 
 3.  **Background Tracking & Authoritative Status:** The upgrade continues executing asynchronously. The downstream agent must expose structured, authoritative upgrade status. The uCentral client must use this structured status to determine completion; **system logs must not be used as a completion signal**.
 4.  **State Lock Lifetime:** The state-changing lock (`activeStateTx`) remains held until a defined terminal upgrade state (e.g., success, failed) is received from the downstream agent.
 5.  **Reconnection Resilience:** Upon WebSocket reconnection, the daemon resumes reporting the current upgrade state to the Cloud using the persistent `operation_id`.
-6.  **Crash Recovery (Startup Query):** To prevent losing the in-memory state lock if the daemon process crashes, the daemon must query the downstream agent via `ucentral.v1.device.<own-serial>.status.get` on boot. It must restore the `activeStateTx` lock if the operation is still running, and release the lock if a terminal state is observed. The uCentral client is only the requester for this subject; it must not subscribe to or respond on `status.get`.
+6.  **Crash Recovery (Startup Query):** To prevent losing the in-memory state lock if the daemon process crashes, the daemon must explicitly load the active operation from the `OperationStore` on boot to recover the Cloud `rpc_id`. It must then query the downstream agent via `ucentral.v1.device.<own-serial>.status.get`, correlate the response using the `operation_id`, restore the `activeStateTx` lock if the operation is still running, and release the lock if a terminal state is observed. The uCentral client is only the requester for this subject; it must not subscribe to or respond on `status.get`.
 7.  **Duplicate Rejection:** Any state-changing commands received while the background upgrade is active are rejected immediately as busy.
 
 ### 3.6 Timeout Specifications
@@ -280,30 +280,36 @@ The client boots and connects to the Cloud and NATS **concurrently and independe
 ```mermaid
 stateDiagram-v2
     [*] --> Offline
-    Offline --> ConnectingBoth : Start Daemon
+    Offline --> SystemConnecting : Start Daemon
     
-    state ConnectingBoth {
-        [*] --> CloudConnecting
-        [*] --> NATSConnecting
+    state SystemConnecting {
+        [*] --> CloudState
+        [*] --> NATSState
         
-        CloudConnecting --> CloudConnected : Cloud Handshake Success
-        CloudConnecting --> CloudConnecting : Cloud Fail (Retry Backoff)
+        state CloudState {
+            [*] --> CloudConnecting
+            CloudConnecting --> CloudConnected : Handshake Success
+            CloudConnected --> CloudConnecting : Connection Lost
+        }
         
-        NATSConnecting --> NATSConnected : NATS Connected
-        NATSConnecting --> NATSConnecting : NATS Fail (Retry Backoff)
+        state NATSState {
+            [*] --> NATSConnecting
+            NATSConnecting --> NATSConnected : Connected
+            NATSConnected --> NATSConnecting : Connection Lost
+        }
     }
     
-    ConnectingBoth --> Operational : CloudConnected AND NATSConnected
-    ConnectingBoth --> Degraded : CloudConnected AND NATSConnecting
-    
-    Operational --> Degraded : NATS Disconnected (Cloud remains up)
-    Operational --> ConnectingBoth : Cloud Disconnected (No restart required)
-    Degraded --> Operational : NATS Reconnected
-    Degraded --> ConnectingBoth : Cloud Disconnected (No restart required)
+    state GlobalState {
+        SystemConnecting --> Offline : Cloud != Connected AND NATS != Connected
+        SystemConnecting --> Operational : CloudConnected + NATSConnected + NegotiationReady
+        SystemConnecting --> CloudDegraded : CloudConnecting + NATSConnected
+        SystemConnecting --> NATSDegraded : CloudConnected + NATSConnecting
+        SystemConnecting --> ProtocolFailure : CloudVersionMismatch
+    }
 ```
 
-*   **Asynchronous Reconnection:** If the Cloud connection drops, the client enters the `ConnectingBoth` (CloudConnecting) state, attempting to reconnect in the background using backoff. **No daemon restart is required** for intermittent WAN outages.
-*   **Independence:** The client attempts to establish a Cloud connection even if NATS is down or unconfigured. In this "NATS Down" state, the client reports its status as `Degraded` to the Cloud.
+*   **Asynchronous Reconnection:** If the Cloud connection drops, the client enters the `CloudDegraded` global state, attempting to reconnect to the Cloud in the background using backoff while NATS continues to function. **No daemon restart is required** for intermittent WAN outages.
+*   **Independence:** The client attempts to establish a Cloud connection even if NATS is down or unconfigured. In this "NATS Down" state, the client reports its status as `NATSDegraded` to the Cloud.
 *   **Reconnect Backoff (Cloud):** 
     *   *Initial Delay:* **2 seconds**
     *   *Max Delay:* **300 seconds (5 minutes)**

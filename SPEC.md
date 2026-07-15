@@ -118,6 +118,7 @@ olg-ucentral-client/
     type ActionCommand struct {
     	Version     string          `json:"version"`
     	RPCID       json.RawMessage `json:"rpc_id"`
+    	OperationID string          `json:"operation_id,omitempty"`
     	Target      string          `json:"target"`
     	CommandType string          `json:"command_type"`
     	Action      string          `json:"action"`
@@ -130,11 +131,13 @@ olg-ucentral-client/
     	RPCID       json.RawMessage `json:"rpc_id"`
     	Target      string          `json:"target"`
     	CommandType string          `json:"command_type"`
+    	OperationID string          `json:"operation_id,omitempty"` // Mandatory for upgrade results
     	UUID        string          `json:"uuid,omitempty"` // Omitted for Action
     	Result      ResultType      `json:"result"`
     	Message     string          `json:"message"`
     	Timestamp   string          `json:"timestamp"`
     }
+    // Note: For upgrade results, operation_id is mandatory. For non-upgrade commands, operation_id may be omitted.
     ```
 
 *   **Enums (`pkg/contracts/enums.go`):**
@@ -158,11 +161,36 @@ olg-ucentral-client/
     type ConnectionState string
 
     const (
-    	StateOffline        ConnectionState = "offline"
-    	StateConnectingBoth ConnectionState = "connecting_both"
-    	StateOperational    ConnectionState = "operational"
-    	StateDegraded       ConnectionState = "degraded"
+    	StateOffline         ConnectionState = "offline"
+    	StateOperational     ConnectionState = "operational"
+    	StateCloudDegraded   ConnectionState = "cloud_degraded"
+    	StateNATSDegraded    ConnectionState = "nats_degraded"
+    	StateProtocolFailure ConnectionState = "protocol_failure"
     )
+
+    type LinkState string
+
+    const (
+    	LinkOffline    LinkState = "offline"
+    	LinkConnecting LinkState = "connecting"
+    	LinkConnected  LinkState = "connected"
+    )
+
+    type NegotiationState string
+
+    const (
+    	NegotiationNotStarted NegotiationState = "not_started"
+    	NegotiationInProgress NegotiationState = "in_progress"
+    	NegotiationReady      NegotiationState = "ready"
+    	NegotiationFailed     NegotiationState = "failed"
+    )
+
+    type ConnectionStatus struct {
+    	Cloud       LinkState
+    	NATS        LinkState
+    	Negotiation NegotiationState
+    	Global      ConnectionState
+    }
     ```
 
 ---
@@ -196,16 +224,19 @@ olg-ucentral-client/
 
     // OutboundScheduler defines the priority outbound queue interface.
     // - Pushes append the message to the corresponding priority queue.
-    // - If a queue exceeds its capacity, the push blocks.
-    //   Exception 1: Priority 0 messages bypass lower-priority backlog, but do not use an unbounded queue. They are placed in a dedicated bounded emergency queue. If that queue reaches its hard limit, Push() returns an overflow error so the caller can treat the WebSocket writer path as unhealthy and trigger recovery if needed, fail affected transactions, and record an overflow metric.
-    //   Exception 2: Priority 1 (Audits/Crash logs) must be non-blocking to prevent deadlocking core NATS handlers. If Priority 1 reaches capacity, Push() returns a fast error immediately.
+    // - ALL PUSHES ARE STRICTLY NON-BLOCKING. If any queue (Priority 0, 1, 2, or 3) reaches its maximum capacity, Push() must immediately return ErrQueueFull. 
+    // - Note on Ownership: The scheduler itself does not implement LIFO overwriting or FIFO dropping policies. Those rate-limiting policies are exclusively owned and executed by the upstream StateCoalescer and TelemetryRingBuffer before data is ever pushed to the scheduler.
+    // - For Priority 0, if Push() returns ErrQueueFull, the caller must treat the WebSocket writer path as unhealthy, trigger recovery if needed, fail affected transactions, and record an overflow metric.
+    // - For Priority 1, if Push() returns ErrQueueFull, the caller must return immediately, increment audit_delivery_failure, and must not generate another audit message.
+    // - For Priority 2, if Push() returns ErrQueueFull, the caller must do nothing; the state remains in the upstream StateCoalescer for the next flush.
+    // - For Priority 3, if Push() returns ErrQueueFull, the caller must drop the payload and record a dropped_by_reason.scheduler_full metric.
     // - Next() blocks until a message is available or the context is canceled.
     //   Highest priority messages (0) are selected first, but to prevent starvation of lower priorities,
     //   a strict yield mechanism is enforced: after 10 consecutive Priority 0 messages are yielded, 
     //   the scheduler must yield at least one available message from the next highest populated queue (1, 2, or 3).
-    // - Context cancellation drives scheduler shutdown and unblocks waiting Push/Next calls.
+    // - Context cancellation drives scheduler shutdown and unblocks waiting Next calls.
     type OutboundScheduler interface {
-    	Push(ctx context.Context, msg OutboundMessage) error
+    	Push(msg OutboundMessage) error
     	Next(ctx context.Context) (OutboundMessage, error)
     }
 
@@ -226,7 +257,7 @@ olg-ucentral-client/
     	return s
     }
 
-    func (s *PriorityScheduler) Push(ctx context.Context, msg OutboundMessage) error
+    func (s *PriorityScheduler) Push(msg OutboundMessage) error
     func (s *PriorityScheduler) Next(ctx context.Context) (OutboundMessage, error)
     ```
 
@@ -255,23 +286,31 @@ olg-ucentral-client/
     func (b *TelemetryRingBuffer) Push(payload []byte) (dropped bool)
     func (b *TelemetryRingBuffer) Pop() ([]byte, bool)
 
-    // StateCoalescer implements last-write-wins in-memory state storage
+    // StateCoalescer implements last-write-wins in-memory state storage with generation tracking
+    type StateSnapshot struct {
+    	Payload    []byte
+    	Generation uint64
+    }
+
     type StateCoalescer struct {
-    	mu         sync.Mutex
+    	mu          sync.Mutex
     	latestState []byte
+    	generation  uint64
+    	hasState    bool
     }
 
     func NewStateCoalescer() *StateCoalescer
     func (c *StateCoalescer) Update(payload []byte)
-    func (c *StateCoalescer) Flush() []byte
+    func (c *StateCoalescer) Peek() (StateSnapshot, bool)
+    func (c *StateCoalescer) Commit(generation uint64) bool
 
-    // NATSDispatchBuffer buffers commands headed for NATS. Rejects when full.
+    // NATSDispatchBuffer buffers commands headed for NATS. Rejects immediately when full.
     type NATSDispatchBuffer struct {
     	ch chan []byte
     }
 
     func NewNATSDispatchBuffer(capacity int) *NATSDispatchBuffer
-    func (d *NATSDispatchBuffer) Push(ctx context.Context, payload []byte) error
+    func (d *NATSDispatchBuffer) Push(payload []byte) error
     func (d *NATSDispatchBuffer) Pop(ctx context.Context) ([]byte, error)
 
     // ErrQueueFull is returned when a push fails due to the non-blocking capacity limit.
@@ -377,6 +416,28 @@ olg-ucentral-client/
     func NewTransactionCache() *TransactionCache
     func (c *TransactionCache) Set(rpcID RPCID, payload []byte, ttlSeconds int)
     func (c *TransactionCache) Get(rpcID RPCID) ([]byte, bool)
+
+    type PersistentOperation struct {
+    	OperationID string          `json:"operation_id"`
+    	RPCID       json.RawMessage `json:"rpc_id"`
+    	Target      string          `json:"target"`
+    	Action      string          `json:"action"`
+    	Stage       string          `json:"stage"`
+    	Status      string          `json:"status"`
+    	Active      bool            `json:"active"`
+    	CreatedAt   string          `json:"created_at"`
+    	UpdatedAt   string          `json:"updated_at"`
+    }
+
+    // OperationStore tracks long-running active operations (like firmware upgrades).
+    // Contract: Implementations must preserve active operation records across daemon process termination
+    // and host reboot. An in-memory-only implementation does not satisfy this interface contract.
+    type OperationStore interface {
+    	Save(ctx context.Context, operation *PersistentOperation) error
+    	Get(ctx context.Context, operationID string) (*PersistentOperation, error)
+    	GetActive(ctx context.Context) (*PersistentOperation, error)
+    	Delete(ctx context.Context, operationID string) error
+    }
     ```
 
 ---
@@ -434,9 +495,23 @@ olg-ucentral-client/
     // SECURITY CONTRACT: This constructor MUST enforce tls.Config{MinVersion: tls.VersionTLS13}.
     // It must return a fatal error if CAFile is empty, or if any Server URL is insecure.
     func NewNATSClient(cfg NATSConfig) (*NATSClient, error)
+
+    // Asynchronous State-Changing Commands (uses NATS reply-to inbox and CommandResultQueue)
+    func (n *NATSClient) PublishConfigTrigger(ctx context.Context, cmd *ConfigureCommand, replyTo string) error
+    func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *ActionCommand, replyTo string) error
+    func (n *NATSClient) SubscribeCommandReplies(inbox string, handler func(msg *nats.Msg)) (*nats.Subscription, error)
+
+    // Synchronous Read-Only Queries (blocks waiting for ResultEnvelope)
+    func (n *NATSClient) QueryCapabilities(ctx context.Context, serial string, rpcID RPCID) (*ResultEnvelope, error)
+    func (n *NATSClient) QueryDeviceStatus(ctx context.Context, serial string, rpcID RPCID) (*DeviceStatus, error)
+
+    // Streaming & Data Subscriptions
+    func (n *NATSClient) SubscribeTelemetry(serial string, handler func(msg *nats.Msg)) (*nats.Subscription, error)
+    func (n *NATSClient) SubscribeLogs(serial string, handler func(msg *nats.Msg)) (*nats.Subscription, error)
+    func (n *NATSClient) SubscribeHealth(serial string, handler func(msg *nats.Msg)) (*nats.Subscription, error)
+    func (n *NATSClient) SubscribeState(serial string, handler func(msg *nats.Msg)) (*nats.Subscription, error)
     func (n *NATSClient) WriteDesiredConfig(ctx context.Context, serial string, config []byte) (uint64, error)
-    func (n *NATSClient) PublishConfigTrigger(ctx context.Context, serial string, uuid string, kvKey string, revision uint64) error
-    func (n *NATSClient) GetDesiredConfigMetadata(ctx context.Context, serial string) (uint64, string, error) // Returns (revision, uuid, error)
+    func (n *NATSClient) GetDesiredConfigMetadata(ctx context.Context, serial string) (uint64, string, error)
     
     type DeviceStatus struct {
     	Version     string          `json:"version"`
@@ -448,10 +523,9 @@ olg-ucentral-client/
     	Stage     string          `json:"stage,omitempty"`
     	Status    string          `json:"status"`
     	Message   string          `json:"message,omitempty"`
-    	Timestamp string          `json:"timestamp"`
+    	Timestamp   string          `json:"timestamp"`
     }
-    
-    func (n *NATSClient) QueryDeviceStatus(ctx context.Context, serial string) (*DeviceStatus, error)
+    // Note: If Active is true, OperationID must be non-empty. A response with Active=true and an empty OperationID is invalid and must trigger the indeterminate recovery behavior defined by REQ-011.
     ```
 
 The uCentral client must not register a NATS responder for `ucentral.v1.device.<own-serial>.status.get`. This subject is queried by the uCentral client and served by the downstream device/local agent.
@@ -476,9 +550,55 @@ The uCentral client must not register a NATS responder for `ucentral.v1.device.<
 
 #### PR 5.1: Main Loop & Configuration
 *   **Target File:** `cmd/ucentral-client/main.go`
+*   **Configuration Contract:**
+    ```go
+    type Config struct {
+        Serial                    string      `json:"serial"`
+        CompressionThresholdBytes int         `json:"compression_threshold_bytes"`
+        Cloud                     CloudConfig `json:"cloud"`
+        NATS                      NATSConfig  `json:"nats"`
+        Queues                    QueueConfig `json:"queues"`
+    }
+
+    type CloudConfig struct {
+        URL                   string `json:"url"`
+        ConnectTimeoutSeconds int    `json:"connect_timeout_seconds"`
+    }
+
+    type NATSConfig struct {
+        Servers         []string `json:"servers"`
+        CredentialsFile string   `json:"credentials_file"`
+        CAFile          string   `json:"ca_file"`
+    }
+
+    type QueueConfig struct {
+        WSWriterCapacity      int `json:"ws_writer_capacity"`
+        EmergencyCapacity     int `json:"emergency_capacity"`
+        NATSPublishCapacity   int `json:"nats_publish_capacity"`
+        CommandResultCapacity int `json:"command_result_capacity"`
+        TelemetryCapacity     int `json:"telemetry_capacity"`
+    }
+    ```
+    *   **Validation Rules & Defaults:**
+        *   `serial`: Required, non-empty
+        *   `cloud.url`: Required, valid `wss://` URL
+        *   `cloud.connect_timeout_seconds`: Default 10; must be > 0
+        *   `nats.servers`: At least one entry; each must use `tls://`
+        *   `nats.credentials_file`: Required and readable file path
+        *   `nats.ca_file`: Required and readable file path
+        *   `compression_threshold_bytes`: Default 2048; must be > 0
+        *   `queues.ws_writer_capacity`: Default 500; must be > 0
+        *   `queues.emergency_capacity`: Default 100; must be > 0
+        *   `queues.nats_publish_capacity`: Default 100; must be > 0
+        *   `queues.command_result_capacity`: Default 50; must be > 0
+        *   `queues.telemetry_capacity`: Default 500; must be > 0
+    *   **Startup Behavior:** Configuration parsing or validation failure is fatal. The daemon must log the specific invalid field, avoid starting any Cloud or NATS connection loops, and exit immediately with a non-zero status.
+
 *   **Initialization & Signal Handling:**
-    *   Loads JSON configuration.
+    *   Loads and strictly validates JSON configuration.
     *   Instantiates Queues, Request Manager, WebSocket client, NATS wrapper.
+        * `NewPriorityScheduler(queues.ws_writer_capacity, queues.emergency_capacity)`
+        * `NewTelemetryRingBuffer(queues.telemetry_capacity)`
     *   Launches parallel reconnection threads.
     *   Listens for `SIGINT` / `SIGTERM` to perform graceful resource teardowns.
 

@@ -43,8 +43,10 @@ The uCentral client is a lightweight, Go-based gateway daemon that bridges a clo
   },
   "queues": {
     "ws_writer_capacity": 500,
+    "emergency_capacity": 100,
     "nats_publish_capacity": 100,
-    "command_result_capacity": 50
+    "command_result_capacity": 50,
+    "telemetry_capacity": 500
   }
 }
 ```

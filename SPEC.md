@@ -333,7 +333,17 @@ TIP-olg-ucentral-client/
 
 **Command Result Queue Lifecycle & Ownership Rules:**
 *   **Ownership:** The queue is populated (`Push`) by the asynchronous NATS Subscriber goroutines. It is consumed (`Pop`) exclusively by a dedicated Request Manager processing loop. The Request Manager must correlate the NATS result, transition the transaction state, release any held locks, cache the final response, and then push the finalized JSON-RPC response payload into the Priority 0 Outbound Scheduler.
-* **Overflow Policy (Exceptional Local Delivery Failure):** The command result queue is bounded and non-blocking to protect core NATS subscriber loops. Because state-changing commands are serialized, overflow is not expected during normal operation. If a NATS subscriber attempts to push to a full queue, `Push()` returns `ErrQueueFull`. The subscriber must not silently drop a correlated command result. It must log the overflow with the `correlation_id`, command type, and subject, increment a `command_result_overflow` metric, and notify the Request Manager so the matching Cloud transaction is completed with an indeterminate local delivery error. This error means the uCentral client could not process the downstream result locally; it must not claim that the downstream operation itself failed. If the result cannot be correlated to an active transaction, it may be discarded after logging and metric emission.
+* **Overflow Policy (Exceptional Local Delivery Failure):** Before attempting to enqueue a command result, the NATS subscriber must decode the existing `ResultEnvelope` sufficiently to obtain its `correlation_id`, command type, and subject context. It then calls `CommandResultQueue.Push(payload)`.
+
+If `Push()` returns `ErrQueueFull`, the subscriber must not silently discard the correlated result or wait for the transaction timeout. Using the already-extracted `correlation_id`, it must:
+1. Record the `command_result_overflow` metric.
+2. Log the correlation ID, command type, and NATS subject.
+3. Construct a JSON-RPC error response using `-32603` with `error.data.application_code = 7` (`Result Delivery Failed`).
+4. Call the existing `RequestManager.Fail(correlationID, errResponse)` method.
+
+`RequestManager.Fail()` performs the normal terminal transaction processing, including caching the Cloud response, removing the active transaction, releasing any state-changing lock held by that transaction, and submitting the finalized response to the Priority 0 WebSocket outbound scheduler.
+
+The error represents a local result-processing failure. It must not report that the downstream operation itself failed, because the downstream operation may already have completed. If the result payload cannot be decoded or its `correlation_id` does not match an active transaction, it may be discarded only after logging and metric emission.
 *   **Telemetry Throttling (Activation & Release):** The Main loop polls `Utilization()` before processing telemetry.
     *   **Activation:** If `Utilization() >= 0.90` (90% capacity, e.g., 45/50 items), the daemon engages telemetry throttling, pausing all reads from the `TelemetryRingBuffer`.
     *   **Release:** Throttling remains engaged until `Utilization() <= 0.50` (queue drops to 50% capacity), creating a hysteresis loop to prevent rapid toggling, at which point telemetry forwarding resumes.
@@ -391,6 +401,9 @@ TIP-olg-ucentral-client/
     func (m *DefaultRequestManager) MarkInFlight(correlationID string) error
     // Terminal methods must atomically insert into the transaction cache,
     // cleanup the active transaction, and release the activeStateTx lock if held.
+    // Complete, Fail, Timeout, and Cancel are concurrency-safe and may be invoked
+    // by the dedicated result-processing loop or by a NATS subscriber when enqueueing
+    // a correlated result fails.
     func (m *DefaultRequestManager) Complete(correlationID string, response []byte) error
     func (m *DefaultRequestManager) Fail(correlationID string, errResponse []byte) error
     func (m *DefaultRequestManager) Timeout(correlationID string) error

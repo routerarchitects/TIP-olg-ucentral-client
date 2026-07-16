@@ -33,7 +33,8 @@ TIP-olg-ucentral-client/
     ├── reqmgr/                     # Request Manager & Cache
     │   ├── manager.go              # Request lifecycle coordinator
     │   ├── transaction.go          # Transaction state machine
-    │   └── cache.go                # TTL-based transaction cache
+    │   ├── cache.go                # TTL-based transaction cache
+    │   └── store.go                # Durable persistent operation store (e.g. SQLite/JSON)
     ├── websocket/                  # Cloud WebSocket connection loop
     │   ├── client.go               # WebSocket reader & writer
     │   └── handler.go              # JSON-RPC parser & dispatcher
@@ -306,6 +307,8 @@ TIP-olg-ucentral-client/
     func (c *StateCoalescer) Commit(generation uint64) bool
 
     // NATSDispatchBuffer buffers commands headed for NATS. Rejects immediately when full.
+    // The caller (e.g., Request Manager) MUST explicitly verify that NATS is connected 
+    // before calling Push(), returning local_service_unavailable if NATS is offline.
     type NATSDispatchBuffer struct {
     	ch chan []byte
     }
@@ -410,7 +413,7 @@ The error represents a local result-processing failure. It must not report that 
     func (m *DefaultRequestManager) Cancel(correlationID string) error
 
 #### PR 3.2: Duplicate Attachment & Cache TTL
-*   **Target File:** `pkg/reqmgr/cache.go`, `pkg/reqmgr/manager.go` (extensions)
+*   **Target File:** `pkg/reqmgr/cache.go`, `pkg/reqmgr/store.go`, `pkg/reqmgr/manager.go` (extensions)
 *   **Core Cache Structures:**
     ```go
     package reqmgr
@@ -543,7 +546,7 @@ The error represents a local result-processing failure. It must not report that 
     	Message   string          `json:"message,omitempty"`
     	Timestamp   string          `json:"timestamp"`
     }
-    // Note: If Active is true, OperationID must be non-empty. A response with Active=true and an empty OperationID is invalid and must trigger the indeterminate recovery behavior defined by REQ-011.
+    // Note: If a response relates to a specific upgrade operation, OperationID must be non-empty, even if it is a terminal state (Active=false). A response with Active=true and an empty OperationID is invalid and must trigger the indeterminate recovery behavior defined by REQ-011.
     ```
 
 The uCentral client must not register a NATS responder for `ucentral.v1.device.<own-serial>.status.get`. This subject is queried by the uCentral client and served by the downstream device/local agent.

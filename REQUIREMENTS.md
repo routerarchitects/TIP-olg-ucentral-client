@@ -8,12 +8,12 @@ This document lists the strict, numbered requirements for the Go-based uCentral 
 
 *   **REQ-001 (Concurrent Startup Loops):** The daemon must launch separate, independent, concurrent connection loops to NATS and the Cloud WebSocket at boot. A failure or delay in NATS connection must not block the Cloud connection, and vice versa.
 *   **REQ-002 (Decoupled Connection State Machine):** The daemon must manage the Cloud and NATS connection lifecycles entirely independently. Their individual connection states (`Offline` $\rightarrow$ `Connecting` $\rightarrow$ `Connected`) must be evaluated continuously to form a composite Global State:
-    *   `ProtocolNegotiating`: Cloud is `Connected`, NATS is `Connected`, but protocol negotiation is `Pending`.
+    *   `ProtocolNegotiating`: Cloud is `Connected`, NATS is `Connected`, but protocol negotiation is `NotStarted` or `InProgress`.
     *   `Operational`: Cloud is `Connected`, NATS is `Connected`, and protocol negotiation is `Ready`.
     *   `CloudDegraded`: Cloud is `Offline`/`Connecting`, but NATS is `Connected`. (Daemon safely buffers telemetry locally; reconnects to Cloud with randomized exponential backoff of 2s-300s).
     *   `NATSDegraded`: NATS is `Offline`/`Connecting`, but Cloud is `Connected`. (Daemon fast-fails incoming Cloud commands with `local_service_unavailable`).
     *   `Offline`: Both Cloud and NATS are `Offline` or `Connecting`.
-    *   `ProtocolFailure`: Cloud is connected but protocol negotiation failed (Version Mismatch).
+    *   `ProtocolFailure`: Cloud is connected but protocol negotiation failed (Version Mismatch). This state takes strict precedence over `NATSDegraded`; if negotiation fails, the state is `ProtocolFailure` regardless of NATS connection status.
     *   No daemon restart is allowed for connection recovery on either network layer.
 *   **REQ-003 (Version Negotiation Fallback):** During connection handshake, if the Cloud and client share no common major protocol version (e.g., Cloud is v2-only, client is v1-only), the client must fall back to the `ProtocolFailure` global state. In this state, it remains connected for health reporting only and rejects all other commands with `local_service_unavailable` (JSON-RPC code -32603, application_code 3).
 

@@ -11,7 +11,7 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-028` (NATS Envelope Serialization Contract)
     *   *Setup:* Create instances of `ConfigureCommand`, `ActionCommand`, and `ResultEnvelope`.
     *   *Assert:* Marshalling to JSON must produce exact keys for each envelope type:
-        *   `ActionCommand`: `version`, `correlation_id`, `target`, `command_type`, `action`, `payload`, `timestamp`.
+        *   `ActionCommand`: `version`, `correlation_id`, `target`, `command_type`, `action`, `payload`, `timestamp`. Must conditionally verify that `operation_id` is serialized if the action is `upgrade`.
         *   `ConfigureCommand`: `version`, `correlation_id`, `target`, `uuid`, `kv_key`, `kv_revision`, `timestamp`. Must assert that the raw `payload` is absent.
         *   `ResultEnvelope`: `version`, `correlation_id`, `target`, `command_type`, `result`, `message`, `timestamp`. Additionally verify that `operation_id` is serialized for upgrade operations, `uuid` is serialized for configure operations, and omitted fields are absent from the JSON.
 *   **TC-CON-002 (Error Mappings):**
@@ -71,12 +71,12 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Assert:* `Push()` must return an explicit overflow error once the Priority 0 emergency limit is exhausted. Queue growth must remain bounded.
 *   **TC-SCH-006 (Non-Blocking Priority 2 and 3 Overflow Policies):**
     *   *Requirement Mapping:* `REQ-014`
-    *   *Setup:* Fill Priority 2 and Priority 3 queues to their capacity. Have the upstream producer goroutines attempt to `Push` popped state and telemetry payloads.
-    *   *Assert:* `Push()` must return `ErrQueueFull` immediately without blocking. For Priority 2, the test must verify the producer does nothing, leaving the state in the coalescer (no re-insertion). For Priority 3, the test must verify the payload is dropped and the `dropped_by_reason.scheduler_full` metric is incremented.
+    *   *Setup:* Fill Priority 2 and Priority 3 queues to their capacity. Have the upstream producer goroutines attempt to `Push` a peeked state and telemetry payloads.
+    *   *Assert:* `Push()` must return `ErrQueueFull` immediately without blocking. For Priority 2, the test must verify the producer does nothing, skipping `Commit()`, leaving the state safely in the upstream coalescer. For Priority 3, the test must verify the payload is dropped and the `dropped_by_reason.scheduler_full` metric is incremented.
 *   **TC-SCH-004 (Non-Blocking Priority 1 Overflow):**
     *   *Requirement Mapping:* `REQ-014`
-    *   *Setup:* Instantiate `PriorityScheduler`. Fill the Priority 1 queue to maximum capacity. Attempt to push one more Priority 1 message from a separate goroutine.
-    *   *Assert:* The `Push()` call must return immediately with a fast error and must **not** block the calling goroutine.
+    *   *Setup:* Instantiate `PriorityScheduler`. Fill the Priority 1 queue to maximum capacity. Attempt to push one more Priority 1 message (e.g. an audit log) from a separate goroutine.
+    *   *Assert:* The `Push()` call must return immediately with a fast error, must **not** block the calling goroutine, must increment the `audit_delivery_failure` metric, and must avoid generating a recursive audit log.
 
 ### PR 2.2: Buffers, Coalescers & Ring Buffer Tests
 *   **TC-BUF-001 (Telemetry Ring Buffer FIFO Drop):**
@@ -89,8 +89,8 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Assert:* `Peek()` must return State B and its generation. `Commit()` must return `false` because a newer update exists (State C). State C must remain available in the coalescer for the next `Peek()`.
 *   **TC-BUF-003 (NATS Dispatch Buffer Busy Rejection):**
     *   *Requirement Mapping:* `REQ-012` (Command Dispatch Buffer)
-    *   *Setup:* Instantiate `NATSDispatchBuffer` with capacity = 2. Push 2 messages. Push 3rd message.
-    *   *Assert:* The 3rd push must return a queue full error immediately (does not block).
+    *   *Setup:* (A) Instantiate `NATSDispatchBuffer` with capacity = 2. Push 2 messages, then push a 3rd. (B) Push a message when the underlying NATS connection state is offline.
+    *   *Assert:* In case (A), the 3rd push must return a queue full error immediately. In case (B), the caller must return a fast error (`local_service_unavailable`) without blocking or relying solely on buffer capacity.
 *   **TC-QUE-001 (Telemetry Throttling on Full Results Queue):**
     *   *Requirement Mapping:* `REQ-013` (Command Result Priority Queue)
     *   *Setup:* Fill the NATS command result queue (capacity 50) to 90% capacity. Send telemetry events.
@@ -136,7 +136,7 @@ This document details the test plans, test cases, and verification strategies fo
 *   **TC-UPG-002 (Upgrade Crash Recovery via Durable Store and Status Query):**
     *   *Requirement Mapping:* `REQ-011`
     *   *Setup:* Simulate a daemon crash/restart while an upgrade is active downstream. Populate `OperationStore` with an active operation record. Mock a downstream device/local-agent responder on `ucentral.v1.device.<own-serial>.status.get`.
-    *   *Assert:* On boot, the daemon must load the `OperationStore` to recover the Cloud JSON-RPC `id`. It must publish a request to `status.get`, receive the downstream status response, correlate it using `operation_id`, immediately re-acquire the in-memory `activeStateTx` lock, and reject new state-changing commands until the upgrade completes. If the downstream reports active but omitting `operation_id`, the daemon must not generate a replacement ID and must retain the lock as an indeterminate error. The uCentral client itself must not subscribe to or respond on `status.get`.
+    *   *Assert:* On boot, the daemon must load the `OperationStore` to recover the Cloud JSON-RPC `id` and immediately re-acquire the in-memory `activeStateTx` lock. It must then publish a request to `status.get`, receive the downstream status response, correlate it using `operation_id`, and release the lock if a terminal state is reached. If the downstream reports active but omitting `operation_id`, the daemon must not generate a replacement ID and must retain the lock as an indeterminate error. The uCentral client itself must not subscribe to or respond on `status.get`.
 
 ### PR 3.2: Duplicate Attachment & Cache TTL Tests
 *   **TC-RM-004 (Duplicate Active Request Rejection):**
@@ -207,11 +207,11 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Setup:* Independently change Cloud, NATS, and protocol-negotiation states.
     *   *Assert:*
         * Cloud Connected + NATS Connected + Negotiation Ready = `Operational`.
-        * Cloud Connected + NATS Connected + Negotiation Pending = `ProtocolNegotiating`.
+        * Cloud Connected + NATS Connected + (Negotiation NotStarted or InProgress) = `ProtocolNegotiating`.
         * Cloud Offline/Connecting + NATS Connected = `CloudDegraded`.
-        * Cloud Connected + NATS Offline/Connecting = `NATSDegraded`.
+        * Cloud Connected + NATS Offline/Connecting + (Negotiation Ready or NotStarted or InProgress) = `NATSDegraded`.
         * Neither connection Connected = `Offline`.
-        * Both Connected + Negotiation Failed = `ProtocolFailure`.
+        * Cloud Connected + Negotiation Failed = `ProtocolFailure` (takes strict precedence regardless of NATS state).
         * Losing Cloud does not change or reconnect the NATS link.
         * Losing NATS does not change or reconnect the Cloud link.
 *   **TC-NET-011 (Unix Socket Rate Limiting & Auditing):**
@@ -243,13 +243,13 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Setup:* Start the daemon with NATS connection blocked (unreachable broker) but Cloud WebSocket reachable.
     *   *Assert:* Daemon must successfully establish connection to the Cloud WebSocket and report status as `NATSDegraded` (due to NATS being offline) without hanging or blocking on the NATS connection loop.
 *   **TC-INT-004 (Priority 0 Overflow Recovery):**
-    *   *Requirement Mapping:* `REQ-013`, `REQ-014`
+    *   *Requirement Mapping:* `REQ-014`
     *   *Setup:* Simulate a stalled WebSocket writer while the daemon continues generating Priority 0 responses.
     *   *Assert:* The daemon treats the WebSocket writer path as unhealthy and triggers recovery, fails affected transactions, and increments the overflow metric instead of allowing unbounded memory growth.
 *   **TC-INT-005 (Configuration Validation & Startup Failure):**
     *   *Requirement Mapping:* `REQ-030` (Startup Configuration Validation)
-    *   *Setup:* Attempt to boot the daemon with various invalid configurations: missing serial, `http://` cloud URL, insecure `nats://` server, unreadable credentials, and zero/negative queue capacities.
-    *   *Assert:* The daemon must strictly validate the configuration before starting any connection loops, log the specific invalid field, and exit immediately with a non-zero status. Booting with valid defaults must succeed.
+    *   *Setup:* Attempt to boot the daemon with various invalid configurations: missing serial, `http://` cloud URL, insecure `nats://` server, unreadable credentials, and zero/negative bounds (`compression_threshold_bytes <= 0`, `cloud.connect_timeout_seconds <= 0`, and all queue capacities <= 0).
+    *   *Assert:* The daemon must strictly validate the configuration before starting any connection loops, log the specific invalid field, and exit immediately with a non-zero status. Booting with valid defaults must succeed and correctly apply `connect_timeout_seconds=10`, `compression_threshold_bytes=2048`, `ws_writer_capacity=500`, `emergency_capacity=100`, `nats_publish_capacity=100`, `command_result_capacity=50`, and `telemetry_capacity=500`.
 
 ---
 
@@ -269,7 +269,7 @@ This document details the test plans, test cases, and verification strategies fo
 | **REQ-010** | Operation-Specific Caching & TTL | `TC-RM-005` |
 | **REQ-011** | Asynchronous Upgrade Tracking & Crash Recovery | `TC-UPG-001`, `TC-UPG-002` |
 | **REQ-012** | Command Dispatch Buffer | `TC-BUF-003` |
-| **REQ-013** | Command Result Priority Queue | `TC-QUE-001`, `TC-BUF-006`, `TC-QUE-002`, `TC-INT-004` |
+| **REQ-013** | Command Result Priority Queue | `TC-QUE-001`, `TC-BUF-006`, `TC-QUE-002` |
 | **REQ-014** | WebSocket Outbound Priority Scheduler | `TC-SCH-001`, `TC-SCH-002`, `TC-SCH-003`, `TC-SCH-004`, `TC-SCH-005`, `TC-SCH-006`, `TC-INT-004` |
 | **REQ-015** | State Coalescer & Telemetry Ring Buffer | `TC-BUF-001`, `TC-BUF-002`, `TC-BUF-007` |
 | **REQ-016** | NATS Security & Target Isolation | `TC-SEC-001` |
@@ -283,7 +283,7 @@ This document details the test plans, test cases, and verification strategies fo
 | **REQ-024** | Payload Compression | `TC-BUF-004` |
 | **REQ-025** | Request Manager Retry Policy | `TC-RM-006` |
 | **REQ-026** | Desired/Applied Cloud Reconciliation Contract | `TC-NET-013` |
-| **REQ-027** | JSON-RPC ID Preservation | `TC-CON-005` |
+| **REQ-027** | JSON-RPC ID Preservation | `TC-CON-005`, `TC-RM-007` |
 | **REQ-028** | NATS Envelope Serialization Contract | `TC-CON-001` |
 | **REQ-029** | Graceful Teardown | `TC-INT-001` |
 | **REQ-030** | Startup Configuration Validation | `TC-INT-005` |

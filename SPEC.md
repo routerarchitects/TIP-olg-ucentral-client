@@ -398,8 +398,16 @@ The error represents a local result-processing failure. It must not report that 
     	activeStateTx               string                  // CorrelationID holding the state lock
     }
 
+    // CanonicalCloudID formats a raw JSON-RPC ID into a type-prefixed string (e.g., "number:42" or "string:42")
+    // to strictly prevent collisions between numeric and string IDs. This canonicalization MUST be used by
+    // activeCloudRequests, TransactionCache, duplicate-active detection, and completed-response replay.
+    func CanonicalCloudID(id json.RawMessage) (string, error)
+
     func NewRequestManager() *DefaultRequestManager
-    func (m *DefaultRequestManager) CreateTransaction(cloudRPCID json.RawMessage, method string, timeout time.Duration, isStateChanging bool) (*Transaction, error)
+    
+    // CreateTransaction creates a new transaction. If respondToCloud is false (e.g. for notifications),
+    // the implementation MUST NOT insert an empty/null Cloud ID into activeCloudRequests or TransactionCache.
+    func (m *DefaultRequestManager) CreateTransaction(cloudRPCID json.RawMessage, respondToCloud bool, method string, timeout time.Duration, isStateChanging bool) (*Transaction, error)
     func (m *DefaultRequestManager) MarkPending(correlationID string) error
     func (m *DefaultRequestManager) MarkInFlight(correlationID string) error
     // Terminal methods must atomically insert into the transaction cache,

@@ -119,7 +119,7 @@ This document details the test plans, test cases, and verification strategies fo
 ### PR 3.1: Transaction State Machine & Manager Tests
 *   **TC-RM-001 (State Machine Transitions):**
     *   *Requirement Mapping:* `REQ-007` (Transaction Lifecycle)
-    *   *Setup:* Create a transaction using `CreateTransaction(cloudRPCID = "tx-1", method = "action", timeout = 10s, isStateChanging = false)`.
+    *   *Setup:* Create a transaction using `CreateTransaction(cloudRPCID = "tx-1", respondToCloud = true, method = "action", timeout = 10s, isStateChanging = false)`.
     *   *Assert:* Initial state must be `TxCreated`, and the Request Manager must generate and assign a valid internal `CorrelationID`. Manually advance state to `TxPendingNATS`, then `TxInFlight`. Verify correct enum states.
 *   **TC-RM-002 (Concurrency Rejection):**
     *   *Requirement Mapping:* `REQ-008` (Concurrency Serialization)
@@ -136,7 +136,7 @@ This document details the test plans, test cases, and verification strategies fo
 *   **TC-UPG-002 (Upgrade Crash Recovery via Durable Store and Status Query):**
     *   *Requirement Mapping:* `REQ-011`
     *   *Setup:* Simulate a daemon crash/restart while an upgrade is active downstream. Populate `OperationStore` with an active operation record. Mock a downstream device/local-agent responder on `ucentral.v1.device.<own-serial>.status.get`.
-    *   *Assert:* On boot, the daemon must load the `OperationStore` to recover the Cloud JSON-RPC `id` and immediately re-acquire the in-memory `activeStateTx` lock. It must then publish a request to `status.get`, receive the downstream status response, correlate it using `operation_id`, and release the lock if a terminal state is reached. If the downstream reports active but omitting `operation_id`, the daemon must not generate a replacement ID and must retain the lock as an indeterminate error. The uCentral client itself must not subscribe to or respond on `status.get`.
+    *   *Assert:* On boot, the daemon must load the `OperationStore` to recover the Cloud JSON-RPC `id` and immediately re-acquire the in-memory `activeStateTx` lock. It must then publish a request to `status.get` generating a **fresh internal `correlation_id`**, receive the downstream status response, correlate it using the persisted `operation_id`, and release the lock if a terminal state is reached. If the downstream reports active but omitting `operation_id`, the daemon must not generate a replacement ID and must retain the lock as an indeterminate error. The uCentral client itself must not subscribe to or respond on `status.get`.
 
 ### PR 3.2: Duplicate Attachment & Cache TTL Tests
 *   **TC-RM-004 (Duplicate Active Request Rejection):**

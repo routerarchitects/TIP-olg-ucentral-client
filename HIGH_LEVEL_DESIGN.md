@@ -61,7 +61,7 @@ To ensure interoperability, the uCentral client standardizes on standard envelop
 ```json
 {
   "version": "1.0",
-  "rpc_id": "8bc92d11-536c-4860-9d8a-6809694b78ba",
+  "correlation_id": "8bc92d11-536c-4860-9d8a-6809694b78ba",
   "target": "00:11:22:33:44:55",
   "uuid": "1687588800",
   "kv_key": "desired.00:11:22:33:44:55",
@@ -74,7 +74,7 @@ To ensure interoperability, the uCentral client standardizes on standard envelop
 ```json
 {
   "version": "1.0",
-  "rpc_id": "c138d6df-85f0-4322-927b-23fcfdf626c0",
+  "correlation_id": "c138d6df-85f0-4322-927b-23fcfdf626c0",
   "target": "00:11:22:33:44:55",
   "command_type": "action",
   "action": "reboot",
@@ -88,7 +88,7 @@ To ensure interoperability, the uCentral client standardizes on standard envelop
 ```json
 {
   "version": "1.0",
-  "rpc_id": "8bc92d11-536c-4860-9d8a-6809694b78ba",
+  "correlation_id": "8bc92d11-536c-4860-9d8a-6809694b78ba",
   "target": "00:11:22:33:44:55",
   "command_type": "configure",
   "uuid": "1687588800",
@@ -99,11 +99,11 @@ To ensure interoperability, the uCentral client standardizes on standard envelop
 ```
 
 ### 2.2 Correlation ID Propagation
-The `rpc_id` field in all envelopes acts as the central correlation ID.
-1.  When a Cloud JSON-RPC request is received, the WebSocket Engine extracts the `id`.
-2.  The Request Manager populates the `rpc_id` field of the NATS payload with this ID.
-3.  The downstream agent processes the command and returns a `ResultEnvelope` maintaining the exact same `rpc_id`.
-4.  The Request Manager uses this correlation ID to match the incoming result and return the response to the correct WebSocket client thread/stream.
+The `correlation_id` field in all envelopes acts as the central correlation ID for NATS transactions.
+1.  When a Cloud JSON-RPC request is received, the Request Manager generates a unique internal `correlation_id` and stores the Cloud's raw JSON-RPC `id` in a local map.
+2.  The Request Manager populates the `correlation_id` field of the NATS payload with this generated ID.
+3.  The downstream agent processes the command and returns a `ResultEnvelope` maintaining the exact same `correlation_id`.
+4.  The Request Manager uses this correlation ID to look up the original transaction, recovers the Cloud `id`, and returns the response to the correct WebSocket client.
 
 ### 2.3 Versioned Subject Schema
 To facilitate future protocol evolutions and enforce strict security boundaries, all NATS subjects are versioned under a `v1` prefix:
@@ -175,22 +175,22 @@ stateDiagram-v2
 
 *   **Created:** Transaction metadata is initialized in memory, and the timeout timer is started.
 *   **PendingNATS:** The request is queued in the NATS Dispatch Buffer.
-*   **InFlight:** The message is published to NATS. The Request Manager listens for the matching `rpc_id` reply.
+*   **InFlight:** The message is published to NATS. The Request Manager listens for the matching `correlation_id` reply.
 *   **Completed / Failed / TimedOut:** Terminal states. Once reached, the client replies to all registered cloud streams, updates metrics, caches the result, and cleans up transaction memory.
 
 ### 3.2 Concurrency & Serialization Rules
 To protect device integrity, the client divides requests into two execution classes:
 
 1.  **State-Changing Commands (Serialized):** Commands that modify device state (`configure`, `reboot`, `factory`, `upgrade`) are **serialized** (one at a time per device).
-    *   *Rule:* If a state-changing transaction is currently `InFlight` or `PendingNATS`, any new configuration or action request (with a different `rpc_id`) is immediately rejected with a `busy` status (Error Code -32603 / Result: `busy`).
+    *   *Rule:* If a state-changing transaction is currently `InFlight` or `PendingNATS`, any new configuration or action request (with a different Cloud `id`) is immediately rejected with a `busy` status (Error Code -32603 / Result: `busy`).
     *   *Benefit:* Eliminates the overhead of complex command queue backlogs and prevents race conditions.
 2.  **Read-Only Commands (Parallel):** Metadata and query operations (`capabilities.get`, `status.get`) are processed in parallel.
     *   *Rule:* Query operations do not acquire the device state lock and are published to NATS immediately, even if a configuration transaction is in progress.
     *   *Ownership:* `status.get` is a downstream device/local-agent query. The uCentral client sends the request and waits for the downstream response; it does not serve responses on this subject.
 
 ### 3.3 Duplicate & Overlapping Requests
-*   **Overlapping Duplicate Requests:** If the Cloud retries a command sending the exact same `rpc_id` while a transaction is already active (`Created`, `PendingNATS`, or `InFlight`), the client rejects the new request immediately with a JSON-RPC busy/internal error (`-32603`). This avoids complex fan-out/listener attachment logic and ensures predictable client behavior.
-*   **Duplicate Completed Requests:** If the request matches a cached `rpc_id` that has already completed, the Request Manager **replays the cached response** directly to the cloud.
+*   **Overlapping Duplicate Requests:** If the Cloud retries a command sending the exact same Cloud `id` while a transaction is already active (`Created`, `PendingNATS`, or `InFlight`), the client rejects the new request immediately with a JSON-RPC busy/internal error (`-32603`). This avoids complex fan-out/listener attachment logic and ensures predictable client behavior.
+*   **Duplicate Completed Requests:** If the request matches a cached Cloud `id` that has already completed, the Request Manager **replays the cached response** directly to the cloud.
 *   **Cache TTL by Operation Type:**
     *   `configure`: **5 minutes**
     *   `reboot`: **10 minutes**
@@ -199,17 +199,17 @@ To protect device integrity, the client divides requests into two execution clas
 
 ### 3.4 Behavior Across Reconnects
 *   **Cloud Disconnections:** If the WAN connection to the Cloud drops while a transaction is `InFlight`, the client **continues running the operation downstream**. It does not abort the configuration or reboot.
-*   **Result Recovery:** If NATS replies while the Cloud is disconnected, the client stores the result in its transaction cache. Once the Cloud reconnects and queries the status or retries the command (using the same `rpc_id`), the client replays the cached result immediately.
+*   **Result Recovery:** If NATS replies while the Cloud is disconnected, the client stores the result in its transaction cache. Once the Cloud reconnects and queries the status or retries the command (using the same Cloud `id`), the client replays the cached result immediately.
 
 ### 3.5 Asynchronous Upgrades (Firmware)
 Firmware upgrades take minutes to complete and cannot block the Request Manager or hold the WebSocket connection open. The architecture defines the following cross-component contracts for upgrades:
 
-1.  **Operation ID:** A persistent `operation_id` must be generated to identify the long-running upgrade process independently of the original JSON-RPC `rpc_id`.
+1.  **Operation ID:** A persistent `operation_id` must be generated to identify the long-running upgrade process independently of the original JSON-RPC `id` and the NATS `correlation_id`.
 2.  **Initial Response:** The client receives the `upgrade` command, validates it, and immediately returns a JSON-RPC "started" response (closing the JSON-RPC exchange) to the Cloud.
 3.  **Background Tracking & Authoritative Status:** The upgrade continues executing asynchronously. The downstream agent must expose structured, authoritative upgrade status. The uCentral client must use this structured status to determine completion; **system logs must not be used as a completion signal**.
 4.  **State Lock Lifetime:** The state-changing lock (`activeStateTx`) remains held until a defined terminal upgrade state (e.g., success, failed) is received from the downstream agent.
 5.  **Reconnection Resilience:** Upon WebSocket reconnection, the daemon resumes reporting the current upgrade state to the Cloud using the persistent `operation_id`.
-6.  **Crash Recovery (Startup Query):** To prevent losing the in-memory state lock if the daemon process crashes, the daemon must explicitly load the active operation from the `OperationStore` on boot to recover the Cloud `rpc_id`. It must then query the downstream agent via `ucentral.v1.device.<own-serial>.status.get`, correlate the response using the `operation_id`, restore the `activeStateTx` lock if the operation is still running, and release the lock if a terminal state is observed. The uCentral client is only the requester for this subject; it must not subscribe to or respond on `status.get`.
+6.  **Crash Recovery (Startup Query):** To prevent losing the in-memory state lock if the daemon process crashes, the daemon must explicitly load the active operation from the `OperationStore` on boot to recover the Cloud JSON-RPC `id`. It must then query the downstream agent via `ucentral.v1.device.<own-serial>.status.get`, correlate the response using the `operation_id`, restore the `activeStateTx` lock if the operation is still running, and release the lock if a terminal state is observed. The uCentral client is only the requester for this subject; it must not subscribe to or respond on `status.get`.
 7.  **Duplicate Rejection:** Any state-changing commands received while the background upgrade is active are rejected immediately as busy.
 
 ### 3.6 Timeout Specifications
@@ -338,7 +338,7 @@ Queue sizes are configurable via daemon configuration file parameters.
 | Queue Name | Purpose / Type | Capacity | Overflow / Failure Policy |
 | :--- | :--- | :--- | :--- |
 | **Command Dispatch Buffer** | Short-lived NATS handoff buffer (Not durable). | Default: 100 messages | If full or NATS is disconnected, fails fast and rejects the Cloud request with `local_service_unavailable` (JSON-RPC code -32603, application_code 3). |
-| **Command Result Priority Queue** | Handles NATS replies for config/action processing. | Default: 50 messages | High priority and bounded. Because state-changing commands are serialized per device, this queue is not expected to fill during normal operation. Command results must not be silently dropped. If overflow occurs, it is treated as an exceptional local result-delivery failure: the client records an overflow metric, logs the `rpc_id`, command type, and subject, and completes the matching Cloud transaction with an indeterminate local delivery error. The error must state that the downstream result could not be processed locally and must not claim that the downstream operation itself failed. If the result cannot be correlated to an active transaction, it may be discarded after logging and metric emission. |
+| **Command Result Priority Queue** | Handles NATS replies for config/action processing. | Default: 50 messages | High priority and bounded. Because state-changing commands are serialized per device, this queue is not expected to fill during normal operation. Command results must not be silently dropped. If overflow occurs, it is treated as an exceptional local result-delivery failure: the client records an overflow metric, logs the `correlation_id`, command type, and subject, and completes the matching Cloud transaction with an indeterminate local delivery error. The error must state that the downstream result could not be processed locally and must not claim that the downstream operation itself failed. If the result cannot be correlated to an active transaction, it may be discarded after logging and metric emission. |
 | **State Coalescer** | Keeps only the latest state report (last-write-wins). | 1 Slot per Serial | Overwrites previous un-flushed stats with newer state reports. Flushes every 10 seconds. |
 | **Telemetry/Log Ring Buffer** | Bounded FIFO queue for logs and events. | Default: 500 messages | Bounded FIFO. Drops oldest low-priority events on overflow (FIFO drop). Excludes high-severity audit logs. |
 
@@ -372,7 +372,7 @@ Exposes a priority-aware message dispatch queue writing to the WebSocket connect
 
 ### 5.2 Action Command Authorization & Auditing
 *   **NATS ACLs:** Only the uCentral client is authorized to publish to `ucentral.v1.device.<own-serial>.action.*`. Downstream agents are prohibited from publishing to these topics.
-*   **Audit Logging:** Every sensitive Action Command (e.g., `reboot`) is logged locally in the system audit stream and sent back to the cloud as a high-severity `log` request containing the `rpc_id` and the user/system identity that triggered it. *(Note: This is a new security feature introduced in this client and is not present in the legacy OpenWrt client).*
+*   **Audit Logging:** Every sensitive Action Command (e.g., `reboot`) is logged locally in the system audit stream and sent back to the cloud as a high-severity `log` request containing the Cloud JSON-RPC `id` and the user/system identity that triggered it. *(Note: This is a new security feature introduced in this client and is not present in the legacy OpenWrt client).*
 *   **Recursive Loop Prevention:** If the audit log forwarding fails, the client increments the `audit_delivery_failure` metric but **does not generate another log** to prevent recursive log flooding.
 
 ---

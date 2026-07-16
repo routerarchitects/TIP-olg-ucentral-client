@@ -11,9 +11,9 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-028` (NATS Envelope Serialization Contract)
     *   *Setup:* Create instances of `ConfigureCommand`, `ActionCommand`, and `ResultEnvelope`.
     *   *Assert:* Marshalling to JSON must produce exact keys for each envelope type:
-        *   `ActionCommand`: `version`, `rpc_id`, `target`, `command_type`, `action`, `payload`, `timestamp`.
-        *   `ConfigureCommand`: `version`, `rpc_id`, `target`, `uuid`, `kv_key`, `kv_revision`, `timestamp`. Must assert that the raw `payload` is absent.
-        *   `ResultEnvelope`: `version`, `rpc_id`, `target`, `command_type`, `result`, `message`, `timestamp`. Additionally verify that `operation_id` is serialized for upgrade operations, `uuid` is serialized for configure operations, and omitted fields are absent from the JSON.
+        *   `ActionCommand`: `version`, `correlation_id`, `target`, `command_type`, `action`, `payload`, `timestamp`.
+        *   `ConfigureCommand`: `version`, `correlation_id`, `target`, `uuid`, `kv_key`, `kv_revision`, `timestamp`. Must assert that the raw `payload` is absent.
+        *   `ResultEnvelope`: `version`, `correlation_id`, `target`, `command_type`, `result`, `message`, `timestamp`. Additionally verify that `operation_id` is serialized for upgrade operations, `uuid` is serialized for configure operations, and omitted fields are absent from the JSON.
 *   **TC-CON-002 (Error Mappings):**
     *   *Requirement Mapping:* `REQ-021` (JSON-RPC Error Mapping)
     *   *Setup:* Pass internal error enum `ErrServiceUnavailable` to JSON-RPC error encoder helper.
@@ -97,8 +97,8 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Assert:* The client must throttle/delay telemetry forwarding to prioritize command results, ensuring core loops do not block.
 *   **TC-QUE-002 (Command Result Queue Overflow Produces Indeterminate Result):**
     *   *Requirement Mapping:* `REQ-013`, `REQ-021`
-    *   *Setup:* Fill the Command Result Priority Queue to capacity. Simulate a correlated downstream command result arriving with a known `rpc_id`.
-    *   *Assert:* `Push()` must return `ErrQueueFull`; the daemon must log the `rpc_id`, command type, and subject, increment `command_result_overflow`, and complete the matching Cloud transaction with JSON-RPC `-32603` and `error.data.application_code = 7` (`Result Delivery Failed`). The response must state that the downstream result could not be processed locally and must not claim that the downstream operation failed.
+    *   *Setup:* Fill the Command Result Priority Queue to capacity. Simulate a correlated downstream command result arriving with a known `correlation_id`.
+    *   *Assert:* `Push()` must return `ErrQueueFull`; the daemon must log the `correlation_id`, command type, and subject, increment `command_result_overflow`, and complete the matching Cloud transaction with JSON-RPC `-32603` and `error.data.application_code = 7` (`Result Delivery Failed`). The response must state that the downstream result could not be processed locally and must not claim that the downstream operation failed.
 *   **TC-BUF-004 (Gzip Compression Trigger Threshold):**
     *   *Requirement Mapping:* `REQ-024` (Payload Compression)
     *   *Setup:* Set `compression_threshold_bytes` to 2048. Generate a payload of size 1024 bytes and another of size 3072 bytes.
@@ -119,15 +119,15 @@ This document details the test plans, test cases, and verification strategies fo
 ### PR 3.1: Transaction State Machine & Manager Tests
 *   **TC-RM-001 (State Machine Transitions):**
     *   *Requirement Mapping:* `REQ-007` (Transaction Lifecycle)
-    *   *Setup:* Create a transaction using `CreateTransaction(rpcID = "tx-1", timeout = 10s)`.
-    *   *Assert:* Initial state must be `TxCreated`. Manually advance state to `TxPendingNATS`, then `TxInFlight`. Verify correct enum states.
+    *   *Setup:* Create a transaction using `CreateTransaction(cloudRPCID = "tx-1", method = "action", timeout = 10s, isStateChanging = false)`.
+    *   *Assert:* Initial state must be `TxCreated`, and the Request Manager must generate and assign a valid internal `CorrelationID`. Manually advance state to `TxPendingNATS`, then `TxInFlight`. Verify correct enum states.
 *   **TC-RM-002 (Concurrency Rejection):**
     *   *Requirement Mapping:* `REQ-008` (Concurrency Serialization)
-    *   *Setup:* Start a transaction with `isStateChanging = true` for `rpc_id = "tx-1"`. Submit another transaction with `rpc_id = "tx-2"`, `isStateChanging = true`.
+    *   *Setup:* Start a transaction with `isStateChanging = true` for `Cloud ID = "tx-1"`. Submit another transaction with `Cloud ID = "tx-2"`, `isStateChanging = true`.
     *   *Assert:* The second transaction request must return a `busy` error immediately.
 *   **TC-RM-003 (Parallel Read Operations):**
     *   *Requirement Mapping:* `REQ-008` (Concurrency Serialization)
-    *   *Setup:* Start state-changing transaction `rpc_id = "tx-1"`. Submit read-only command transaction `rpc_id = "query-1"`, `isStateChanging = false`.
+    *   *Setup:* Start state-changing transaction `Cloud ID = "tx-1"`. Submit read-only command transaction `Cloud ID = "query-1"`, `isStateChanging = false`.
     *   *Assert:* Transaction `query-1` must succeed and run in parallel (no busy error).
 *   **TC-UPG-001 (Asynchronous Upgrade Progress Stream):**
     *   *Requirement Mapping:* `REQ-011` (Asynchronous Upgrade Tracking)
@@ -136,12 +136,12 @@ This document details the test plans, test cases, and verification strategies fo
 *   **TC-UPG-002 (Upgrade Crash Recovery via Durable Store and Status Query):**
     *   *Requirement Mapping:* `REQ-011`
     *   *Setup:* Simulate a daemon crash/restart while an upgrade is active downstream. Populate `OperationStore` with an active operation record. Mock a downstream device/local-agent responder on `ucentral.v1.device.<own-serial>.status.get`.
-    *   *Assert:* On boot, the daemon must load the `OperationStore` to recover the Cloud `rpc_id`. It must publish a request to `status.get`, receive the downstream status response, correlate it using `operation_id`, immediately re-acquire the in-memory `activeStateTx` lock, and reject new state-changing commands until the upgrade completes. If the downstream reports active but omitting `operation_id`, the daemon must not generate a replacement ID and must retain the lock as an indeterminate error. The uCentral client itself must not subscribe to or respond on `status.get`.
+    *   *Assert:* On boot, the daemon must load the `OperationStore` to recover the Cloud JSON-RPC `id`. It must publish a request to `status.get`, receive the downstream status response, correlate it using `operation_id`, immediately re-acquire the in-memory `activeStateTx` lock, and reject new state-changing commands until the upgrade completes. If the downstream reports active but omitting `operation_id`, the daemon must not generate a replacement ID and must retain the lock as an indeterminate error. The uCentral client itself must not subscribe to or respond on `status.get`.
 
 ### PR 3.2: Duplicate Attachment & Cache TTL Tests
 *   **TC-RM-004 (Duplicate Active Request Rejection):**
     *   *Requirement Mapping:* `REQ-009` (Duplicate Active Request Rejection)
-    *   *Setup:* Start transaction `rpc_id = "tx-1"` and hold it in `Created` state. Submit duplicate request. Advance original to `PendingNATS` and submit duplicate. Advance to `InFlight` and submit duplicate.
+    *   *Setup:* Start transaction `Cloud ID = "tx-1"` and hold it in `Created` state. Submit duplicate request. Advance original to `PendingNATS` and submit duplicate. Advance to `InFlight` and submit duplicate.
     *   *Assert:* In all three active states (`Created`, `PendingNATS`, `InFlight`), the duplicate request must fail immediately and return a busy error (`-32603`) without overwriting the map entry, altering timeouts, or triggering a second downstream execution.
 *   **TC-RM-005 (Operation-Specific Cache TTLs):**
     *   *Requirement Mapping:* `REQ-010` (Operation-Specific Caching & TTL)
@@ -151,6 +151,10 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-025` (Transaction Retry Policy)
     *   *Setup:* Mock the NATS responder to return transient errors. Submit a read-only request (`capabilities.get`) and a state-changing request (`configure`).
     *   *Assert:* The read-only request must be retried up to 3 times with exponential backoff (e.g., first retry after ~2s, second retry after ~4s) before failing. The state-changing request must fail fast on the first error with no retries.
+*   **TC-RM-007 (JSON-RPC ID Preservation & Boundaries):**
+    *   *Requirement Mapping:* `REQ-027` (JSON-RPC ID Preservation & Edge Cases)
+    *   *Setup:* Submit: (1) a notification (no `id`), (2) a numeric ID `42`, (3) a string ID `"42"`, and (4) a reused ID while the original is still active, and (5) a reused ID matching a completed cached transaction.
+    *   *Assert:* (1) Notification generates a valid `correlation_id` but sends no Cloud response. (2/3) Numeric `42` and string `"42"` process in parallel independently without key collision, maintaining raw type in Cloud response. (4) Reused canonical Cloud ID matching an active transaction is rejected, while (5) a completed matching ID replays the cached response. NATS payloads must only contain `correlation_id`.
 
 ---
 
@@ -166,7 +170,7 @@ This document details the test plans, test cases, and verification strategies fo
 *   **TC-NET-003 (JetStream KV Revision Guard & Trigger Contract):**
     *   *Requirement Mapping:* `REQ-006` (JetStream KV Consistency Contract)
     *   *Setup:* Write config payload to JetStream KV. Retrieve the sequence revision and publish the `config.apply` NATS trigger. Intercept the serialized trigger. Then, simulate a downstream agent processing the trigger under two conditions: (A) when the KV store revision exactly matches the trigger `kv_revision`, and (B) when the KV store contains a newer, higher revision payload.
-    *   *Assert:* The intercepted trigger must contain `uuid`, `kv_key`, `kv_revision`, `target`, and `rpc_id` while strictly omitting the full configuration `payload`. In condition A (exact match), the simulated agent must successfully download and apply the configuration. In condition B (mismatch), the agent must explicitly abort the apply process, completely fulfilling the consistency contract.
+    *   *Assert:* The intercepted trigger must contain `uuid`, `kv_key`, `kv_revision`, `target`, and `correlation_id` while strictly omitting the full configuration `payload`. In condition A (exact match), the simulated agent must successfully download and apply the configuration. In condition B (mismatch), the agent must explicitly abort the apply process, completely fulfilling the consistency contract.
 *   **TC-SEC-001 (Target Subject Isolation Constraints):**
     *   *Requirement Mapping:* `REQ-004` (Subject Schema Versioning), `REQ-016` (NATS Security & Target Isolation)
     *   *Setup:* Attempt to publish or subscribe to a subject with a different target serial (e.g. `ucentral.v1.device.different-serial.state`).

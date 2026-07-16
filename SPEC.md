@@ -107,7 +107,7 @@ TIP-olg-ucentral-client/
 
     type ConfigureCommand struct {
         Version     string          `json:"version"`
-        RPCID       json.RawMessage `json:"rpc_id"`
+        CorrelationID string          `json:"correlation_id"`
         Target      string          `json:"target"`
         UUID        string          `json:"uuid"`
         KVKey       string          `json:"kv_key"`
@@ -117,7 +117,7 @@ TIP-olg-ucentral-client/
 
     type ActionCommand struct {
     	Version     string          `json:"version"`
-    	RPCID       json.RawMessage `json:"rpc_id"`
+    	CorrelationID string          `json:"correlation_id"`
     	OperationID string          `json:"operation_id,omitempty"`
     	Target      string          `json:"target"`
     	CommandType string          `json:"command_type"`
@@ -128,7 +128,7 @@ TIP-olg-ucentral-client/
 
     type ResultEnvelope struct {
     	Version     string          `json:"version"`
-    	RPCID       json.RawMessage `json:"rpc_id"`
+    	CorrelationID string          `json:"correlation_id"`
     	Target      string          `json:"target"`
     	CommandType string          `json:"command_type"`
     	OperationID string          `json:"operation_id,omitempty"` // Mandatory for upgrade results
@@ -333,7 +333,7 @@ TIP-olg-ucentral-client/
 
 **Command Result Queue Lifecycle & Ownership Rules:**
 *   **Ownership:** The queue is populated (`Push`) by the asynchronous NATS Subscriber goroutines. It is consumed (`Pop`) exclusively by a dedicated Request Manager processing loop. The Request Manager must correlate the NATS result, transition the transaction state, release any held locks, cache the final response, and then push the finalized JSON-RPC response payload into the Priority 0 Outbound Scheduler.
-* **Overflow Policy (Exceptional Local Delivery Failure):** The command result queue is bounded and non-blocking to protect core NATS subscriber loops. Because state-changing commands are serialized, overflow is not expected during normal operation. If a NATS subscriber attempts to push to a full queue, `Push()` returns `ErrQueueFull`. The subscriber must not silently drop a correlated command result. It must log the overflow with the `rpc_id`, command type, and subject, increment a `command_result_overflow` metric, and notify the Request Manager so the matching Cloud transaction is completed with an indeterminate local delivery error. This error means the uCentral client could not process the downstream result locally; it must not claim that the downstream operation itself failed. If the result cannot be correlated to an active transaction, it may be discarded after logging and metric emission.
+* **Overflow Policy (Exceptional Local Delivery Failure):** The command result queue is bounded and non-blocking to protect core NATS subscriber loops. Because state-changing commands are serialized, overflow is not expected during normal operation. If a NATS subscriber attempts to push to a full queue, `Push()` returns `ErrQueueFull`. The subscriber must not silently drop a correlated command result. It must log the overflow with the `correlation_id`, command type, and subject, increment a `command_result_overflow` metric, and notify the Request Manager so the matching Cloud transaction is completed with an indeterminate local delivery error. This error means the uCentral client could not process the downstream result locally; it must not claim that the downstream operation itself failed. If the result cannot be correlated to an active transaction, it may be discarded after logging and metric emission.
 *   **Telemetry Throttling (Activation & Release):** The Main loop polls `Utilization()` before processing telemetry.
     *   **Activation:** If `Utilization() >= 0.90` (90% capacity, e.g., 45/50 items), the daemon engages telemetry throttling, pausing all reads from the `TelemetryRingBuffer`.
     *   **Release:** Throttling remains engaged until `Utilization() <= 0.50` (queue drops to 50% capacity), creating a hysteresis loop to prevent rapid toggling, at which point telemetry forwarding resumes.
@@ -365,36 +365,36 @@ TIP-olg-ucentral-client/
     	TxTimedOut
     )
 
-    type RPCID struct {
-    	Raw json.RawMessage // exact ID bytes for response/NATS propagation
-    	Key string          // canonical internal map key (e.g. "string:42" or "number:42")
-    }
-
     type Transaction struct {
-    	RPCID     RPCID
-    	State     TransactionState
-    	CreatedAt time.Time
-    	ResultCh  chan []byte
-    	Cancel    context.CancelFunc
+    	CorrelationID  string
+    	CloudRPCID     json.RawMessage
+    	RespondToCloud bool
+    	Method         string
+    	State          TransactionState
+    	CreatedAt      time.Time
+    	TimeoutAt      time.Time
+    	ResultCh       chan []byte
+    	Cancel         context.CancelFunc
     }
 
     type DefaultRequestManager struct {
-    	mu           sync.Mutex
-    	transactions map[string]*Transaction
-    	stateLock    sync.Mutex // Enforces serialized state-changing commands
-    	activeStateTx string    // Canonical key holding the state lock
+    	mu                          sync.Mutex
+    	transactionsByCorrelationID map[string]*Transaction // Key: CorrelationID
+    	activeCloudRequests         map[string]string       // Key: canonical CloudRPCID, Value: CorrelationID
+    	stateLock                   sync.Mutex              // Enforces serialized state-changing commands
+    	activeStateTx               string                  // CorrelationID holding the state lock
     }
 
     func NewRequestManager() *DefaultRequestManager
-    func (m *DefaultRequestManager) CreateTransaction(rpcID RPCID, timeout time.Duration, isStateChanging bool) (*Transaction, error)
-    func (m *DefaultRequestManager) MarkPending(rpcID RPCID) error
-    func (m *DefaultRequestManager) MarkInFlight(rpcID RPCID) error
+    func (m *DefaultRequestManager) CreateTransaction(cloudRPCID json.RawMessage, method string, timeout time.Duration, isStateChanging bool) (*Transaction, error)
+    func (m *DefaultRequestManager) MarkPending(correlationID string) error
+    func (m *DefaultRequestManager) MarkInFlight(correlationID string) error
     // Terminal methods must atomically insert into the transaction cache,
     // cleanup the active transaction, and release the activeStateTx lock if held.
-    func (m *DefaultRequestManager) Complete(rpcID RPCID, response []byte) error
-    func (m *DefaultRequestManager) Fail(rpcID RPCID, errResponse []byte) error
-    func (m *DefaultRequestManager) Timeout(rpcID RPCID) error
-    func (m *DefaultRequestManager) Cancel(rpcID RPCID) error
+    func (m *DefaultRequestManager) Complete(correlationID string, response []byte) error
+    func (m *DefaultRequestManager) Fail(correlationID string, errResponse []byte) error
+    func (m *DefaultRequestManager) Timeout(correlationID string) error
+    func (m *DefaultRequestManager) Cancel(correlationID string) error
 
 #### PR 3.2: Duplicate Attachment & Cache TTL
 *   **Target File:** `pkg/reqmgr/cache.go`, `pkg/reqmgr/manager.go` (extensions)
@@ -418,12 +418,13 @@ TIP-olg-ucentral-client/
     }
 
     func NewTransactionCache() *TransactionCache
-    func (c *TransactionCache) Set(rpcID RPCID, payload []byte, ttlSeconds int)
-    func (c *TransactionCache) Get(rpcID RPCID) ([]byte, bool)
+    func (c *TransactionCache) Set(canonicalCloudID string, payload []byte, ttlSeconds int)
+    func (c *TransactionCache) Get(canonicalCloudID string) ([]byte, bool)
 
     type PersistentOperation struct {
     	OperationID string          `json:"operation_id"`
-    	RPCID       json.RawMessage `json:"rpc_id"`
+    	CorrelationID string          `json:"correlation_id"`
+    	CloudRPCID    json.RawMessage `json:"cloud_rpc_id"`
     	Target      string          `json:"target"`
     	Action      string          `json:"action"`
     	Stage       string          `json:"stage"`
@@ -506,8 +507,8 @@ TIP-olg-ucentral-client/
     func (n *NATSClient) SubscribeCommandReplies(inbox string, handler func(msg *nats.Msg)) (*nats.Subscription, error)
 
     // Synchronous Read-Only Queries (blocks waiting for ResultEnvelope)
-    func (n *NATSClient) QueryCapabilities(ctx context.Context, serial string, rpcID RPCID) (*ResultEnvelope, error)
-    func (n *NATSClient) QueryDeviceStatus(ctx context.Context, serial string, rpcID RPCID) (*DeviceStatus, error)
+    func (n *NATSClient) QueryCapabilities(ctx context.Context, serial string, correlationID string) (*contracts.ResultEnvelope, error)
+    func (n *NATSClient) QueryDeviceStatus(ctx context.Context, serial string, correlationID string) (*contracts.DeviceStatus, error)
 
     // Streaming & Data Subscriptions
     func (n *NATSClient) SubscribeTelemetry(serial string, handler func(msg *nats.Msg)) (*nats.Subscription, error)
@@ -519,7 +520,7 @@ TIP-olg-ucentral-client/
     
     type DeviceStatus struct {
     	Version     string          `json:"version"`
-    	RPCID       json.RawMessage `json:"rpc_id,omitempty"`
+    	CorrelationID string          `json:"correlation_id,omitempty"`
     	OperationID string          `json:"operation_id,omitempty"` // Identifies the long-running async operation
     	Target      string          `json:"target"`
     	Operation string          `json:"operation,omitempty"`

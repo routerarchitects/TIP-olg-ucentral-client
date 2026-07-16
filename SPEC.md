@@ -98,6 +98,303 @@ TIP-olg-ucentral-client/
     	Message string          `json:"message"`
     	Data    json.RawMessage `json:"data,omitempty"`
     }
+
+    // CloudCompressedConfigureRequest represents the outer wrapper for a compressed config.
+    // Compression Contract:
+    // * The decoded and zlib-decompressed bytes of Compress64 must be reparsed as a CloudConfigureRequest.
+    // * compress_sz must match the exact decompressed byte count.
+    // * Decompression must abort if the output exceeds 10MB.
+    // * Invalid base64 or zlib data MUST return Invalid Params.
+    type CloudCompressedConfigureRequest struct {
+    	Compress64 string `json:"compress_64"`
+    	CompressSz uint32 `json:"compress_sz"`
+    }
+
+    // CloudConfigureRequest represents the incoming configure params.
+    // Schedule Contract:
+    // * The OLG client currently supports only immediate configuration application.
+    // * A missing or zero `when` value is accepted. A non-zero future `when` value MUST
+    // * be rejected as unsupported rather than silently ignored. This is a deliberate OLG compatibility limitation.
+    type CloudConfigureRequest struct {
+    	Serial string          `json:"serial"`
+    	UUID   int64           `json:"uuid"`
+    	When   int64           `json:"when,omitempty"`
+    	Config json.RawMessage `json:"config"`
+    }
+
+    type ConfigureRejectedParameter struct {
+    	Parameter    json.RawMessage `json:"parameter"`
+    	Reason       string          `json:"reason"`
+    	Substitution json.RawMessage `json:"substitution,omitempty"`
+    }
+
+    type CloudConfigureResultStatus struct {
+    	Error    int                          `json:"error"`
+    	Text     string                       `json:"text"`
+    	When     int64                        `json:"when,omitempty"`
+    	Rejected []ConfigureRejectedParameter `json:"rejected,omitempty"`
+    }
+
+    // CloudConfigureResponse defines the success/status response expected by the gateway.
+    // The Request Manager must translate the internal ResultEnvelope into this structure.
+    type CloudConfigureResponse struct {
+    	Serial string                     `json:"serial"`
+    	UUID   int64                     `json:"uuid"`
+    	Status CloudConfigureResultStatus `json:"status"`
+    }
+
+    // Reboot Schedule Contract:
+    // * Only an absent or zero `when` is accepted. Any non-zero `when` value MUST
+    // * be rejected as unsupported rather than silently ignored. This is a deliberate OLG compatibility limitation.
+    type CloudRebootRequest struct {
+    	Serial string `json:"serial"`
+    	When   int64  `json:"when,omitempty"`
+    }
+
+    type CloudRebootStatus struct {
+    	Error int    `json:"error"`
+    	Text  string `json:"text"`
+    	When  int64  `json:"when"`
+    }
+
+    type CloudRebootResponse struct {
+    	Serial string            `json:"serial"`
+    	Status CloudRebootStatus `json:"status"`
+    }
+
+    // Factory Contract:
+    // * Only an absent or zero `when` is accepted. Any non-zero `when` value MUST
+    // * be rejected as unsupported rather than silently ignored. This is a deliberate OLG compatibility limitation.
+    // * keep_redirector must be provided in the JSON and must be exactly 0 or 1. Missing or invalid values MUST return Invalid Params.
+    type CloudFactoryRequest struct {
+    	Serial         string `json:"serial"`
+    	KeepRedirector *int   `json:"keep_redirector"` // Pointer used to distinguish missing from 0
+    	When           int64  `json:"when,omitempty"`
+    }
+
+    type CloudFactoryStatus struct {
+    	Error int    `json:"error"`
+    	Text  string `json:"text"`
+    	When  int64  `json:"when"`
+    }
+
+    type CloudFactoryResponse struct {
+    	Serial string             `json:"serial"`
+    	Status CloudFactoryStatus `json:"status"`
+    }
+
+    // Diagnostic Command Structures:
+
+    // CloudUpgradeRequest represents the incoming upgrade params.
+    type CloudUpgradeRequest struct {
+        Serial      string `json:"serial"`
+        URI         string `json:"uri"`
+        FWsignature string `json:"FWsignature,omitempty"`
+        When        int64  `json:"when,omitempty"`
+    }
+
+    // CloudUpgradeStatus standard error meanings:
+    // 0: Accepted/started
+    // 1: Firmware invalid or rejected
+    // 2: Required signature absent
+    type CloudUpgradeStatus struct {
+        Error int    `json:"error"`
+        Text  string `json:"text"`
+        When  int64  `json:"when"`
+    }
+
+    // CloudUpgradeResponse represents the immediate "started" response expected by OWGW.
+    type CloudUpgradeResponse struct {
+        Serial string             `json:"serial"`
+        Status CloudUpgradeStatus `json:"status"`
+    }
+
+    // CloudUpgradeProgressNotification represents the full JSON-RPC notification payload (Optional OLG extension).
+    // It must only be sent when the connected gateway explicitly advertises support for that extension.
+    // The original JSON-RPC ID is included in the params so the Cloud can correlate it.
+    type CloudUpgradeProgressNotification struct {
+        JSONRPC string                                       `json:"jsonrpc"` // Must be "2.0"
+        Method  string                                       `json:"method"`  // E.g. "upgrade_progress"
+        Params  CloudUpgradeProgressNotificationParams       `json:"params"`
+    }
+
+    type CloudUpgradeProgressNotificationParams struct {
+        Serial      string          `json:"serial"`
+        ID          json.RawMessage `json:"id"` // Original Cloud JSON-RPC ID
+        OperationID string          `json:"operation_id"`
+        Stage       string          `json:"stage"`
+        Status      string          `json:"status"`
+        Message     string          `json:"message"`
+    }
+
+    type CloudWifiScanRequest struct {
+    	Serial    string   `json:"serial"`
+    	Bands     []string `json:"bands,omitempty"`
+    	Channels  []int    `json:"channels,omitempty"`
+    	Verbose   *bool    `json:"verbose,omitempty"`
+    	Bandwidth *int     `json:"bandwidth,omitempty"`
+    	Active    *int     `json:"active,omitempty"`
+    	Ies       []int    `json:"ies,omitempty"`
+    }
+    type CloudWifiScanStatus struct {
+    	Error int    `json:"error"`
+    	Text  string `json:"text"`
+    	When  int64  `json:"when,omitempty"`
+    }
+    type CloudWifiScanResponse struct {
+    	Serial string              `json:"serial"`
+    	Status CloudWifiScanStatus `json:"status"`
+    	Scan   json.RawMessage     `json:"scan"`
+    }
+
+    type CloudTraceRequest struct {
+    	Serial    string `json:"serial"`
+    	When      int64  `json:"when,omitempty"`
+    	Duration  *int   `json:"duration,omitempty"`
+    	Packets   *int   `json:"packets,omitempty"`
+    	Network   string `json:"network,omitempty"`
+    	Interface string `json:"interface,omitempty"`
+    	URI       string `json:"uri,omitempty"`
+    }
+    type CloudTraceStatus struct {
+    	Error int    `json:"error"`
+    	Text  string `json:"text"`
+    	When  int64  `json:"when,omitempty"`
+    }
+    type CloudTraceResponse struct {
+    	Serial string           `json:"serial"`
+    	Status CloudTraceStatus `json:"status"`
+    }
+
+    type CloudPingRequest struct {
+    	Serial string `json:"serial"`
+    }
+    type CloudPingResponse struct {
+    	Serial        string `json:"serial"`
+    	UUID          int64  `json:"uuid"`
+    	DeviceUTCTime int64  `json:"deviceUTCTime"`
+    }
+
+    type CloudLedsRequest struct {
+    	Serial   string `json:"serial"`
+    	When     int64  `json:"when,omitempty"`
+    	Duration *int   `json:"duration,omitempty"`
+    	Pattern  string `json:"pattern"`
+    }
+    type CloudLedsStatus struct {
+    	Error int    `json:"error"`
+    	Text  string `json:"text"`
+    }
+    type CloudLedsResponse struct {
+    	Serial string          `json:"serial"`
+    	Status CloudLedsStatus `json:"status"`
+    }
+
+    type CloudRrmRequest struct {
+    	Serial  string            `json:"serial"`
+    	Actions []json.RawMessage `json:"actions"`
+    }
+    type CloudRrmStatus struct {
+    	Error int    `json:"error"`
+    	Text  string `json:"text"`
+    }
+    type CloudRrmResponse struct {
+    	Serial string         `json:"serial"`
+    	Status CloudRrmStatus `json:"status"`
+    }
+
+    // CloudTelemetryRequest stream configuration.
+    // Validation rules:
+    // - Interval: integer from 0 through 60 (0 stops the stream).
+    // - Types: 1 or 2 entries. Each type must be exactly "dhcp" or "rrm". No duplicate types.
+    type CloudTelemetryRequest struct {
+    	Serial   string   `json:"serial"`
+    	Interval *int     `json:"interval,omitempty"`
+    	Types    []string `json:"types,omitempty"`
+    }
+    type CloudTelemetryStatus struct {
+    	Error int    `json:"error"`
+    	Text  string `json:"text"`
+    }
+    type CloudTelemetryResponse struct {
+    	Serial string               `json:"serial"`
+    	Status CloudTelemetryStatus `json:"status"`
+    }
+
+    type CloudTelemetryEvent struct {
+    	JSONRPC string `json:"jsonrpc"`
+    	Method  string `json:"method"`
+    	Params  struct {
+    		Serial string          `json:"serial"`
+    		Data   json.RawMessage `json:"data"`
+    	} `json:"params"`
+    }
+
+    type CloudRemoteAccessRequest struct {
+    	Method  string `json:"method,omitempty"` // Must be validated as "rtty"
+    	Serial  string `json:"serial"`
+    	Token   string `json:"token"`
+    	ID      string `json:"id"`
+    	Server  string `json:"server"`
+    	Port    int    `json:"port"`
+    	User    string `json:"user,omitempty"`
+    	Timeout *int   `json:"timeout,omitempty"`
+    }
+    type CloudRemoteAccessStatus struct {
+    	Error int             `json:"error"`
+    	Text  string          `json:"text"`
+    	Meta  json.RawMessage `json:"meta,omitempty"`
+    }
+    type CloudRemoteAccessResponse struct {
+    	Serial string                  `json:"serial"`
+    	Status CloudRemoteAccessStatus `json:"status"`
+    }
+
+    type CloudCertupdateRequest struct {
+    	Serial       string `json:"serial"`
+    	Certificates string `json:"certificates"`
+    }
+    type CloudCertupdateStatus struct {
+    	Error int    `json:"error"`
+    	Txt   string `json:"txt"`
+    }
+    type CloudCertupdateResponse struct {
+    	Serial string                `json:"serial"`
+    	Status CloudCertupdateStatus `json:"status"`
+    }
+
+    type CloudReenrollRequest struct {
+    	Serial string `json:"serial"`
+    	When   int64  `json:"when,omitempty"`
+    }
+    type CloudReenrollStatus struct {
+    	Error int    `json:"error"`
+    	Txt   string `json:"txt"`
+    }
+    type CloudReenrollResponse struct {
+    	Serial string              `json:"serial"`
+    	Status CloudReenrollStatus `json:"status"`
+    }
+
+    type CloudScriptRequest struct {
+    	Serial    string `json:"serial"`
+    	Type      string `json:"type"`
+    	Script    string `json:"script,omitempty"` // Must be strictly validated as base64
+    	Timeout   *int   `json:"timeout,omitempty"`
+    	URI       string `json:"uri,omitempty"`
+    	Signature string `json:"signature,omitempty"`
+    	When      int64  `json:"when,omitempty"`
+    }
+    type CloudScriptStatus struct {
+    	Error    int    `json:"error"`
+    	Result64 string `json:"result_64,omitempty"`
+    	ResultSz *int   `json:"result_sz,omitempty"`
+    	Result   string `json:"result,omitempty"`
+    }
+    type CloudScriptResponse struct {
+    	Serial string            `json:"serial"`
+    	Status CloudScriptStatus `json:"status"`
+    }
     ```
 
 *   **NATS Envelope Structures (`pkg/contracts/envelopes.go`):**
@@ -110,7 +407,7 @@ TIP-olg-ucentral-client/
         Version     string          `json:"version"`
         CorrelationID string          `json:"correlation_id"`
         Target      string          `json:"target"`
-        UUID        string          `json:"uuid"`
+        UUID        int64          `json:"uuid"`
         KVKey       string          `json:"kv_key"`
         KVRevision  uint64          `json:"kv_revision"`
         Timestamp   string          `json:"timestamp"`
@@ -127,15 +424,37 @@ TIP-olg-ucentral-client/
     	Timestamp   string          `json:"timestamp"`
     }
 
+
+    // DeviceCapabilities represents the parsed result of a capabilities query.
+    type DeviceCapabilities struct {
+        Capabilities json.RawMessage `json:"capabilities"`
+        Firmware     string          `json:"firmware"`
+    }
+
+    type DeviceStatus struct {
+    	Version     string          `json:"version"`
+    	CorrelationID string          `json:"correlation_id,omitempty"`
+    	OperationID string          `json:"operation_id,omitempty"` // Identifies the long-running async operation
+    	Target      string          `json:"target"`
+    	Operation string          `json:"operation,omitempty"`
+    	Active    bool            `json:"active,omitempty"`
+    	Stage     string          `json:"stage,omitempty"`
+    	Status    string          `json:"status"`
+    	Message   string          `json:"message,omitempty"`
+    	Timestamp   string          `json:"timestamp"`
+    }
+    // Note: If a response relates to a specific upgrade operation, OperationID must be non-empty, even if it is a terminal state (Active=false). A response with Active=true and an empty OperationID is invalid and must trigger the indeterminate recovery behavior defined by REQ-011.
+
     type ResultEnvelope struct {
     	Version     string          `json:"version"`
     	CorrelationID string          `json:"correlation_id"`
     	Target      string          `json:"target"`
     	CommandType string          `json:"command_type"`
     	OperationID string          `json:"operation_id,omitempty"` // Mandatory for upgrade results
-    	UUID        string          `json:"uuid,omitempty"` // Omitted for Action
+    	UUID        int64          `json:"uuid,omitempty"` // Omitted for Action
     	Result      ResultType      `json:"result"`
     	Message     string          `json:"message"`
+    	Payload     json.RawMessage `json:"payload,omitempty"` // Command-specific data (e.g. latency, result_64)
     	Timestamp   string          `json:"timestamp"`
     }
     // Note: For upgrade results, operation_id is mandatory. For non-upgrade commands, operation_id may be omitted.
@@ -145,7 +464,7 @@ TIP-olg-ucentral-client/
     ```go
     package contracts
 
-    type ResultType string
+        type ResultType string
 
     const (
     	ResultSuccess        ResultType = "success"
@@ -162,9 +481,8 @@ TIP-olg-ucentral-client/
     type ConnectionState string
 
     const (
-    	StateOffline             ConnectionState = "offline"
-    	StateProtocolNegotiating ConnectionState = "protocol_negotiating"
-    	StateOperational         ConnectionState = "operational"
+    	StateOffline         ConnectionState = "offline"
+    	StateOperational     ConnectionState = "operational"
     	StateCloudDegraded   ConnectionState = "cloud_degraded"
     	StateNATSDegraded    ConnectionState = "nats_degraded"
     	StateProtocolFailure ConnectionState = "protocol_failure"
@@ -178,19 +496,9 @@ TIP-olg-ucentral-client/
     	LinkConnected  LinkState = "connected"
     )
 
-    type NegotiationState string
-
-    const (
-    	NegotiationNotStarted NegotiationState = "not_started"
-    	NegotiationInProgress NegotiationState = "in_progress"
-    	NegotiationReady      NegotiationState = "ready"
-    	NegotiationFailed     NegotiationState = "failed"
-    )
-
     type ConnectionStatus struct {
     	Cloud       LinkState
     	NATS        LinkState
-    	Negotiation NegotiationState
     	Global      ConnectionState
     }
     ```
@@ -318,7 +626,7 @@ TIP-olg-ucentral-client/
     func (d *NATSDispatchBuffer) Pop(ctx context.Context) ([]byte, error)
 
     // ErrQueueFull is returned when a push fails due to the non-blocking capacity limit.
-    var ErrQueueFull = errors.New("command result queue is at maximum capacity")
+    var ErrQueueFull = errors.New("queue is at maximum capacity")
 
     // CommandResultQueue acts as a bounded, high-priority ingress buffer for JSON-RPC 
     // command execution results arriving from the downstream NATS agents.
@@ -342,14 +650,14 @@ If `Push()` returns `ErrQueueFull`, the subscriber must not silently discard the
 1. Record the `command_result_overflow` metric.
 2. Log the correlation ID, command type, and NATS subject.
 3. Construct a JSON-RPC error response using `-32603` with `error.data.application_code = 7` (`Result Delivery Failed`).
-4. Call the existing `RequestManager.Fail(correlationID, errResponse)` method.
+4. Call `RequestManager.TerminalFailWithoutEnqueue(correlationID, errResponse)` method.
 
-`RequestManager.Fail()` performs the normal terminal transaction processing, including caching the Cloud response, removing the active transaction, releasing any state-changing lock held by that transaction, and submitting the finalized response to the Priority 0 WebSocket outbound scheduler.
+`RequestManager.TerminalFailWithoutEnqueue()` performs the normal terminal transaction processing (caching the Cloud response, removing the active transaction, releasing any state-changing lock) but deliberately avoids submitting the finalized response to the Priority 0 WebSocket scheduler.
 
 The error represents a local result-processing failure. It must not report that the downstream operation itself failed, because the downstream operation may already have completed. If the result payload cannot be decoded or its `correlation_id` does not match an active transaction, it may be discarded only after logging and metric emission.
-*   **Telemetry Throttling (Activation & Release):** The Main loop polls `Utilization()` before processing telemetry.
-    *   **Activation:** If `Utilization() >= 0.90` (90% capacity, e.g., 45/50 items), the daemon engages telemetry throttling, pausing all reads from the `TelemetryRingBuffer`.
-    *   **Release:** Throttling remains engaged until `Utilization() <= 0.50` (queue drops to 50% capacity), creating a hysteresis loop to prevent rapid toggling, at which point telemetry forwarding resumes.
+*   **Telemetry and Log Throttling (Activation & Release):** The Main loop polls `Utilization()` before processing telemetry or standard logs.
+    *   **Activation:** If `Utilization() >= 0.90` (90% capacity, e.g., 45/50 items), the daemon engages throttling, pausing all reads of both telemetry and standard logs from the `TelemetryRingBuffer` (which is shared by both streams).
+    *   **Release:** Throttling remains engaged until `Utilization() <= 0.50` (queue drops to 50% capacity), creating a hysteresis loop to prevent rapid toggling, at which point telemetry and log forwarding resumes.
 
 ---
 
@@ -416,6 +724,8 @@ The error represents a local result-processing failure. It must not report that 
     // by the dedicated result-processing loop or by a NATS subscriber when enqueueing
     // a correlated result fails.
     func (m *DefaultRequestManager) Complete(correlationID string, response []byte) error
+    func (m *DefaultRequestManager) RespondAndRetain(correlationID string, response []byte) error
+    func (m *DefaultRequestManager) TerminalFailWithoutEnqueue(correlationID string, errResponse []byte) error
     func (m *DefaultRequestManager) Fail(correlationID string, errResponse []byte) error
     func (m *DefaultRequestManager) Timeout(correlationID string) error
     func (m *DefaultRequestManager) Cancel(correlationID string) error
@@ -461,10 +771,17 @@ The error represents a local result-processing failure. It must not report that 
     // OperationStore tracks long-running active operations (like firmware upgrades).
     // Contract: Implementations must preserve active operation records across daemon process termination
     // and host reboot. An in-memory-only implementation does not satisfy this interface contract.
+    //
+    // Terminal Lifecycle:
+    // When a terminal downstream status is received, the daemon first saves the operation
+    // with Active=false and its terminal Stage/Status. After the final Cloud response or progress
+    // notification has been successfully queued and the TransactionCache entry has been stored,
+    // the daemon deletes the OperationStore record. GetActive() must return only records where Active=true. On startup, the daemon must recover both Active=true records and Active=false records (via GetPendingTerminalDelivery) to resume Cloud delivery before deleting them.
     type OperationStore interface {
     	Save(ctx context.Context, operation *PersistentOperation) error
     	Get(ctx context.Context, operationID string) (*PersistentOperation, error)
     	GetActive(ctx context.Context) (*PersistentOperation, error)
+    	GetPendingTerminalDelivery(ctx context.Context) ([]*PersistentOperation, error)
     	Delete(ctx context.Context, operationID string) error
     }
     ```
@@ -530,9 +847,30 @@ The error represents a local result-processing failure. It must not report that 
     func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *ActionCommand, replyTo string) error
     func (n *NATSClient) SubscribeCommandReplies(inbox string, handler func(msg *nats.Msg)) (*nats.Subscription, error)
 
+    // Query Envelopes
+    type CloudCapabilitiesQuery struct {
+        Version       string `json:"version"`
+        CorrelationID string `json:"correlation_id"`
+        Target        string `json:"target"`
+        CommandType   string `json:"command_type"`
+        Action        string `json:"action"`
+        Timestamp     string `json:"timestamp"`
+    }
+
+    type CloudDeviceStatusQuery struct {
+        Version       string `json:"version"`
+        CorrelationID string `json:"correlation_id"`
+        OperationID   string `json:"operation_id,omitempty"`
+        Target        string `json:"target"`
+        CommandType   string `json:"command_type"`
+        Action        string `json:"action"`
+        Timestamp     string `json:"timestamp"`
+    }
+
     // Synchronous Read-Only Queries (blocks waiting for ResultEnvelope)
-    func (n *NATSClient) QueryCapabilities(ctx context.Context, serial string, correlationID string) (*contracts.ResultEnvelope, error)
-    func (n *NATSClient) QueryDeviceStatus(ctx context.Context, serial string, correlationID string) (*contracts.DeviceStatus, error)
+    // QueryCapabilities returns a ResultEnvelope whose Payload must be deserialized into a DeviceCapabilities struct.
+    func (n *NATSClient) QueryCapabilities(ctx context.Context, query *contracts.CloudCapabilitiesQuery) (*contracts.ResultEnvelope, error)
+    func (n *NATSClient) QueryDeviceStatus(ctx context.Context, query *contracts.CloudDeviceStatusQuery) (*contracts.DeviceStatus, error)
 
     // Streaming & Data Subscriptions
     func (n *NATSClient) SubscribeTelemetry(serial string, handler func(msg *nats.Msg)) (*nats.Subscription, error)
@@ -542,19 +880,7 @@ The error represents a local result-processing failure. It must not report that 
     func (n *NATSClient) WriteDesiredConfig(ctx context.Context, serial string, config []byte) (uint64, error)
     func (n *NATSClient) GetDesiredConfigMetadata(ctx context.Context, serial string) (uint64, string, error)
     
-    type DeviceStatus struct {
-    	Version     string          `json:"version"`
-    	CorrelationID string          `json:"correlation_id,omitempty"`
-    	OperationID string          `json:"operation_id,omitempty"` // Identifies the long-running async operation
-    	Target      string          `json:"target"`
-    	Operation string          `json:"operation,omitempty"`
-    	Active    bool            `json:"active,omitempty"`
-    	Stage     string          `json:"stage,omitempty"`
-    	Status    string          `json:"status"`
-    	Message   string          `json:"message,omitempty"`
-    	Timestamp   string          `json:"timestamp"`
-    }
-    // Note: If a response relates to a specific upgrade operation, OperationID must be non-empty, even if it is a terminal state (Active=false). A response with Active=true and an empty OperationID is invalid and must trigger the indeterminate recovery behavior defined by REQ-011.
+
     ```
 
 The uCentral client must not register a NATS responder for `ucentral.v1.device.<own-serial>.status.get`. This subject is queried by the uCentral client and served by the downstream device/local agent.

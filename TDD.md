@@ -11,16 +11,16 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-028` (NATS Envelope Serialization Contract)
     *   *Setup:* Create instances of `ConfigureCommand`, `ActionCommand`, and `ResultEnvelope`.
     *   *Assert:* Marshalling to JSON must produce exact keys for each envelope type:
-        *   `ActionCommand`: `version`, `correlation_id`, `target`, `command_type`, `action`, `payload`, `timestamp`. Must conditionally verify that `operation_id` is serialized if the action is `upgrade`.
+        *   `ActionCommand`: `version`, `correlation_id`, `target`, `command_type`, `action`, `payload`, `timestamp`. Must assert that if `payload` is nil, it is correctly omitted or formatted. Furthermore, if `action` is `upgrade` and `operation_id` is empty, serialization must fail explicitly.
         *   `ConfigureCommand`: `version`, `correlation_id`, `target`, `uuid`, `kv_key`, `kv_revision`, `timestamp`. Must assert that the raw `payload` is absent.
-        *   `ResultEnvelope`: `version`, `correlation_id`, `target`, `command_type`, `result`, `message`, `timestamp`. Additionally verify that `operation_id` is serialized for upgrade operations, `uuid` is serialized for configure operations, and omitted fields are absent from the JSON.
+        *   `ResultEnvelope`: `version`, `correlation_id`, `target`, `command_type`, `result`, `message`, `timestamp`. Verify payload is serialized for command-specific results such as script, certupdate, ping, and wifiscan, and omitted when empty. Additionally verify that `operation_id` is serialized for upgrade operations, `uuid` is serialized for configure operations, and omitted fields are absent from the JSON.
 *   **TC-CON-002 (Error Mappings):**
     *   *Requirement Mapping:* `REQ-021` (JSON-RPC Error Mapping)
     *   *Setup:* Pass internal error enum `ErrServiceUnavailable` to JSON-RPC error encoder helper.
     *   *Assert:* Encoder must output JSON-RPC error payload with `code = -32603` (Internal Error) and `data.application_code` equal to `3` (Local Service Unavailable).
-*   **TC-CON-003 (Version Negotiation Fallback):**
-    *   *Requirement Mapping:* `REQ-003` (Version Negotiation Fallback)
-    *   *Setup:* Initiate a mock WebSocket connection offering only `v2` protocol, while the client is configured for `v1` only.
+*   **TC-CON-003 (Version Verification Fallback):**
+    *   *Requirement Mapping:* `REQ-003` (Version Verification Fallback)
+    *   *Setup:* Initiate a mock WebSocket connection, transmit `connect.capabilities` with client supported versions, and simulate the Cloud returning an explicitly defined fatal version-rejection response.
     *   *Assert:* Client must transition to `ProtocolFailure` state, remain connected for health reporting, and return `local_service_unavailable` (JSON-RPC code -32603, application_code 3) for configuration/action commands.
 *   **TC-VAL-001 (Permissive Parameter Validation):**
     *   *Requirement Mapping:* `REQ-005` (Permissive Parameter Validation)
@@ -47,7 +47,58 @@ This document details the test plans, test cases, and verification strategies fo
         * For (2), the client must execute the command but send no WebSocket response, internally generating a unique correlation ID to safely acquire locks and prevent transaction collisions.
         * For (3), the client must reject the request with `-32600` or `-32700` and return `id: null`.
         * For (4), the client must not re-execute the command and must replay the cached JSON-RPC response.
-
+*   **TC-CON-006 (OWGW Configure Request and Response Contract):**
+    *   *Requirement Mapping:* `REQ-031` (OWGW Configure Protocol Compatibility)
+    *   *Setup:* Send various JSON-RPC `configure` requests: (1) Numeric vs string `uuid`, (2) valid uncompressed `config` vs valid `compress_64`, (3) simultaneous `config` and `compress_64`, (4) neither `config` nor `compress_64` present, (5) valid `compress_64` with mismatched `compress_sz`, (6) valid `compress_64` that decompresses to >10MB, (7) invalid base64/zlib data, (8) any non-zero `when` value. Then, mock internal `ResultEnvelope` statuses (success, substitution, full rejection) to trigger response formatting.
+    *   *Assert:* (1) String `uuid` is rejected, numeric is accepted. (2) Standard and compressed configs are properly parsed, and the decompressed `compress_64` content is successfully reparsed as the complete configure `params` object containing `serial`, `uuid`, `when`, and `config`. (3) Simultaneous fields yield Invalid Params. (4) Neither field yields Invalid Params. (5) `compress_sz` mismatch yields Invalid Params. (6) >10MB decompressed output is rejected before full allocation. (7) Invalid compression yields Invalid Params. (8) Any non-zero `when` yields Invalid Params. For responses: Internal success maps to `status.error = 0`, substitutions map to `1`, full rejection maps to `2`, `status.when` is present, `uuid` is numeric, and the original JSON-RPC `id` is preserved.
+*   **TC-ACT-001 (OWGW Reboot Request and Response Contract):**
+    *   *Requirement Mapping:* `REQ-033` (OWGW Reboot Protocol Compatibility)
+    *   *Setup:* Send JSON-RPC `reboot` requests: (1) Missing/zero `when`, (2) non-zero `when`. Then mock internal NATS `ResultEnvelope` statuses (success, busy, rejected).
+    *   *Assert:* (1) Missing/zero `when` is accepted. (2) Non-zero `when` is rejected with Invalid Params. For responses: Internal success maps to `status.error = 0`, busy maps to `1`, rejection maps to `2`. Ensure the response contains nested `status.when` and preserves the original JSON-RPC `id`.
+*   **TC-ACT-002 (OWGW Factory Request and Response Contract):**
+    *   *Requirement Mapping:* `REQ-034` (OWGW Factory Protocol Compatibility)
+    *   *Setup:* Send JSON-RPC `factory` requests: (1) Missing/zero `when`, (2) non-zero `when`, (3) missing `keep_redirector`, (4) `keep_redirector` = 0, (5) `keep_redirector` = 1, (6) invalid `keep_redirector` (e.g. 2). Then mock internal NATS `ResultEnvelope` statuses (success, busy, rejected).
+    *   *Assert:* (1) Missing/zero `when` is accepted. (2) Non-zero `when` yields Invalid Params. (3) Missing `keep_redirector` yields Invalid Params. (4,5) `keep_redirector` values 0 and 1 are accepted. (6) Invalid `keep_redirector` yields Invalid Params. The `keep_redirector` field must be preserved in the `action: "factory"` NATS payload. For responses: Internal success maps to `status.error = 0`, busy maps to `1`, rejection maps to `2`. Ensure the response preserves the original JSON-RPC `id` and serial.
+*   **TC-ACT-004 (OWGW Wifiscan Request Contract):**
+    *   *Requirement Mapping:* `REQ-035`
+    *   *Setup:* Send JSON-RPC `wifiscan` requests with valid parameters, missing parameters, mutually exclusive `bands`/`channels`, and test `bandwidth` and `ies` limits. Mock NATS `scan` results.
+    *   *Assert:* Invalid combinations return Invalid Params. Valid requests map exactly to `ActionCommand.payload` without `serial`. Resulting scan data preserves the JSON-RPC `scan` as an arbitrary JSON document without forcing it to be an array.
+*   **TC-ACT-005 (OWGW Trace Request Contract):**
+    *   *Requirement Mapping:* `REQ-036`
+    *   *Setup:* Send JSON-RPC `trace` requests with `duration`, `packets`, `network`, `interface`, and `uri`.
+    *   *Assert:* Request maps exactly to NATS payload. Returns trace status object.
+*   **TC-ACT-006 (OWGW Ping Request Contract):**
+    *   *Requirement Mapping:* `REQ-037`
+    *   *Setup:* Send JSON-RPC `ping` requests. Mock NATS response with ping info.
+    *   *Assert:* Request maps to NATS payload. Response properly translates `serial`, `uuid`, and `deviceUTCTime` without mapping arbitrary internal strings.
+*   **TC-ACT-007 (OWGW LEDs Request Contract):**
+    *   *Requirement Mapping:* `REQ-038`
+    *   *Setup:* Send JSON-RPC `leds` requests with varied `pattern` and `duration`.
+    *   *Assert:* Request maps exactly to NATS payload. Returns LED status object.
+*   **TC-ACT-008 (OWGW RRM Request Contract):**
+    *   *Requirement Mapping:* `REQ-039`
+    *   *Setup:* Send JSON-RPC `rrm` requests.
+    *   *Assert:* Request maps exactly to NATS payload. Returns RRM status object.
+*   **TC-ACT-009 (OWGW Telemetry Request Contract):**
+    *   *Requirement Mapping:* `REQ-040`
+    *   *Setup:* Send JSON-RPC `telemetry` requests with various `interval` and `types`.
+    *   *Assert:* Validation must strictly enforce `0 <= interval <= 60`, `types` length between 1 and 2, exact match for "dhcp" or "rrm", and no duplicates. Valid requests map exactly to NATS payload. Returns telemetry status object.
+*   **TC-ACT-010 (OWGW Remote Access / RTTY Request Contract):**
+    *   *Requirement Mapping:* `REQ-041`
+    *   *Setup:* Send JSON-RPC `remote_access` requests testing `method="rtty"`, exact `token`, `server`, `port` fields. Mock response with optional `meta`.
+    *   *Assert:* Non-"rtty" methods or missing mandatory fields return Invalid Params. Valid requests map exactly to NATS `action: "rtty"` payload. Returns remote_access status object while correctly preserving optional `meta`.
+*   **TC-ACT-011 (OWGW Certupdate Request and Response Contract):**
+    *   *Requirement Mapping:* `REQ-042`
+    *   *Setup:* Send JSON-RPC `certupdate` request containing base64 encoded certificates payload.
+    *   *Assert:* Request maps exactly to NATS `action: "certupdate"`. Response must translate NATS result to `error` and `txt` properties. Validates: (1) malformed base64 returns Invalid Params, (2) decoded bundle over 2 MB returns Invalid Params, (3) valid base64 remains unchanged in `ActionCommand.payload`, and (4) certificate data never appears in logs.
+*   **TC-ACT-012 (OWGW Reenroll Request and Response Contract):**
+    *   *Requirement Mapping:* `REQ-043`
+    *   *Setup:* Send JSON-RPC `reenroll` requests in parallel with other state-changing requests like `reboot`.
+    *   *Assert:* missing/0 `when` is accepted, nonzero `when` returns Invalid Params. Reenroll must strictly acquire the serialization state lock. Assert correct conversion into `ActionCommand` and accurate translation of NATS `error` / `txt` responses.
+*   **TC-ACT-013 (OWGW Script Request and Response Contract):**
+    *   *Requirement Mapping:* `REQ-044`
+    *   *Setup:* Send JSON-RPC `script` requests with combinations: (1) valid base64 script, (2) invalid base64 script, (3) `scriptId` included (must be rejected as non-standard), (4) invalid type, (5) invalid URI, (6) oversized script. Mock various results (timeout, gzipped result).
+    *   *Assert:* Must enforce strict base64 decoding validation and forbid `scriptId`. Scenarios 2, 3, 4, 5, and 6 return Invalid Params. Scenario 1 maps exactly to NATS payload. Validate execution timeout errors. Translate NATS response formats properly into `error`, `result_64`, `result_sz`, or `result`. Verify sensitive script contents or execution logs are not printed to audit stream.
 ---
 
 ## Epic 2: Traffic Queues & Priority Scheduler
@@ -103,14 +154,18 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-024` (Payload Compression)
     *   *Setup:* Set `compression_threshold_bytes` to 2048. Generate a payload of size 1024 bytes and another of size 3072 bytes.
     *   *Assert:* The 1024-byte payload must be sent uncompressed. The 3072-byte payload must be gzipped before WebSocket transmission.
+*   **TC-QUE-003 (Priority 3 Read Hysteresis for Telemetry and Logs):**
+    *   *Requirement Mapping:* `REQ-013` (Command Result Priority Queue)
+    *   *Setup:* Fill the Command Result Priority queue beyond its critical threshold. While in this state, attempt to poll `TelemetryRingBuffer` for both telemetry and log events. Drain the Command Result queue below its resume threshold and poll again.
+    *   *Assert:* Reads from `TelemetryRingBuffer` must return empty/block while the result queue is critical. Reads must resume yielding events once the result queue drains below the hysteresis threshold. This throttling must apply equally to telemetry and logs.
 *   **TC-BUF-006 (Command Result Queue Non-Blocking):**
     *   *Requirement Mapping:* `REQ-013` (Command Result Priority Queue)
     *   *Setup:* Fill the NATS command result queue (capacity 50) to maximum capacity. Attempt to publish execution results from downstream agent loops.
     *   *Assert:* Outbound WebSocket writes or telemetry delays must not block the core NATS listener loops, ensuring execution results are processed asynchronously and independently.
 *   **TC-BUF-007 (Outbound Rate Limiting, Drop Metrics & Coalescing):**
     *   *Requirement Mapping:* `REQ-015` (State Coalescer & Telemetry Ring Buffer)
-    *   *Setup:* Push 60 telemetry events within 1 second. Push 2 state updates within 5 seconds.
-    *   *Assert:* Outbound scheduler must rate-limit telemetry to 50 events/second (dropping 10 events) and state reports to 1 per 10 seconds. Verify that dropped events correctly increment the `dropped_by_reason` metric map using the standardized keys `rate_limited`, `scheduler_full`, and `cloud_disconnected` as applicable.
+    *   *Setup:* Rapidly push 60 telemetry events within 1 second into the `TelemetryRingBuffer` and 2 state updates within 5 seconds into the `StateCoalescer`.
+    *   *Assert:* The producer/drain layer must rate-limit telemetry to 50 events/second (dropping 10 events) and state reports to 1 per 10 seconds before submitting them to the `OutboundScheduler`. The scheduler itself must not enforce these limits. Verify that dropped events correctly increment the `dropped_by_reason` metric map.
 
 ---
 
@@ -131,12 +186,16 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Assert:* Transaction `query-1` must succeed and run in parallel (no busy error).
 *   **TC-UPG-001 (Asynchronous Upgrade Progress Stream):**
     *   *Requirement Mapping:* `REQ-011` (Asynchronous Upgrade Tracking)
-    *   *Setup:* Start an upgrade transaction.
-    *   *Assert:* Client must immediately return an initial "started" status response and close the initial JSON-RPC request-reply exchange, while the background upgrade operation remains active and logs continue to flow over NATS to the Cloud until a terminal state is reached.
+    *   *Setup:* Start an upgrade transaction. Test two cases: (A) Gateway does not advertise `upgrade_progress` support, (B) Gateway advertises `upgrade_progress` support.
+    *   *Assert:* In both cases, the client must immediately return an initial "started" status response matching the `CloudUpgradeResponse` schema (with `status.error = 0`). The initial JSON-RPC exchange must be closed while the background upgrade operation remains active. For case A, the client must NOT send any `upgrade_progress` notifications. For case B, optional progress notifications matching the `CloudUpgradeProgressNotification` schema may be emitted.
 *   **TC-UPG-002 (Upgrade Crash Recovery via Durable Store and Status Query):**
     *   *Requirement Mapping:* `REQ-011`
     *   *Setup:* Simulate a daemon crash/restart while an upgrade is active downstream. Populate `OperationStore` with an active operation record. Mock a downstream device/local-agent responder on `ucentral.v1.device.<own-serial>.status.get`.
     *   *Assert:* On boot, the daemon must load the `OperationStore` to recover the Cloud JSON-RPC `id` and immediately re-acquire the in-memory `activeStateTx` lock. It must then publish a request to `status.get` generating a **fresh internal `correlation_id`**, receive the downstream status response, correlate it using the persisted `operation_id`, and release the lock if a terminal state is reached. If the downstream reports active but omitting `operation_id`, the daemon must not generate a replacement ID and must retain the lock as an indeterminate error. The uCentral client itself must not subscribe to or respond on `status.get`.
+*   **TC-UPG-003 (Pending Terminal Delivery Crash Recovery):**
+    *   *Requirement Mapping:* `REQ-011`
+    *   *Setup:* Simulate a daemon crash after an upgrade is saved with `Active=false` but before the final Cloud delivery or cache population. On restart, populate `OperationStore` with this terminal record.
+    *   *Assert:* On boot, `GetPendingTerminalDelivery()` must return the terminal record. The daemon must then successfully enqueue any optional negotiated notifications, store the terminal status internally, and finally delete the record from `OperationStore`.
 
 ### PR 3.2: Duplicate Attachment & Cache TTL Tests
 *   **TC-RM-004 (Duplicate Active Request Rejection):**
@@ -164,7 +223,7 @@ This document details the test plans, test cases, and verification strategies fo
 *   **TC-NET-001 (Randomized Reconnect Backoff):**
     *   *Requirement Mapping:* `REQ-002` (Reconnection State Machine)
     *   *Setup:* Instantiate reconnection backoff loops. Simulate connection drops.
-    *   *Assert:* Reconnect delays must fall within exponential bounds (e.g. attempt 2 delay is between `3.6s` and `4.8s` given base `4s` and `10-20%` randomized jitter).
+    *   *Assert:* Reconnect delays must fall within exponential bounds (e.g. attempt 2 delay is between `4.0s` and `4.8s` given base `4s` and `10-20%` randomized additive jitter).
 
 ### PR 4.2: NATS Integration Client Tests
 *   **TC-NET-003 (JetStream KV Revision Guard & Trigger Contract):**
@@ -204,20 +263,19 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Assert:* The client must retry capability retrieval with bounded backoff until successful. Once the cache is successfully populated, no new fetch must be triggered on subsequent NATS reconnect events. Simulate a local Unix socket capabilities refresh command; the capabilities must be updated.
 *   **TC-NET-010 (Independent Connection-State Transitions):**
     *   *Requirement Mapping:* `REQ-002`
-    *   *Setup:* Independently change Cloud, NATS, and protocol-negotiation states.
+    *   *Setup:* Independently change Cloud, NATS, and protocol verification states.
     *   *Assert:*
-        * Cloud Connected + NATS Connected + Negotiation Ready = `Operational`.
-        * Cloud Connected + NATS Connected + (Negotiation NotStarted or InProgress) = `ProtocolNegotiating`.
+        * Cloud Connected + NATS Connected = `Operational`.
         * Cloud Offline/Connecting + NATS Connected = `CloudDegraded`.
-        * Cloud Connected + NATS Offline/Connecting + (Negotiation Ready or NotStarted or InProgress) = `NATSDegraded`.
+        * Cloud Connected + NATS Offline/Connecting = `NATSDegraded`.
         * Neither connection Connected = `Offline`.
-        * Cloud Connected + Negotiation Failed = `ProtocolFailure` (takes strict precedence regardless of NATS state).
+        * Cloud Connected + Protocol Verification Failed = `ProtocolFailure` (takes strict precedence regardless of NATS state).
         * Losing Cloud does not change or reconnect the NATS link.
         * Losing NATS does not change or reconnect the Cloud link.
 *   **TC-NET-011 (Unix Socket Rate Limiting & Auditing):**
     *   *Requirement Mapping:* `REQ-017` (Local Management Signal Security), `REQ-018` (Audit Logging & Loop Prevention)
-    *   *Setup:* Send 10 capability refresh requests to the Unix socket in 1 second. Trigger sensitive actions (`reboot`, `factory`, `upgrade`).
-    *   *Assert:* The Unix socket listener must rate-limit and reject excess refresh requests. Sensitive actions must successfully emit high-severity audit logs to the Cloud.
+    *   *Setup:* Send 10 capability refresh requests to the Unix socket in 1 second. Trigger sensitive actions (`reboot`, `factory`, `upgrade`, `certupdate`, `reenroll`, `script`).
+    *   *Assert:* The Unix socket listener must rate-limit and reject excess refresh requests. Sensitive actions must successfully emit high-severity audit logs to the Cloud while guaranteeing the complete redaction of certificate contents, script source, script signatures, and script output.
 *   **TC-NET-012 (Syslog-Triggered Capability Refreshes):**
     *   *Requirement Mapping:* `REQ-022` (Capability Caching & Lifecycle)
     *   *Setup:* Input a syslog message indicating a firmware version change, and a NATS message indicating an upgrade reboot log.
@@ -256,7 +314,10 @@ This document details the test plans, test cases, and verification strategies fo
 ## Epic 6: Requirements Traceability Matrix
 
 | Requirement ID | Requirement Name | Mapping Test Case(s) |
-| :--- | :--- | :--- |
+| :
+--- | :
+--- | :
+--- |
 | **REQ-001** | Concurrent Startup Loops | `TC-INT-003` |
 | **REQ-002** | Reconnection State Machine | `TC-NET-001`, `TC-NET-010`, `TC-INT-003` |
 | **REQ-003** | Version Negotiation Fallback | `TC-CON-003` |
@@ -267,9 +328,9 @@ This document details the test plans, test cases, and verification strategies fo
 | **REQ-008** | Concurrency Serialization | `TC-RM-002`, `TC-RM-003` |
 | **REQ-009** | Duplicate Active Request Rejection | `TC-RM-004` |
 | **REQ-010** | Operation-Specific Caching & TTL | `TC-RM-005` |
-| **REQ-011** | Asynchronous Upgrade Tracking & Crash Recovery | `TC-UPG-001`, `TC-UPG-002` |
+| **REQ-011** | Asynchronous Upgrade Tracking & Crash Recovery | `TC-UPG-001`, `TC-UPG-002`, `TC-UPG-003` |
 | **REQ-012** | Command Dispatch Buffer | `TC-BUF-003` |
-| **REQ-013** | Command Result Priority Queue | `TC-QUE-001`, `TC-BUF-006`, `TC-QUE-002` |
+| **REQ-013** | Command Result Priority Queue | `TC-QUE-001`, `TC-QUE-002`, `TC-QUE-003`, `TC-BUF-006` |
 | **REQ-014** | WebSocket Outbound Priority Scheduler | `TC-SCH-001`, `TC-SCH-002`, `TC-SCH-003`, `TC-SCH-004`, `TC-SCH-005`, `TC-SCH-006`, `TC-INT-004` |
 | **REQ-015** | State Coalescer & Telemetry Ring Buffer | `TC-BUF-001`, `TC-BUF-002`, `TC-BUF-007` |
 | **REQ-016** | NATS Security & Target Isolation | `TC-SEC-001` |
@@ -287,3 +348,17 @@ This document details the test plans, test cases, and verification strategies fo
 | **REQ-028** | NATS Envelope Serialization Contract | `TC-CON-001` |
 | **REQ-029** | Graceful Teardown | `TC-INT-001` |
 | **REQ-030** | Startup Configuration Validation | `TC-INT-005` |
+| **REQ-031** | OWGW Configure Protocol Compatibility | `TC-CON-006` |
+| **REQ-032** | Out of Scope Features | N/A |
+| **REQ-033** | OWGW Reboot Protocol Compatibility | `TC-ACT-001` |
+| **REQ-034** | OWGW Factory Protocol Compatibility | `TC-ACT-002` |
+| **REQ-035** | OWGW Wifiscan Protocol Compatibility | `TC-ACT-004` |
+| **REQ-036** | OWGW Trace Protocol Compatibility | `TC-ACT-005` |
+| **REQ-037** | OWGW Ping Protocol Compatibility | `TC-ACT-006` |
+| **REQ-038** | OWGW LEDs Protocol Compatibility | `TC-ACT-007` |
+| **REQ-039** | OWGW RRM Protocol Compatibility | `TC-ACT-008` |
+| **REQ-040** | OWGW Telemetry Protocol Compatibility | `TC-ACT-009` |
+| **REQ-041** | OWGW RTTY Protocol Compatibility | `TC-ACT-010` |
+| **REQ-042** | OWGW Certupdate Protocol Compatibility | `TC-ACT-011` |
+| **REQ-043** | OWGW Reenroll Protocol Compatibility | `TC-ACT-012` |
+| **REQ-044** | OWGW Script Protocol Compatibility | `TC-ACT-013` |

@@ -45,7 +45,7 @@ To decouple message routing from request lifecycles, the uCentral Client include
 *   **Correlation Tracking:** Maps outgoing NATS commands to incoming Cloud JSON-RPC requests using request IDs.
 *   **Deduplication & Cache:** Handles duplicate requests and caches responses.
 *   **Request Timeouts:** Enforces timeouts using non-blocking timers and triggers failure responses if local components do not respond in time.
-*   **Retry Handling:** Automates transaction retries for transient failures. Only idempotent, read-only downstream queries, such as `capabilities.get` and `status.get`, are retryable for transient failures, using a randomized exponential backoff (e.g., base 2s, max 3 attempts). State-changing actions (`configure`, `reboot`, `factory`, `upgrade`) must fail fast without automatic retries. The `status.get` subject is owned by the downstream device/local agent; the uCentral client publishes requests to it and must not subscribe to or respond on it.
+*   **Retry Handling:** Automates transaction retries for transient failures. Only idempotent, read-only downstream queries, such as `capabilities.get` and `status.get`, are retryable for transient failures, using a randomized exponential backoff (e.g., base 2s, max 3 attempts). State-changing and security-sensitive actions (`configure`, `reboot`, `factory`, `upgrade`, `certupdate`, `reenroll`, `script`) must fail fast without automatic retries. The `status.get` subject is owned by the downstream device/local agent; the uCentral client publishes requests to it and must not subscribe to or respond on it.
 *   **Metrics Collection:** Tracks latencies, throughputs, and success/error rates per command.
 
 ---
@@ -63,7 +63,7 @@ To ensure interoperability, the uCentral client standardizes on standard envelop
   "version": "1.0",
   "correlation_id": "8bc92d11-536c-4860-9d8a-6809694b78ba",
   "target": "00:11:22:33:44:55",
-  "uuid": "1687588800",
+  "uuid": 1687588800,
   "kv_key": "desired.00:11:22:33:44:55",
   "kv_revision": 42,
   "timestamp": "2026-06-25T12:00:00Z"
@@ -78,8 +78,25 @@ To ensure interoperability, the uCentral client standardizes on standard envelop
   "target": "00:11:22:33:44:55",
   "command_type": "action",
   "action": "reboot",
-  "payload": { ... },
+  "payload": {
+    "when": 0
+  },
   "timestamp": "2026-06-25T12:01:00Z"
+}
+```
+
+```json
+{
+  "version": "1.0",
+  "correlation_id": "d249e7e0-96f1-5433-a38c-34fcfdf737d1",
+  "target": "00:11:22:33:44:55",
+  "command_type": "action",
+  "action": "factory",
+  "payload": {
+    "keep_redirector": 1,
+    "when": 0
+  },
+  "timestamp": "2026-06-25T12:02:00Z"
 }
 ```
 
@@ -91,7 +108,7 @@ To ensure interoperability, the uCentral client standardizes on standard envelop
   "correlation_id": "8bc92d11-536c-4860-9d8a-6809694b78ba",
   "target": "00:11:22:33:44:55",
   "command_type": "configure",
-  "uuid": "1687588800",
+  "uuid": 1687588800,
   "result": "success",
   "message": "Configuration applied and saved successfully.",
   "timestamp": "2026-06-25T12:00:15Z"
@@ -130,7 +147,8 @@ sequenceDiagram
     participant NATS as NATS Bus
     participant VyOS as VyOS NATS Client
 
-    GoClient->>NATS: Request 'capabilities.get' (payload empty)
+    GoClient->>Cloud: WebSocket 'connect'
+    GoClient->>NATS: Request 'capabilities.get' (with CloudCapabilitiesQuery envelope)
     NATS->>VyOS: Deliver Request
     VyOS->>VyOS: Read local capabilities
     VyOS-->>NATS: Reply: JSON capability payload
@@ -181,9 +199,9 @@ stateDiagram-v2
 ### 3.2 Concurrency & Serialization Rules
 To protect device integrity, the client divides requests into two execution classes:
 
-1.  **State-Changing Commands (Serialized):** Commands that modify device state (`configure`, `reboot`, `factory`, `upgrade`) are **serialized** (one at a time per device).
-    *   *Rule:* If a state-changing transaction is currently `InFlight` or `PendingNATS`, any new configuration or action request (with a different Cloud `id`) is immediately rejected with a `busy` status (Error Code -32603 / Result: `busy`).
-    *   *Benefit:* Eliminates the overhead of complex command queue backlogs and prevents race conditions.
+1.  **State-Changing Commands (Serialized):** Commands that modify device state or execute sensitive operations (`configure`, `reboot`, `factory`, `upgrade`, `certupdate`, `reenroll`, `script`) are **serialized** (one at a time per device).
+    *   *Rule:* If a serialized transaction is currently `InFlight` or `PendingNATS`, any new configuration or action request (with a different Cloud `id`) is immediately rejected with a `busy` status (Error Code -32603 / Result: `busy`).
+    *   *Benefit:* Eliminates the overhead of complex command queue backlogs, ensures strict sequential application of system changes, and guarantees state mutation exclusivity.
 2.  **Read-Only Commands (Parallel):** Metadata and query operations (`capabilities.get`, `status.get`) are processed in parallel.
     *   *Rule:* Query operations do not acquire the device state lock and are published to NATS immediately, even if a configuration transaction is in progress.
     *   *Ownership:* `status.get` is a downstream device/local-agent query. The uCentral client sends the request and waits for the downstream response; it does not serve responses on this subject.
@@ -230,10 +248,10 @@ sequenceDiagram
     participant NATS as NATS Bus
     participant VyOS as VyOS NATS Client
 
-    Cloud->>GoClient: WS JSON-RPC request "configure" (uuid, config)
-    GoClient->>GoClient: Transport Validation (Syntax & Target check)
+    Cloud->>GoClient: WS JSON-RPC request "configure" (uuid, config or compress_64)
+    GoClient->>GoClient: Transport Validation (Syntax, Target & Schedule check)
     
-    alt Invalid JSON/Target
+    alt Invalid JSON/Target or Future Schedule
         GoClient-->>Cloud: JSON-RPC Error (Invalid Params)
     end
     
@@ -301,11 +319,10 @@ stateDiagram-v2
     
     state GlobalState {
         SystemConnecting --> Offline : Cloud != Connected AND NATS != Connected
-        SystemConnecting --> ProtocolNegotiating : CloudConnected + NATSConnected + (NegotiationNotStarted or NegotiationInProgress)
-        SystemConnecting --> Operational : CloudConnected + NATSConnected + NegotiationReady
-        SystemConnecting --> ProtocolFailure : CloudConnected + NegotiationFailed (Takes Precedence)
+        SystemConnecting --> Operational : CloudConnected + NATSConnected
+        SystemConnecting --> ProtocolFailure : CloudConnected + Cloud Explicitly Rejects Version (Takes Precedence)
         SystemConnecting --> CloudDegraded : (CloudOffline or CloudConnecting) + NATSConnected
-        SystemConnecting --> NATSDegraded : CloudConnected + (NATSOffline or NATSConnecting) + (NegotiationReady or NegotiationNotStarted or NegotiationInProgress)
+        SystemConnecting --> NATSDegraded : CloudConnected + (NATSOffline or NATSConnecting)
     }
 ```
 
@@ -355,7 +372,7 @@ Exposes a priority-aware message dispatch queue writing to the WebSocket connect
 ### 4.3 Rate Limiting & Sizing Constraints
 *   State updates (statistics) are rate-limited to a maximum of **one message per 10 seconds** per device.
 *   Telemetry events are rate-limited to **50 events per second**.
-*   **Max payload sizes:** Configuration: 10MB; State: 1MB; Telemetry events: 256KB; Log events: 64KB. Payloads exceeding these limits are discarded.
+*   **Max payload sizes:** Configuration: 10MB; State: 1MB; Telemetry events: 256KB; Log events: 64KB. If no valid JSON-RPC request and ID can be parsed before exceeding limits, the connection must be closed/rejected and a metric recorded. If a valid request and ID are parseable but the payload exceeds the limit, return JSON-RPC error -32602 with application code 4.
 
 ---
 
@@ -403,8 +420,8 @@ The uCentral client must not subscribe to or respond on this subject. Its own da
 
 *   **Coexistence:** Multiple version namespaces (e.g., `v1` and `v2`) can coexist on the same NATS broker. Different implementations subscribe to their specific major version prefix.
 *   **Backward Compatibility:** Within a major version namespace, backward compatibility is required. Undefined fields must be ignored by consumers, and new optional fields must be defined with safe defaults.
-*   **Version Negotiation & Fallback:** During the `connect` handshake, the uCentral client exchanges its supported subject versions (e.g. `v1`) within the `capabilities` payload. The Cloud gateway uses this information to format messages accordingly.
-    *   *Fallback rule:* If the Cloud supports `v2` only but the client supports `v1` only (or vice versa), the client remains connected but operates **only in a degraded state for health/error reporting**, rejecting all configuration and action requests with error code -32603 (`local_service_unavailable`, application_code 3).
+*   **Version Verification & Fallback:** During the `connect` handshake, the uCentral client transmits its supported subject versions (e.g. `v1`) within the `capabilities` payload. Because OWGW does not define a formal negotiation exchange, a successful `connect` response is treated as verification success.
+    *   *Fallback rule:* Only if a future Cloud extension explicitly returns a fatal version-rejection error to `connect` does the client fall back to a `ProtocolFailure` state, remaining connected for health/error reporting but rejecting all configuration and action requests with error code -32603 (`local_service_unavailable`, application_code 3).
 
 ---
 
@@ -440,3 +457,66 @@ All result structures return one of the following standard values:
 *   `stale`: A newer configuration revision has overwritten this trigger.
 *   `busy`: A transaction is currently executing on this resource.
 *   `unsupported`: The requested operation is not supported by the downstream agent.
+
+**Note on Configure Responses:** For the `configure` command, the Request Manager translates the internal NATS `ResultEnvelope` into the strict JSON-RPC schema expected by the gateway. A successful or partially successful `configure` response MUST include the nested `{"serial": "...", "uuid": 1687588800, "status": {"error": 0, "text": "...", "when": 0, "rejected": [...]}}` structure.
+
+**Configure Response Mapping:** The `configure` command requires translating internal results into the OWGW configure response schema:
+
+| Internal result                       | Cloud response                                 |
+| ------------------------------------- | ---------------------------------------------- |
+| `success`                             | `result.status.error = 0`                      |
+| `rejected`, substitutions applied     | `result.status.error = 1`                      |
+| `rejected`, configuration not applied | `result.status.error = 2`                      |
+| NATS unavailable                      | JSON-RPC error                                 |
+| timeout                               | JSON-RPC error                                 |
+| malformed request                     | JSON-RPC error                                 |
+| `rolled_back`                         | JSON-RPC error (-32603, app_code 5) *Extension*|
+| `rollback_failed`                     | JSON-RPC error (-32603, app_code 6) *Extension*|
+
+*Note: The rollback application codes are a deliberate OLG project extension beyond standard OWGW configure responses.*
+
+Example successful configure response:
+```json
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "serial": "001122334455",
+    "uuid": 1687588800,
+    "status": {
+      "error": 0,
+      "text": "Configuration applied successfully",
+      "when": 0,
+      "rejected": []
+    }
+  },
+  "id": 42
+}
+```
+
+**Reboot Response Mapping:** The `reboot` command requires translating internal results into the OWGW reboot response schema:
+
+| Internal result                       | OWGW response      |
+| ------------------------------------- | ------------------ |
+| `success`                             | `status.error = 0` |
+| `busy` but accepted for later         | `status.error = 1` |
+| `rejected` / `unsupported`            | `status.error = 2` |
+| NATS unavailable / timeout            | JSON-RPC error     |
+
+**Factory Response Mapping:** The `factory` command requires translating internal results into the OWGW factory response schema:
+
+| Internal result                       | OWGW response      |
+| ------------------------------------- | ------------------ |
+| `success`                             | `status.error = 0` |
+| `busy` but accepted for later         | `status.error = 1` |
+| `rejected` / `unsupported`            | `status.error = 2` |
+| NATS unavailable / timeout            | JSON-RPC error     |
+
+**Diagnostic Actions Mapping:** For diagnostic and general commands (`wifiscan`, `trace`, `ping`, `leds`, `rrm`, `telemetry`, and `remote_access`), the daemon will validate the request, remove the `serial` field, and represent it via the `target` parameter of the `ActionCommand`. The remaining command-specific parameters are strictly preserved in `ActionCommand.payload`.
+
+For `remote_access`, the Cloud-facing JSON-RPC method is `remote_access` and `params.method` must equal `rtty`. Internally it is translated to NATS action `rtty`.
+
+For `ping`, the downstream result is translated to the OWGW response containing `serial`, `uuid`, and `deviceUTCTime`. Internal diagnostic fields such as measured latency must not be added to the Cloud response.
+
+The `ResultEnvelope` responses from NATS for other actions are mapped to their highly specific JSON-RPC counterparts (e.g. `scan` results for `wifiscan`) rather than using a generic reboot status.
+
+**System and Security Actions Mapping:** For security-sensitive commands (`certupdate`, `reenroll`, `script`), execution policies are highly constrained. They follow the generic `ActionCommand` envelope pattern but require the Request Manager state lock, strictly prohibit automatic retries, mandate sensitive payload scrubbing/redaction from audit logging, and impose explicit execution/script size limits. Responses are mapped to precise JSON-RPC layouts (e.g., `result_64` or `result_sz` for `script`, and strict `error`/`txt` for `certupdate` and `reenroll`).

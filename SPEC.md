@@ -380,6 +380,8 @@ TIP-olg-ucentral-client/
         Timestamp   string          `json:"timestamp"`
     }
 
+    func (c *ConfigureCommand) Validate() error
+
     type ActionCommand struct {
     	Version     string          `json:"version"`
     	CorrelationID string          `json:"correlation_id"`
@@ -390,6 +392,9 @@ TIP-olg-ucentral-client/
     	Payload     json.RawMessage `json:"payload"`
     	Timestamp   string          `json:"timestamp"`
     }
+
+    // Validate enforces that all required fields are present. If Action == "upgrade", OperationID must be non-empty.
+    func (c *ActionCommand) Validate() error
 
 
     // DeviceCapabilities represents the parsed result of a capabilities query.
@@ -424,6 +429,8 @@ TIP-olg-ucentral-client/
     	Payload     json.RawMessage `json:"payload,omitempty"` // Command-specific data (e.g. latency, result_64)
     	Timestamp   string          `json:"timestamp"`
     }
+
+    func (r *ResultEnvelope) Validate() error
 
     type CloudCapabilitiesQuery struct {
     	Version       string `json:"version"`
@@ -668,7 +675,7 @@ The error represents a local result-processing failure. It must not report that 
     // |-----------------------|------------------------------------|
     // | TxCreated             | TxPreparingDispatch, TxFailed      |
     // | TxPreparingDispatch   | TxPendingPublish, TxFailed         |
-    // | TxPendingPublish      | TxInFlight, TxFailed, TxCompleted  |
+    // | TxPendingPublish      | TxInFlight, TxFailed               |
     // | TxInFlight            | TxCompleted, TxFailed, TxTimedOut  |
     //
     // Any attempt to transition an unknown/missing transaction, or to perform an
@@ -720,6 +727,7 @@ The error represents a local result-processing failure. It must not report that 
     	cache                       *TransactionCache
     	scheduler                   *PriorityScheduler
     	store                       OperationStore
+    	pendingReplies              map[string][]byte       // Key: CorrelationID
     }
 
     // CanonicalRequestKey formats the method and raw JSON-RPC ID into a strongly-typed string (e.g., "configure:number:42")
@@ -755,11 +763,12 @@ The error represents a local result-processing failure. It must not report that 
     // MarkInFlight atomically transitions from TxPendingPublish to TxInFlight, stops/invalidates the DispatchTimer, 
     // and starts the downstream response timer.
     // Timeout is invalid in TxCreated, TxPreparingDispatch, and TxPendingPublish.
-    // If a fast reply arrives before MarkInFlight completes, the result handler will transition the state to terminal.
-    // In this case, MarkInFlight must gracefully return nil instead of failing.
+    // If a fast reply was buffered in pendingReplies during TxPendingPublish, MarkInFlight MUST immediately submit it to 
+    // the terminal processing sequence after safely entering TxInFlight.
     func (m *DefaultRequestManager) MarkInFlight(correlationID string) error
     // Terminal methods (Complete, Fail, Timeout) perform terminal processing as an atomic logical sequence:
     // (1) Acquire the Request Manager mutex. Evaluate transition legality. If already terminal, return ErrAlreadyTerminal (an expected race).
+    // (1b) If the transaction is in TxPendingPublish, store the response in pendingReplies, return nil, and DO NOT proceed.
     // (2) Immediately mark the transaction state as terminal to win the race.
     // (3) Translate the downstream result and build the exact final Cloud response.
     // (4) Store the response in TransactionCache (only if RespondToCloud=true and RequestKey is valid).

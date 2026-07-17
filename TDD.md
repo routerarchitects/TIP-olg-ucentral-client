@@ -206,8 +206,8 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Assert:* Cache lookups for `configure` and `reboot` must return `false` (expired). Lookups for `factory` and `upgrade` must return `true` (cached).
 *   **TC-RM-006 (Transaction Retry Policy & Backoff):**
     *   *Requirement Mapping:* `REQ-025` (Transaction Retry Policy)
-    *   *Setup:* Mock the NATS responder to return transient errors. Submit a read-only request (`capabilities.get`) and a state-changing request (`configure`).
-    *   *Assert:* The read-only request must be retried up to 3 times with exponential backoff (e.g., first retry after ~2s, second retry after ~4s) before failing. The state-changing request must fail fast on the first error with no retries.
+    *   *Setup:* Submit a read-only request (`capabilities.get`) and a state-changing request (`configure`). For the read-only request, simulate timeouts for attempt 1 and 2. After attempt 2 times out, simulate a late downstream response for attempt 1 arriving exactly while attempt 3 is active on the wire.
+    *   *Assert:* The state-changing request must fail fast on the first error with no retries. The read-only request must retain the exact same `correlation_id` across 3 total attempts (1 initial + 2 retries). Each attempt must use an independent request timeout. The overall transaction must remain active during the exponential backoff periods. When the late response for attempt 1 arrives during attempt 3, the transaction must immediately transition to `Completed`, winning the race, and any subsequent reply from attempt 3 must be gracefully ignored.
 *   **TC-RM-007 (JSON-RPC ID Preservation & Boundaries):**
     *   *Requirement Mapping:* `REQ-027` (JSON-RPC ID Preservation & Edge Cases)
     *   *Setup:* Submit: (1) a read-only notification (no `id`), (1b) a state-changing notification (no `id`), (2) a numeric ID `42`, (3) a string ID `"42"`, (4) a reused ID while the original is still active, and (5) a reused ID matching a completed cached transaction.

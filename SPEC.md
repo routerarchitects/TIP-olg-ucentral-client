@@ -424,6 +424,25 @@ TIP-olg-ucentral-client/
     	Payload     json.RawMessage `json:"payload,omitempty"` // Command-specific data (e.g. latency, result_64)
     	Timestamp   string          `json:"timestamp"`
     }
+
+    type CloudCapabilitiesQuery struct {
+    	Version       string `json:"version"`
+    	CorrelationID string `json:"correlation_id"`
+    	Target        string `json:"target"`
+    	CommandType   string `json:"command_type"`
+    	Action        string `json:"action"`
+    	Timestamp     string `json:"timestamp"`
+    }
+
+    type CloudDeviceStatusQuery struct {
+    	Version       string `json:"version"`
+    	CorrelationID string `json:"correlation_id"`
+    	OperationID   string `json:"operation_id,omitempty"`
+    	Target        string `json:"target"`
+    	CommandType   string `json:"command_type"`
+    	Action        string `json:"action"`
+    	Timestamp     string `json:"timestamp"`
+    }
     // Note: For upgrade results, operation_id is mandatory. For non-upgrade commands, operation_id may be omitted.
     ```
 
@@ -855,25 +874,7 @@ The error represents a local result-processing failure. It must not report that 
     func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *ActionCommand, replyTo string) error
     func (n *NATSClient) SubscribeCommandReplies(inbox string, handler func(msg *nats.Msg)) (*nats.Subscription, error)
 
-    // Query Envelopes
-    type CloudCapabilitiesQuery struct {
-        Version       string `json:"version"`
-        CorrelationID string `json:"correlation_id"`
-        Target        string `json:"target"`
-        CommandType   string `json:"command_type"`
-        Action        string `json:"action"`
-        Timestamp     string `json:"timestamp"`
-    }
-
-    type CloudDeviceStatusQuery struct {
-        Version       string `json:"version"`
-        CorrelationID string `json:"correlation_id"`
-        OperationID   string `json:"operation_id,omitempty"`
-        Target        string `json:"target"`
-        CommandType   string `json:"command_type"`
-        Action        string `json:"action"`
-        Timestamp     string `json:"timestamp"`
-    }
+    // Query Envelopes (Defined in pkg/contracts/envelopes.go)
 
     // Synchronous Read-Only Queries (blocks waiting for ResultEnvelope)
     // QueryCapabilities returns a ResultEnvelope whose Payload must be deserialized into a DeviceCapabilities struct.

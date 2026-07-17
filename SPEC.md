@@ -690,13 +690,14 @@ The error represents a local result-processing failure. It must not report that 
     type Transaction struct {
     	CorrelationID    string
     	CloudRPCID       json.RawMessage
-    	CanonicalCloudID string
+    	RequestKey       string // method:canonicalID (e.g. "configure:number:42")
     	RespondToCloud   bool
     	Method           string
     	State            TransactionState
     	CreatedAt        time.Time
     	TimeoutDuration  time.Duration
     	DispatchDeadline time.Time
+    	DispatchTimer    *time.Timer
     	Cancel           context.CancelFunc
     }
 
@@ -713,35 +714,36 @@ The error represents a local result-processing failure. It must not report that 
     	mu                          sync.Mutex
     	dispatchTimeout             time.Duration           // Bounded deadline for TxPreparingDispatch and TxPendingPublish (from OLG_TIMEOUT_DISPATCH)
     	transactionsByCorrelationID map[string]*Transaction // Key: CorrelationID
-    	activeCloudRequests         map[string]string       // Key: canonical CloudRPCID, Value: CorrelationID
+    	activeCloudRequests         map[string]string       // Key: RequestKey, Value: CorrelationID
     	stateLock                   sync.Mutex              // Enforces serialized state-changing commands
-    	activeStateTx               string                  // CorrelationID holding the state lock
+    	activeStateTx               string                  // CorrelationID or OperationID holding the state lock
     	cache                       *TransactionCache
     	scheduler                   *PriorityScheduler
     	store                       OperationStore
     }
 
-    // CanonicalCloudID formats a raw JSON-RPC ID into a type-prefixed string (e.g., "number:42" or "string:42")
-    // to strictly prevent collisions between numeric and string IDs. This canonicalization MUST be used by
+    // CanonicalRequestKey formats the method and raw JSON-RPC ID into a strongly-typed string (e.g., "configure:number:42")
+    // to strictly prevent collisions across methods or numeric/string IDs. This key MUST be used by
     // activeCloudRequests, TransactionCache, duplicate-active detection, and completed-response replay.
-    func CanonicalCloudID(id json.RawMessage) (string, error)
+    func CanonicalRequestKey(method string, id json.RawMessage) (string, error)
 
     func NewRequestManager(dispatchTimeout time.Duration, cache *TransactionCache, scheduler *PriorityScheduler, store OperationStore) *DefaultRequestManager
     
     // CreateTransaction creates a new transaction.
     // The Request Manager must canonicalize the incoming Cloud JSON-RPC ID and enforce the following order:
     // 1. If a valid, unexpired entry exists in the TransactionCache, replay it and do NOT create a transaction.
-    // 2. If the ID matches an active transaction in Created, PreparingDispatch, PendingPublish, or InFlight, reject with JSON-RPC -32603 busy.
+    // 2. If the RequestKey matches an active transaction in Created, PreparingDispatch, PendingPublish, or InFlight, reject with JSON-RPC -32603 busy.
     // 3. If isStateChanging is true:
     //    a. If respondToCloud is false (JSON-RPC notification), reject the request immediately. State-changing commands MUST have an ID.
-    //    b. Check if the stateLock is available. If it is already held by another active transaction, reject with JSON-RPC -32603 busy.
+    //    b. Check if the stateLock is available. If it is already held by another active transaction or background operation, reject with JSON-RPC -32603 busy.
     // 4. Otherwise, atomically acquire/reserve the stateLock (if isStateChanging), create the new transaction, and enter Created.
     // The cache lookup, active-map lookup, state-lock reservation, correlation ID generation, and transaction creation
     // must be performed atomically under one Request Manager synchronization boundary. To avoid deadlocks, the lock ordering
     // must be: acquire `DefaultRequestManager.mu` first, then call `TransactionCache.Get` (which acquires the cache RWMutex).
     // If respondToCloud is false (e.g. for notifications), the implementation MUST NOT insert an empty/null Cloud ID into activeCloudRequests or TransactionCache.
     // CreateTransaction records the configured downstream timeout duration, sets DispatchDeadline
-    // using the manager's configured dispatchTimeout, but does not start the downstream response timer.
+    // using the manager's configured dispatchTimeout, and initializes the DispatchTimer. The DispatchTimer callback MUST 
+    // atomically verify the transaction identity and transition it to Failed if it expires before MarkInFlight is called.
     func (m *DefaultRequestManager) CreateTransaction(cloudRPCID json.RawMessage, respondToCloud bool, method string, timeout time.Duration, isStateChanging bool) (*Transaction, error)
     // MarkPreparingDispatch transitions the transaction from TxCreated to TxPreparingDispatch.
     func (m *DefaultRequestManager) MarkPreparingDispatch(correlationID string) error
@@ -750,7 +752,8 @@ The error represents a local result-processing failure. It must not report that 
     // MarkInFlight is the final step of action dispatch. The dispatch sequence MUST be:
     // (1) Create/register transaction, (2) Install/register NATS reply inbox subscription,
     // (3) Prepare NATS command, (4) Publish to NATS successfully, (5) Call MarkInFlight.
-    // MarkInFlight atomically transitions from TxPendingPublish to TxInFlight and starts the downstream response timer.
+    // MarkInFlight atomically transitions from TxPendingPublish to TxInFlight, stops/invalidates the DispatchTimer, 
+    // and starts the downstream response timer.
     // Timeout is invalid in TxCreated, TxPreparingDispatch, and TxPendingPublish.
     // If a fast reply arrives before MarkInFlight completes, the result handler will transition the state to terminal.
     // In this case, MarkInFlight must gracefully return nil instead of failing.
@@ -758,13 +761,18 @@ The error represents a local result-processing failure. It must not report that 
     // Terminal methods (Complete, Fail, Timeout) perform terminal processing as an atomic logical sequence:
     // (1) Acquire the Request Manager mutex. Evaluate transition legality. If already terminal, return ErrAlreadyTerminal (an expected race).
     // (2) Immediately mark the transaction state as terminal to win the race.
-    // (3) Remove active indexes (activeCloudRequests, transactionsByCorrelationID) and release the activeStateTx lock if held. Release the Request Manager mutex.
-    // (4) Translate the downstream result.
-    // (5) Cache the exact response only if RespondToCloud=true and CanonicalCloudID is valid (notifications are not cached).
-    // (6) Reserve/enqueue Priority-0 delivery. If reservation fails, DO NOT alter the transaction state. The true device outcome must be preserved. Simply trigger path recovery.
+    // (3) Translate the downstream result and build the exact final Cloud response.
+    // (4) Store the response in TransactionCache (only if RespondToCloud=true and RequestKey is valid).
+    // (5) Remove active indexes (activeCloudRequests, transactionsByCorrelationID) and release the activeStateTx lock if held by this correlationID.
+    // (6) Release the Request Manager mutex.
+    // (7) Reserve/enqueue Priority-0 delivery of the cached response. If reservation fails, DO NOT alter the transaction state. The true device outcome must be preserved. Simply trigger path recovery.
     // These methods are concurrency-safe and may be invoked by the dedicated result-processing loop,
     // by a NATS subscriber, or by the timeout timer.
     func (m *DefaultRequestManager) Complete(correlationID string, response []byte) error
+    // RespondAndRetain separates the synchronous JSON-RPC transaction from a persistent background operation (e.g. upgrade).
+    // It MUST follow this sequence under the Request Manager mutex: (1) Validate the transaction is valid for retention (e.g. upgrade).
+    // (2) Persist the OperationStore record. (3) Transfer state-changing reservation ownership from CorrelationID to OperationID.
+    // (4) Cancel the ordinary response timer. (5) Cache the initial "started" response. (6) Remove the JSON-RPC transaction from active maps and mark it completed. (7) Release mutex and enqueue response.
     func (m *DefaultRequestManager) RespondAndRetain(correlationID string, response []byte) error
     func (m *DefaultRequestManager) TerminalFailAndDeliverDirect(correlationID string, errResponse []byte) error
     func (m *DefaultRequestManager) Fail(correlationID string, errResponse []byte) error

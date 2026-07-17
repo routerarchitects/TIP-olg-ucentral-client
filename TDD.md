@@ -39,12 +39,14 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-027` (JSON-RPC ID Preservation & Edge Cases)
     *   *Setup:* Send a series of JSON-RPC requests containing:
         1. `id` as an integer (`42`) and string (`"42"`).
-        2. No `id` field (Notification).
+        2. No `id` field for a read-only command (e.g. `ping`).
+        2b. No `id` field for a state-changing command (e.g. `reboot`).
         3. `id` as an object (`{"id": 1}`) and array (`[1, 2]`).
         4. A previously completed valid `id`.
     *   *Assert:* 
         * For (1), the client must successfully parse, track, and return the exact matching original format in the response.
-        * For (2), the client must execute the command but send no WebSocket response, internally generating a unique correlation ID to safely acquire locks and prevent transaction collisions.
+        * For (2), the client must execute the command but send no WebSocket response, internally generating a unique correlation ID for NATS correlation.
+        * For (2b), the client must immediately reject and drop the request before transaction creation or lock acquisition.
         * For (3), the client must reject the request with `-32600` or `-32700` and return `id: null`.
         * For (4), the client must not re-execute the command and must replay the cached JSON-RPC response.
 *   **TC-CON-006 (OWGW Configure Request and Response Contract):**
@@ -214,6 +216,46 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-007` (Transaction Lifecycle)
     *   *Setup:* Create an action transaction. Move it to `PendingPublish`. Put its payload into the dispatch buffer. Stall the dispatch consumer so no NATS publish occurs. Let the dispatch deadline expire.
     *   *Assert:* State becomes `Failed`. State never becomes `InFlight`. Downstream timeout never starts. Active maps are cleaned. State-changing reservation is released. Cloud receives `local_service_unavailable`. A later delayed buffer item must not be published as an active command.
+
+### PR 3.3: Advanced Concurrency & Race Conditions
+*   **TC-RM-009 (Terminal Sequence Mutex Race):**
+    *   *Setup:* Run a transaction. Block the terminal method's execution exactly after cache insertion but before active map removal. Have the Cloud submit a duplicate JSON-RPC ID.
+    *   *Assert:* The duplicate request must block waiting for the Request Manager mutex. Once the original terminal method releases the mutex, the duplicate request must find the response in the `TransactionCache` and replay it (cache hit), rather than creating a new transaction.
+*   **TC-RM-010 (Dispatch Deadline Timer & Stalled Consumer):**
+    *   *Setup:* Create a transaction (starts `DispatchTimer`). Move to `PendingPublish`. Stall the NATS dispatch consumer. Let the timer expire.
+    *   *Assert:* Timer callback atomically transitions state to `Failed`, caches a failure response, enqueues `-32603` to Cloud, and releases the state lock. The stalled transaction must not remain stuck forever.
+*   **TC-RM-011 (MarkInFlight vs Dispatch Timer Race):**
+    *   *Setup:* Let `DispatchTimer` expire at the exact same millisecond that `MarkInFlight` is called.
+    *   *Assert:* If the timer wins, `MarkInFlight` returns `ErrAlreadyTerminal`. If `MarkInFlight` wins, it successfully stops/invalidates the timer and starts the Response timer. The transaction must never have both timers active simultaneously.
+*   **TC-RM-012 (Response Timeout vs Fast Reply Race):**
+    *   *Setup:* Transaction is `InFlight`. The downstream reply arrives at the exact millisecond the Response timeout expires.
+    *   *Assert:* The first to acquire the Request Manager mutex wins. If the timer wins, it transitions to `TimedOut`. If the reply wins, it transitions to `Completed`. The loser must receive `ErrAlreadyTerminal` and gracefully exit without crashing or panicking.
+*   **TC-RM-013 (Fast Reply vs MarkInFlight Race):**
+    *   *Setup:* A fast downstream reply arrives before `MarkInFlight` is called. The result handler calls `Complete()`.
+    *   *Assert:* `Complete()` successfully transitions the state from `TxPendingPublish` to `TxCompleted`. When `MarkInFlight` is subsequently called, it gracefully returns `nil` (or `ErrAlreadyTerminal`) and does NOT overwrite the state or start the response timer.
+*   **TC-RM-014 (Priority-0 Delivery Failure):**
+    *   *Setup:* Complete a transaction successfully. Fill the Priority-0 websocket queue to capacity so reservation fails.
+    *   *Assert:* The transaction state remains `Completed` (the true device outcome). The exact success response is cached. The system triggers path recovery (WebSocket reconnect) rather than rewriting the transaction state to `Failed`.
+*   **TC-RM-015 (RequestKey Canonicalization):**
+    *   *Setup:* Submit `configure id=42` and complete it. Submit `ping id=42`.
+    *   *Assert:* The cache key must structurally combine the method and ID (e.g., `configure:number:42`). `ping id=42` must execute normally as a new transaction and MUST NOT replay the cached `configure` response.
+
+### PR 3.4: Asynchronous Upgrade & Persistence Races
+*   **TC-UPG-004 (Upgrade Asynchronous Lock Handoff):**
+    *   *Setup:* Submit an `upgrade` command. Wait for it to be accepted downstream.
+    *   *Assert:* `RespondAndRetain` caches the "started" response, completes the JSON-RPC transaction, removes it from active maps, cancels the synchronous response timeout, and successfully transfers the state-changing lock ownership to the persistent `OperationID`.
+*   **TC-UPG-005 (Persistent Upgrade Timeout Policy):**
+    *   *Setup:* Submit an `upgrade` command. The JSON-RPC transaction completes via `RespondAndRetain`. Let 120 seconds pass.
+    *   *Assert:* The upgrade must remain actively locked in the background. It MUST NOT be killed by the standard 120-second JSON-RPC timeout, which was canceled during handoff.
+*   **TC-UPG-006 (Daemon Crash Before Acceptance):**
+    *   *Setup:* Submit an `upgrade`. Crash the daemon after persisting the operation to `OperationStore` but before `RespondAndRetain` enqueues the "started" response to the Cloud.
+    *   *Assert:* On reboot, the daemon must recover the active operation from the store and resume tracking.
+*   **TC-UPG-007 (Daemon Crash After Acceptance):**
+    *   *Setup:* Submit an `upgrade`. Crash the daemon immediately after sending the "started" response but before removing the JSON-RPC transaction from active memory maps.
+    *   *Assert:* On reboot, the system relies on `OperationStore` for truth. The in-memory JSON-RPC transaction map is naturally cleared by the crash, preventing any zombie transactions.
+*   **TC-UPG-008 (Terminal Upgrade Status vs Recovery Race):**
+    *   *Setup:* The daemon crashes during an upgrade. On reboot, it attempts to query `status.get` for recovery. Exactly as it sends the query, the downstream agent unilaterally sends an `upgrade_progress` terminal notification.
+    *   *Assert:* The Request Manager must handle the terminal notification, complete the operation, and release the state lock. The subsequent `status.get` response must gracefully drop or ignore the result since the operation is already terminal.
 
 ---
 

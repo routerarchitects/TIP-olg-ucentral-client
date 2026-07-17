@@ -668,7 +668,7 @@ The error represents a local result-processing failure. It must not report that 
     // |-----------------------|------------------------------------|
     // | TxCreated             | TxPreparingDispatch, TxFailed      |
     // | TxPreparingDispatch   | TxPendingPublish, TxFailed         |
-    // | TxPendingPublish      | TxInFlight, TxFailed               |
+    // | TxPendingPublish      | TxInFlight, TxFailed, TxCompleted  |
     // | TxInFlight            | TxCompleted, TxFailed, TxTimedOut  |
     //
     // Any attempt to transition an unknown/missing transaction, or to perform an
@@ -697,7 +697,6 @@ The error represents a local result-processing failure. It must not report that 
     	CreatedAt        time.Time
     	TimeoutDuration  time.Duration
     	DispatchDeadline time.Time
-    	ResponseDeadline time.Time
     	Cancel           context.CancelFunc
     }
 
@@ -717,6 +716,9 @@ The error represents a local result-processing failure. It must not report that 
     	activeCloudRequests         map[string]string       // Key: canonical CloudRPCID, Value: CorrelationID
     	stateLock                   sync.Mutex              // Enforces serialized state-changing commands
     	activeStateTx               string                  // CorrelationID holding the state lock
+    	cache                       *TransactionCache
+    	scheduler                   *PriorityScheduler
+    	store                       OperationStore
     }
 
     // CanonicalCloudID formats a raw JSON-RPC ID into a type-prefixed string (e.g., "number:42" or "string:42")
@@ -724,7 +726,7 @@ The error represents a local result-processing failure. It must not report that 
     // activeCloudRequests, TransactionCache, duplicate-active detection, and completed-response replay.
     func CanonicalCloudID(id json.RawMessage) (string, error)
 
-    func NewRequestManager(dispatchTimeout time.Duration) *DefaultRequestManager
+    func NewRequestManager(dispatchTimeout time.Duration, cache *TransactionCache, scheduler *PriorityScheduler, store OperationStore) *DefaultRequestManager
     
     // CreateTransaction creates a new transaction.
     // The Request Manager must canonicalize the incoming Cloud JSON-RPC ID and enforce the following order:
@@ -739,7 +741,7 @@ The error represents a local result-processing failure. It must not report that 
     // must be: acquire `DefaultRequestManager.mu` first, then call `TransactionCache.Get` (which acquires the cache RWMutex).
     // If respondToCloud is false (e.g. for notifications), the implementation MUST NOT insert an empty/null Cloud ID into activeCloudRequests or TransactionCache.
     // CreateTransaction records the configured downstream timeout duration, sets DispatchDeadline
-    // using the manager's configured dispatchTimeout, but does not start the downstream response timer or set ResponseDeadline.
+    // using the manager's configured dispatchTimeout, but does not start the downstream response timer.
     func (m *DefaultRequestManager) CreateTransaction(cloudRPCID json.RawMessage, respondToCloud bool, method string, timeout time.Duration, isStateChanging bool) (*Transaction, error)
     // MarkPreparingDispatch transitions the transaction from TxCreated to TxPreparingDispatch.
     func (m *DefaultRequestManager) MarkPreparingDispatch(correlationID string) error
@@ -748,19 +750,18 @@ The error represents a local result-processing failure. It must not report that 
     // MarkInFlight is the final step of action dispatch. The dispatch sequence MUST be:
     // (1) Create/register transaction, (2) Install/register NATS reply inbox subscription,
     // (3) Prepare NATS command, (4) Publish to NATS successfully, (5) Call MarkInFlight.
-    // MarkInFlight atomically transitions from TxPendingPublish to TxInFlight, calculates and sets
-    // ResponseDeadline using TimeoutDuration, and starts the downstream response timer.
+    // MarkInFlight atomically transitions from TxPendingPublish to TxInFlight and starts the downstream response timer.
     // Timeout is invalid in TxCreated, TxPreparingDispatch, and TxPendingPublish.
-    // If a fast reply arrives before MarkInFlight completes, it must queue or successfully map via the active state.
+    // If a fast reply arrives before MarkInFlight completes, the result handler will transition the state to terminal.
+    // In this case, MarkInFlight must gracefully return nil instead of failing.
     func (m *DefaultRequestManager) MarkInFlight(correlationID string) error
     // Terminal methods (Complete, Fail, Timeout) perform terminal processing as an atomic logical sequence:
-    // (1) The first terminal transition performed under the Request Manager mutex wins. Subsequent attempts
-    //     must return a typed ErrAlreadyTerminal, which is treated as an expected concurrency race, not an assertion failure.
-    // (2) Translate the downstream result.
-    // (3) Reserve/enqueue Priority-0 delivery. If reservation fails, transition to Failed (app code 7), cache the delivery error, and trigger path recovery.
-    // (4) Cache the exact response only if RespondToCloud=true and CanonicalCloudID is valid (notifications are not cached).
-    // (5) Remove active indexes and release the activeStateTx lock if held.
-    // (6) Mark terminal state.
+    // (1) Acquire the Request Manager mutex. Evaluate transition legality. If already terminal, return ErrAlreadyTerminal (an expected race).
+    // (2) Immediately mark the transaction state as terminal to win the race.
+    // (3) Remove active indexes (activeCloudRequests, transactionsByCorrelationID) and release the activeStateTx lock if held. Release the Request Manager mutex.
+    // (4) Translate the downstream result.
+    // (5) Cache the exact response only if RespondToCloud=true and CanonicalCloudID is valid (notifications are not cached).
+    // (6) Reserve/enqueue Priority-0 delivery. If reservation fails, DO NOT alter the transaction state. The true device outcome must be preserved. Simply trigger path recovery.
     // These methods are concurrency-safe and may be invoked by the dedicated result-processing loop,
     // by a NATS subscriber, or by the timeout timer.
     func (m *DefaultRequestManager) Complete(correlationID string, response []byte) error

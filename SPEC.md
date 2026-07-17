@@ -227,26 +227,6 @@ TIP-olg-ucentral-client/
         Message     string          `json:"message"`
     }
 
-    type CloudWifiScanRequest struct {
-    	Serial    string   `json:"serial"`
-    	Bands     []string `json:"bands,omitempty"`
-    	Channels  []int    `json:"channels,omitempty"`
-    	Verbose   *bool    `json:"verbose,omitempty"`
-    	Bandwidth *int     `json:"bandwidth,omitempty"`
-    	Active    *int     `json:"active,omitempty"`
-    	Ies       []int    `json:"ies,omitempty"`
-    }
-    type CloudWifiScanStatus struct {
-    	Error int    `json:"error"`
-    	Text  string `json:"text"`
-    	When  int64  `json:"when,omitempty"`
-    }
-    type CloudWifiScanResponse struct {
-    	Serial string              `json:"serial"`
-    	Status CloudWifiScanStatus `json:"status"`
-    	Scan   json.RawMessage     `json:"scan"`
-    }
-
     type CloudTraceRequest struct {
     	Serial    string `json:"serial"`
     	When      int64  `json:"when,omitempty"`
@@ -650,9 +630,9 @@ If `Push()` returns `ErrQueueFull`, the subscriber must not silently discard the
 1. Record the `command_result_overflow` metric.
 2. Log the correlation ID, command type, and NATS subject.
 3. Construct a JSON-RPC error response using `-32603` with `error.data.application_code = 7` (`Result Delivery Failed`).
-4. Call `RequestManager.TerminalFailWithoutEnqueue(correlationID, errResponse)` method.
+4. Call `RequestManager.TerminalFailAndDeliverDirect(correlationID, errResponse)` method.
 
-`RequestManager.TerminalFailWithoutEnqueue()` performs the normal terminal transaction processing (caching the Cloud response, removing the active transaction, releasing any state-changing lock) but deliberately avoids submitting the finalized response to the Priority 0 WebSocket scheduler.
+`RequestManager.TerminalFailAndDeliverDirect()` performs the normal terminal transaction processing (marking the transaction as Failed, caching the terminal response, removing the active transaction, and releasing the state lock). Instead of queueing to the Command Result Queue, it attempts direct delivery to the Priority-0 WebSocket scheduler. If the Priority-0 scheduler is also full, it must record a separate outbound-delivery failure and trigger Priority-0 WebSocket path recovery.
 
 The error represents a local result-processing failure. It must not report that the downstream operation itself failed, because the downstream operation may already have completed. If the result payload cannot be decoded or its `correlation_id` does not match an active transaction, it may be discarded only after logging and metric emission.
 *   **Telemetry and Log Throttling (Activation & Release):** The Main loop polls `Utilization()` before processing telemetry or standard logs.
@@ -679,7 +659,8 @@ The error represents a local result-processing failure. It must not report that 
 
     const (
     	TxCreated TransactionState = iota
-    	TxPendingNATS
+    	TxPreparingDispatch
+    	TxPendingPublish
     	TxInFlight
     	TxCompleted
     	TxFailed
@@ -694,7 +675,6 @@ The error represents a local result-processing failure. It must not report that 
     	State          TransactionState
     	CreatedAt      time.Time
     	TimeoutAt      time.Time
-    	ResultCh       chan []byte
     	Cancel         context.CancelFunc
     }
 
@@ -713,10 +693,19 @@ The error represents a local result-processing failure. It must not report that 
 
     func NewRequestManager() *DefaultRequestManager
     
-    // CreateTransaction creates a new transaction. If respondToCloud is false (e.g. for notifications),
-    // the implementation MUST NOT insert an empty/null Cloud ID into activeCloudRequests or TransactionCache.
+    // CreateTransaction creates a new transaction.
+    // The Request Manager must canonicalize the incoming Cloud JSON-RPC ID and enforce the following order:
+    // 1. If a valid, unexpired entry exists in the TransactionCache, replay it and do NOT create a transaction.
+    // 2. If the ID matches an active transaction in Created, PreparingDispatch, PendingPublish, or InFlight, reject with JSON-RPC -32603 busy.
+    // 3. If isStateChanging is true, check if the stateLock is available. If it is already held by another active transaction, reject with JSON-RPC -32603 busy.
+    // 4. Otherwise, atomically acquire/reserve the stateLock (if isStateChanging), create the new transaction, and enter Created.
+    // The cache lookup, active-map lookup, state-lock reservation, correlation ID generation, and transaction creation
+    // must be performed atomically under one Request Manager synchronization boundary. To avoid deadlocks, the lock ordering
+    // must be: acquire `DefaultRequestManager.mu` first, then call `TransactionCache.Get` (which acquires the cache RWMutex).
+    // If respondToCloud is false (e.g. for notifications), the implementation MUST NOT insert an empty/null Cloud ID into activeCloudRequests or TransactionCache.
     func (m *DefaultRequestManager) CreateTransaction(cloudRPCID json.RawMessage, respondToCloud bool, method string, timeout time.Duration, isStateChanging bool) (*Transaction, error)
-    func (m *DefaultRequestManager) MarkPending(correlationID string) error
+    func (m *DefaultRequestManager) MarkPreparingDispatch(correlationID string) error
+    func (m *DefaultRequestManager) MarkPendingPublish(correlationID string) error
     func (m *DefaultRequestManager) MarkInFlight(correlationID string) error
     // Terminal methods must atomically insert into the transaction cache,
     // cleanup the active transaction, and release the activeStateTx lock if held.
@@ -725,7 +714,7 @@ The error represents a local result-processing failure. It must not report that 
     // a correlated result fails.
     func (m *DefaultRequestManager) Complete(correlationID string, response []byte) error
     func (m *DefaultRequestManager) RespondAndRetain(correlationID string, response []byte) error
-    func (m *DefaultRequestManager) TerminalFailWithoutEnqueue(correlationID string, errResponse []byte) error
+    func (m *DefaultRequestManager) TerminalFailAndDeliverDirect(correlationID string, errResponse []byte) error
     func (m *DefaultRequestManager) Fail(correlationID string, errResponse []byte) error
     func (m *DefaultRequestManager) Timeout(correlationID string) error
     func (m *DefaultRequestManager) Cancel(correlationID string) error

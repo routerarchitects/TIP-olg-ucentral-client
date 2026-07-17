@@ -13,7 +13,7 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Assert:* Marshalling to JSON must produce exact keys for each envelope type:
         *   `ActionCommand`: `version`, `correlation_id`, `target`, `command_type`, `action`, `payload`, `timestamp`. Must assert that if `payload` is nil, it is correctly omitted or formatted. Furthermore, if `action` is `upgrade` and `operation_id` is empty, serialization must fail explicitly.
         *   `ConfigureCommand`: `version`, `correlation_id`, `target`, `uuid`, `kv_key`, `kv_revision`, `timestamp`. Must assert that the raw `payload` is absent.
-        *   `ResultEnvelope`: `version`, `correlation_id`, `target`, `command_type`, `result`, `message`, `timestamp`. Verify payload is serialized for command-specific results such as script, certupdate, ping, and wifiscan, and omitted when empty. Additionally verify that `operation_id` is serialized for upgrade operations, `uuid` is serialized for configure operations, and omitted fields are absent from the JSON.
+        *   `ResultEnvelope`: `version`, `correlation_id`, `target`, `command_type`, `result`, `message`, `timestamp`. Verify payload is serialized for command-specific results such as script, certupdate, and ping, and omitted when empty. Additionally verify that `operation_id` is serialized for upgrade operations, `uuid` is serialized for configure operations, and omitted fields are absent from the JSON.
 *   **TC-CON-002 (Error Mappings):**
     *   *Requirement Mapping:* `REQ-021` (JSON-RPC Error Mapping)
     *   *Setup:* Pass internal error enum `ErrServiceUnavailable` to JSON-RPC error encoder helper.
@@ -59,10 +59,6 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-034` (OWGW Factory Protocol Compatibility)
     *   *Setup:* Send JSON-RPC `factory` requests: (1) Missing/zero `when`, (2) non-zero `when`, (3) missing `keep_redirector`, (4) `keep_redirector` = 0, (5) `keep_redirector` = 1, (6) invalid `keep_redirector` (e.g. 2). Then mock internal NATS `ResultEnvelope` statuses (success, busy, rejected).
     *   *Assert:* (1) Missing/zero `when` is accepted. (2) Non-zero `when` yields Invalid Params. (3) Missing `keep_redirector` yields Invalid Params. (4,5) `keep_redirector` values 0 and 1 are accepted. (6) Invalid `keep_redirector` yields Invalid Params. The `keep_redirector` field must be preserved in the `action: "factory"` NATS payload. For responses: Internal success maps to `status.error = 0`, busy maps to `1`, rejection maps to `2`. Ensure the response preserves the original JSON-RPC `id` and serial.
-*   **TC-ACT-004 (OWGW Wifiscan Request Contract):**
-    *   *Requirement Mapping:* `REQ-035`
-    *   *Setup:* Send JSON-RPC `wifiscan` requests with valid parameters, missing parameters, mutually exclusive `bands`/`channels`, and test `bandwidth` and `ies` limits. Mock NATS `scan` results.
-    *   *Assert:* Invalid combinations return Invalid Params. Valid requests map exactly to `ActionCommand.payload` without `serial`. Resulting scan data preserves the JSON-RPC `scan` as an arbitrary JSON document without forcing it to be an array.
 *   **TC-ACT-005 (OWGW Trace Request Contract):**
     *   *Requirement Mapping:* `REQ-036`
     *   *Setup:* Send JSON-RPC `trace` requests with `duration`, `packets`, `network`, `interface`, and `uri`.
@@ -99,6 +95,10 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-044`
     *   *Setup:* Send JSON-RPC `script` requests with combinations: (1) valid base64 script, (2) invalid base64 script, (3) `scriptId` included (must be rejected as non-standard), (4) invalid type, (5) invalid URI, (6) oversized script. Mock various results (timeout, gzipped result).
     *   *Assert:* Must enforce strict base64 decoding validation and forbid `scriptId`. Scenarios 2, 3, 4, 5, and 6 return Invalid Params. Scenario 1 maps exactly to NATS payload. Validate execution timeout errors. Translate NATS response formats properly into `error`, `result_64`, `result_sz`, or `result`. Verify sensitive script contents or execution logs are not printed to audit stream.
+*   **TC-ACT-014 (Unsupported Commands Rejection):**
+    *   *Requirement Mapping:* `REQ-032`
+    *   *Setup:* Send JSON-RPC requests for out-of-scope features: `wifiscan`, `fixedconfig`, `powercycle`, `request`, event buffer retrieval, and `transfer`.
+    *   *Assert:* The daemon must immediately reject the requests and return JSON-RPC `-32601 Method Not Found`.
 ---
 
 ## Epic 2: Traffic Queues & Priority Scheduler
@@ -175,11 +175,11 @@ This document details the test plans, test cases, and verification strategies fo
 *   **TC-RM-001 (State Machine Transitions):**
     *   *Requirement Mapping:* `REQ-007` (Transaction Lifecycle)
     *   *Setup:* Create a transaction using `CreateTransaction(cloudRPCID = "tx-1", respondToCloud = true, method = "action", timeout = 10s, isStateChanging = false)`.
-    *   *Assert:* Initial state must be `TxCreated`, and the Request Manager must generate and assign a valid internal `CorrelationID`. Manually advance state to `TxPendingNATS`, then `TxInFlight`. Verify correct enum states.
+    *   *Assert:* Initial state must be `TxCreated`, and the Request Manager must generate and assign a valid internal `CorrelationID`. Manually advance the transaction through `TxPreparingDispatch`, `TxPendingPublish`, and `TxInFlight`. Verify every enum state. Verify that KV/preparation failure $\rightarrow$ `TxFailed`, dispatch-buffer full $\rightarrow$ `TxFailed`, publish/request failure $\rightarrow$ `TxFailed`. Ensure timeout is valid only after `TxInFlight`.
 *   **TC-RM-002 (Concurrency Rejection):**
     *   *Requirement Mapping:* `REQ-008` (Concurrency Serialization)
-    *   *Setup:* Start a transaction with `isStateChanging = true` for `Cloud ID = "tx-1"`. Submit another transaction with `Cloud ID = "tx-2"`, `isStateChanging = true`.
-    *   *Assert:* The second transaction request must return a `busy` error immediately.
+    *   *Setup:* Start a transaction with `isStateChanging = true` for `Cloud ID = "tx-1"` and hold it in the `TxCreated` state. While transaction A is in `TxCreated`, concurrently submit another transaction request with `Cloud ID = "tx-2"`, `isStateChanging = true`.
+    *   *Assert:* The Request Manager must guarantee that transaction A atomically reserves the state lock during creation. The second transaction request must return a `busy` error immediately and must not be created.
 *   **TC-RM-003 (Parallel Read Operations):**
     *   *Requirement Mapping:* `REQ-008` (Concurrency Serialization)
     *   *Setup:* Start state-changing transaction `Cloud ID = "tx-1"`. Submit read-only command transaction `Cloud ID = "query-1"`, `isStateChanging = false`.
@@ -198,10 +198,10 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Assert:* On boot, `GetPendingTerminalDelivery()` must return the terminal record. The daemon must then successfully enqueue any optional negotiated notifications, store the terminal status internally, and finally delete the record from `OperationStore`.
 
 ### PR 3.2: Duplicate Attachment & Cache TTL Tests
-*   **TC-RM-004 (Duplicate Active Request Rejection):**
-    *   *Requirement Mapping:* `REQ-009` (Duplicate Active Request Rejection)
-    *   *Setup:* Start transaction `Cloud ID = "tx-1"` and hold it in `Created` state. Submit duplicate request. Advance original to `PendingNATS` and submit duplicate. Advance to `InFlight` and submit duplicate.
-    *   *Assert:* In all three active states (`Created`, `PendingNATS`, `InFlight`), the duplicate request must fail immediately and return a busy error (`-32603`) without overwriting the map entry, altering timeouts, or triggering a second downstream execution.
+*   **TC-RM-004 (Request Lifecycle and Duplicate Rejection):**
+    *   *Requirement Mapping:* `REQ-009` (Request Lifecycle and Duplicate Rejection)
+    *   *Setup:* (1) Mock a completed, unexpired cached response for `Cloud ID = "tx-1"`. Submit a duplicate request for `tx-1`. (2) Start transaction `Cloud ID = "tx-2"` and hold it in `Created` state. Submit a duplicate request. Advance original to `PreparingDispatch`, then `PendingPublish`, then `InFlight`, submitting a duplicate request at each state. (3) Submit a request for a new `Cloud ID = "tx-3"`.
+    *   *Assert:* (1) For `tx-1`, the cached response must be replayed directly to the Cloud without creating a transaction, acquiring the state-changing lock, or writing to NATS. (2) For `tx-2`, in all four active states (`Created`, `PreparingDispatch`, `PendingPublish`, `InFlight`), the duplicate request must fail immediately and return a busy error (`-32603`) without overwriting the map entry, altering timeouts, or triggering a second downstream execution. (3) For `tx-3`, a new transaction must be created and enter `Created`.
 *   **TC-RM-005 (Operation-Specific Cache TTLs):**
     *   *Requirement Mapping:* `REQ-010` (Operation-Specific Caching & TTL)
     *   *Setup:* Write `configure` (TTL 5 mins), `reboot` (TTL 10 mins), `factory` (TTL 30 mins), and `upgrade` (TTL 60 mins) results to `TransactionCache`. Mock clock time to advance 15 minutes.
@@ -314,10 +314,7 @@ This document details the test plans, test cases, and verification strategies fo
 ## Epic 6: Requirements Traceability Matrix
 
 | Requirement ID | Requirement Name | Mapping Test Case(s) |
-| :
---- | :
---- | :
---- |
+| :--- | :--- | :--- |
 | **REQ-001** | Concurrent Startup Loops | `TC-INT-003` |
 | **REQ-002** | Reconnection State Machine | `TC-NET-001`, `TC-NET-010`, `TC-INT-003` |
 | **REQ-003** | Version Negotiation Fallback | `TC-CON-003` |
@@ -349,10 +346,9 @@ This document details the test plans, test cases, and verification strategies fo
 | **REQ-029** | Graceful Teardown | `TC-INT-001` |
 | **REQ-030** | Startup Configuration Validation | `TC-INT-005` |
 | **REQ-031** | OWGW Configure Protocol Compatibility | `TC-CON-006` |
-| **REQ-032** | Out of Scope Features | N/A |
+| **REQ-032** | Out of Scope Features | `TC-ACT-014` |
 | **REQ-033** | OWGW Reboot Protocol Compatibility | `TC-ACT-001` |
 | **REQ-034** | OWGW Factory Protocol Compatibility | `TC-ACT-002` |
-| **REQ-035** | OWGW Wifiscan Protocol Compatibility | `TC-ACT-004` |
 | **REQ-036** | OWGW Trace Protocol Compatibility | `TC-ACT-005` |
 | **REQ-037** | OWGW Ping Protocol Compatibility | `TC-ACT-006` |
 | **REQ-038** | OWGW LEDs Protocol Compatibility | `TC-ACT-007` |

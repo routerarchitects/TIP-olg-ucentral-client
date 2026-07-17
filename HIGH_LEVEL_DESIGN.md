@@ -179,35 +179,42 @@ Every incoming Cloud command is modeled as an asynchronous transaction tracked b
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Created : Request Received
-    Created --> PendingNATS : Write to Dispatch Buffer
-    PendingNATS --> InFlight : Published to NATS
-    InFlight --> Completed : Downstream Success Reply
-    InFlight --> Failed : Downstream Error Reply
-    InFlight --> TimedOut : Timeout Timer Fired
-    
+    [*] --> Created : Request received
+    Created --> PreparingDispatch : Validated
+
+    PreparingDispatch --> PendingPublish : Payload prepared
+    PreparingDispatch --> Failed : KV write / preparation / buffer failure
+
+    PendingPublish --> InFlight : Publish or request succeeded
+    PendingPublish --> Failed : Publish or request failed
+
+    InFlight --> Completed : Downstream success
+    InFlight --> Failed : Downstream failure
+    InFlight --> TimedOut : Downstream timeout
+
     Completed --> [*]
     Failed --> [*]
     TimedOut --> [*]
 ```
 
-*   **Created:** Transaction metadata is initialized in memory, and the timeout timer is started.
-*   **PendingNATS:** The request is queued in the NATS Dispatch Buffer.
-*   **InFlight:** The message is published to NATS. The Request Manager listens for the matching `correlation_id` reply.
+*   **Created:** Transaction metadata is initialized in memory. The downstream response timeout is not started yet.
+*   **PreparingDispatch:** The transaction is actively performing local setup work (e.g., writing to JetStream KV for `configure`, or building the `ActionCommand` envelope).
+*   **PendingPublish:** The payload is fully assembled and is either waiting in the dispatch buffer or in the process of being sent over the wire.
+*   **InFlight:** The message is published to NATS. The downstream response timeout starts when the transaction enters this state. The Request Manager listens for the matching `correlation_id` reply.
 *   **Completed / Failed / TimedOut:** Terminal states. Once reached, the client replies to all registered cloud streams, updates metrics, caches the result, and cleans up transaction memory.
 
 ### 3.2 Concurrency & Serialization Rules
 To protect device integrity, the client divides requests into two execution classes:
 
 1.  **State-Changing Commands (Serialized):** Commands that modify device state or execute sensitive operations (`configure`, `reboot`, `factory`, `upgrade`, `certupdate`, `reenroll`, `script`) are **serialized** (one at a time per device).
-    *   *Rule:* If a serialized transaction is currently `InFlight` or `PendingNATS`, any new configuration or action request (with a different Cloud `id`) is immediately rejected with a `busy` status (Error Code -32603 / Result: `busy`).
+    *   *Rule:* The Request Manager must atomically reserve the state lock during transaction creation. If a serialized transaction is currently `Created`, `PreparingDispatch`, `PendingPublish`, or `InFlight`, any new configuration or action request (with a different Cloud `id`) is immediately rejected with a `busy` status (Error Code -32603 / Result: `busy`).
     *   *Benefit:* Eliminates the overhead of complex command queue backlogs, ensures strict sequential application of system changes, and guarantees state mutation exclusivity.
 2.  **Read-Only Commands (Parallel):** Metadata and query operations (`capabilities.get`, `status.get`) are processed in parallel.
     *   *Rule:* Query operations do not acquire the device state lock and are published to NATS immediately, even if a configuration transaction is in progress.
     *   *Ownership:* `status.get` is a downstream device/local-agent query. The uCentral client sends the request and waits for the downstream response; it does not serve responses on this subject.
 
 ### 3.3 Duplicate & Overlapping Requests
-*   **Overlapping Duplicate Requests:** If the Cloud retries a command sending the exact same Cloud `id` while a transaction is already active (`Created`, `PendingNATS`, or `InFlight`), the client rejects the new request immediately with a JSON-RPC busy/internal error (`-32603`). This avoids complex fan-out/listener attachment logic and ensures predictable client behavior.
+*   **Overlapping Duplicate Requests:** If the Cloud retries a command sending the exact same Cloud `id` while a transaction is already active (`Created`, `PreparingDispatch`, `PendingPublish`, or `InFlight`), the client rejects the new request immediately with a JSON-RPC busy/internal error (`-32603`). This avoids complex fan-out/listener attachment logic and ensures predictable client behavior.
 *   **Duplicate Completed Requests:** If the request matches a cached Cloud `id` that has already completed, the Request Manager **replays the cached response** directly to the cloud.
 *   **Cache TTL by Operation Type:**
     *   `configure`: **5 minutes**
@@ -511,12 +518,12 @@ Example successful configure response:
 | `rejected` / `unsupported`            | `status.error = 2` |
 | NATS unavailable / timeout            | JSON-RPC error     |
 
-**Diagnostic Actions Mapping:** For diagnostic and general commands (`wifiscan`, `trace`, `ping`, `leds`, `rrm`, `telemetry`, and `remote_access`), the daemon will validate the request, remove the `serial` field, and represent it via the `target` parameter of the `ActionCommand`. The remaining command-specific parameters are strictly preserved in `ActionCommand.payload`.
+**Diagnostic Actions Mapping:** For diagnostic and general commands (`trace`, `ping`, `leds`, `rrm`, `telemetry`, and `remote_access`), the daemon will validate the request, remove the `serial` field, and represent it via the `target` parameter of the `ActionCommand`. The remaining command-specific parameters are strictly preserved in `ActionCommand.payload`.
 
 For `remote_access`, the Cloud-facing JSON-RPC method is `remote_access` and `params.method` must equal `rtty`. Internally it is translated to NATS action `rtty`.
 
 For `ping`, the downstream result is translated to the OWGW response containing `serial`, `uuid`, and `deviceUTCTime`. Internal diagnostic fields such as measured latency must not be added to the Cloud response.
 
-The `ResultEnvelope` responses from NATS for other actions are mapped to their highly specific JSON-RPC counterparts (e.g. `scan` results for `wifiscan`) rather than using a generic reboot status.
+The `ResultEnvelope` responses from NATS for other actions are mapped to their highly specific JSON-RPC counterparts rather than using a generic reboot status.
 
 **System and Security Actions Mapping:** For security-sensitive commands (`certupdate`, `reenroll`, `script`), execution policies are highly constrained. They follow the generic `ActionCommand` envelope pattern but require the Request Manager state lock, strictly prohibit automatic retries, mandate sensitive payload scrubbing/redaction from audit logging, and impose explicit execution/script size limits. Responses are mapped to precise JSON-RPC layouts (e.g., `result_64` or `result_sz` for `script`, and strict `error`/`txt` for `certupdate` and `reenroll`).

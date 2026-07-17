@@ -220,11 +220,12 @@ To protect device integrity, the client divides requests into two execution clas
 ### 3.3 Duplicate & Overlapping Requests
 *   **Overlapping Duplicate Requests:** If the Cloud retries a command sending the exact same Cloud `id` while a transaction is already active (`Created`, `PreparingDispatch`, `PendingPublish`, or `InFlight`), the client rejects the new request immediately with a JSON-RPC busy/internal error (`-32603`). This avoids complex fan-out/listener attachment logic and ensures predictable client behavior.
 *   **Duplicate Completed Requests:** If the request matches a cached Cloud `id` that has already completed, the Request Manager **replays the cached response** directly to the cloud.
-*   **Cache TTL by Operation Type:**
-    *   `configure`: **5 minutes**
-    *   `reboot`: **10 minutes**
-    *   `factory`: **30 minutes**
+*   **Cache TTL by Operation Type (Environment Configurable):**
+    *   `configure`, `leds`: **5 minutes**
+    *   `reboot`, `remote_access`: **10 minutes**
+    *   `factory`, `certupdate`, `reenroll`, `script`: **30 minutes**
     *   `upgrade` (Firmware): **60 minutes from completion**. Firmware upgrades are processed as **asynchronous actions**—the client returns an immediate "started" status and forwards progress updates to the cloud.
+    *   `ping`, `trace`, `telemetry`, `capabilities.get`, `status.get`: **2 minutes** (Diagnostics default)
 
 ### 3.4 Behavior Across Reconnects
 *   **Cloud Disconnections:** If the WAN connection to the Cloud drops while a transaction is `InFlight`, the client **continues running the operation downstream**. It does not abort the configuration or reboot.

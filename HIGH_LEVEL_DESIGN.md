@@ -179,18 +179,22 @@ Every incoming Cloud command is modeled as an asynchronous transaction tracked b
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Created : Request received
-    Created --> PreparingDispatch : Validated
+    [*] --> Created : Request admitted
+
+    Created --> PreparingDispatch : Validation succeeded
+    Created --> Failed : Validation / setup failure
 
     PreparingDispatch --> PendingPublish : Payload prepared
-    PreparingDispatch --> Failed : KV write / preparation / buffer failure
+    PreparingDispatch --> Failed : KV / preparation / buffer failure
+    PreparingDispatch --> Failed : Preparation deadline exceeded
 
     PendingPublish --> InFlight : Publish or request succeeded
-    PendingPublish --> Failed : Publish or request failed
+    PendingPublish --> Failed : Publish failure
+    PendingPublish --> Failed : Dispatch deadline exceeded
 
     InFlight --> Completed : Downstream success
     InFlight --> Failed : Downstream failure
-    InFlight --> TimedOut : Downstream timeout
+    InFlight --> TimedOut : Downstream response deadline exceeded
 
     Completed --> [*]
     Failed --> [*]
@@ -238,11 +242,12 @@ Firmware upgrades take minutes to complete and cannot block the Request Manager 
 7.  **Duplicate Rejection:** Any state-changing commands received while the background upgrade is active are rejected immediately as busy.
 
 ### 3.6 Timeout Specifications
-To prevent hanging operations, the Request Manager enforces strict timeout thresholds:
+To prevent hanging operations, the Request Manager enforces strict timeout thresholds configurable via environment variables:
 
-*   **Configuration Apply Timeout:** **30 seconds**. If the downstream service does not return a configuration apply status within 30s, the client returns a timeout error to the cloud and logs a warning.
-*   **Action Timeout:** **60 seconds** (default, action-specific configurations allowed, e.g., up to 120s for `traceroute` or firmware download).
-*   **NATS Publish Timeout:** **5 seconds**.
+*   **Configuration Apply Timeout (`OLG_TIMEOUT_CONFIGURE`):** **30 seconds** default. Applies only to `configure`.
+*   **Extended Action Timeout (`OLG_TIMEOUT_ACTION_EXTENDED`):** **120 seconds** default. Applies to long-running actions: `upgrade`, `certupdate`, `script`, and `trace`.
+*   **Action Timeout (`OLG_TIMEOUT_ACTION_DEFAULT`):** **60 seconds** default. Applies to all other standard diagnostic and state-changing actions: `reboot`, `factory`, `ping`, `leds`, `telemetry`, `remote_access`, `capabilities.get`, and `status.get`.
+*   **Dispatch / NATS Publish Timeout (`OLG_TIMEOUT_DISPATCH`):** **5 seconds** default. Bounds the local preparation and buffer dispatch phases.
 
 
 ### 3.7 Configuration Validation & Application Flow
@@ -519,7 +524,7 @@ Example successful configure response:
 | `rejected` / `unsupported`            | `status.error = 2` |
 | NATS unavailable / timeout            | JSON-RPC error     |
 
-**Diagnostic Actions Mapping:** For diagnostic and general commands (`trace`, `ping`, `leds`, `rrm`, `telemetry`, and `remote_access`), the daemon will validate the request, remove the `serial` field, and represent it via the `target` parameter of the `ActionCommand`. The remaining command-specific parameters are strictly preserved in `ActionCommand.payload`.
+**Diagnostic Actions Mapping:** For diagnostic and general commands (`trace`, `ping`, `leds`, `telemetry`, and `remote_access`), the daemon will validate the request, remove the `serial` field, and represent it via the `target` parameter of the `ActionCommand`. The remaining command-specific parameters are strictly preserved in `ActionCommand.payload`.
 
 For `remote_access`, the Cloud-facing JSON-RPC method is `remote_access` and `params.method` must equal `rtty`. Internally it is translated to NATS action `rtty`.
 

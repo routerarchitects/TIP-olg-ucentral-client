@@ -53,7 +53,18 @@ The uCentral client is a lightweight, Go-based gateway daemon that bridges a clo
 
 ---
 
-## 3. Running Test Suites
+## 3. Environment Variables
+
+The daemon utilizes container environment variables to configure operational timeouts safely. All durations must be specified in valid Go duration syntax (e.g., `5s`, `1m30s`). If an environment variable is omitted, the daemon uses the default value. If a variable is malformed or zero/negative, the daemon triggers a fatal startup error.
+
+*   `OLG_TIMEOUT_DISPATCH` (Default: `5s`): Bounded timeout for the local preparation and NATS dispatch phases.
+*   `OLG_TIMEOUT_CONFIGURE` (Default: `30s`): Maximum downstream response wait time for `configure`.
+*   `OLG_TIMEOUT_ACTION_EXTENDED` (Default: `120s`): Extended response wait time for heavy actions (`upgrade`, `certupdate`, `script`, `trace`).
+*   `OLG_TIMEOUT_ACTION_DEFAULT` (Default: `60s`): Maximum downstream response wait time for all other standard actions (e.g., `ping`, `reboot`, `factory`).
+
+---
+
+## 4. Running Test Suites
 
 Verify all components are functioning using the standard Go test command:
 ```bash

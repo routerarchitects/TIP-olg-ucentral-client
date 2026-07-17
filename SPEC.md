@@ -270,23 +270,10 @@ TIP-olg-ucentral-client/
     	Status CloudLedsStatus `json:"status"`
     }
 
-    type CloudRrmRequest struct {
-    	Serial  string            `json:"serial"`
-    	Actions []json.RawMessage `json:"actions"`
-    }
-    type CloudRrmStatus struct {
-    	Error int    `json:"error"`
-    	Text  string `json:"text"`
-    }
-    type CloudRrmResponse struct {
-    	Serial string         `json:"serial"`
-    	Status CloudRrmStatus `json:"status"`
-    }
-
     // CloudTelemetryRequest stream configuration.
     // Validation rules:
     // - Interval: integer from 0 through 60 (0 stops the stream).
-    // - Types: 1 or 2 entries. Each type must be exactly "dhcp" or "rrm". No duplicate types.
+    // - Types: exactly 1 entry. The only supported type is "dhcp".
     type CloudTelemetryRequest struct {
     	Serial   string   `json:"serial"`
     	Interval *int     `json:"interval,omitempty"`
@@ -655,6 +642,20 @@ The error represents a local result-processing failure. It must not report that 
     	"time"
     )
 
+    // TransactionState represents the lifecycle phase of a request.
+    // The Request Manager API must strictly enforce the following valid transitions:
+    // 
+    // | Current State         | Allowed Next States                |
+    // |-----------------------|------------------------------------|
+    // | TxCreated             | TxPreparingDispatch, TxFailed      |
+    // | TxPreparingDispatch   | TxPendingPublish, TxFailed         |
+    // | TxPendingPublish      | TxInFlight, TxFailed               |
+    // | TxInFlight            | TxCompleted, TxFailed, TxTimedOut  |
+    //
+    // Any attempt to transition an unknown/missing transaction, or to perform an
+    // illegal transition (e.g., TxCreated directly to TxCompleted, or calling
+    // Fail() on a transaction that is already in a terminal state) must be 
+    // rejected by the API returning an error, and logged as an internal assertion failure.
     type TransactionState int
 
     const (
@@ -668,19 +669,30 @@ The error represents a local result-processing failure. It must not report that 
     )
 
     type Transaction struct {
-    	CorrelationID   string
-    	CloudRPCID      json.RawMessage
-    	RespondToCloud  bool
-    	Method          string
-    	State           TransactionState
-    	CreatedAt       time.Time
-    	TimeoutDuration time.Duration
-    	TimeoutAt       time.Time
-    	Cancel          context.CancelFunc
+    	CorrelationID    string
+    	CloudRPCID       json.RawMessage
+    	RespondToCloud   bool
+    	Method           string
+    	State            TransactionState
+    	CreatedAt        time.Time
+    	TimeoutDuration  time.Duration
+    	DispatchDeadline time.Time
+    	ResponseDeadline time.Time
+    	Cancel           context.CancelFunc
+    }
+
+    // DispatchItem represents a payload waiting in the internal dispatch buffer.
+    // The consumer MUST verify that time.Now() is before the transaction's DispatchDeadline,
+    // the transaction still exists, and the transaction is still in TxPendingPublish state
+    // before calling NATS Publish.
+    type DispatchItem struct {
+    	CorrelationID string
+    	Payload       []byte
     }
 
     type DefaultRequestManager struct {
     	mu                          sync.Mutex
+    	dispatchTimeout             time.Duration           // Bounded deadline for TxPreparingDispatch and TxPendingPublish (from OLG_TIMEOUT_DISPATCH)
     	transactionsByCorrelationID map[string]*Transaction // Key: CorrelationID
     	activeCloudRequests         map[string]string       // Key: canonical CloudRPCID, Value: CorrelationID
     	stateLock                   sync.Mutex              // Enforces serialized state-changing commands
@@ -692,7 +704,7 @@ The error represents a local result-processing failure. It must not report that 
     // activeCloudRequests, TransactionCache, duplicate-active detection, and completed-response replay.
     func CanonicalCloudID(id json.RawMessage) (string, error)
 
-    func NewRequestManager() *DefaultRequestManager
+    func NewRequestManager(dispatchTimeout time.Duration) *DefaultRequestManager
     
     // CreateTransaction creates a new transaction.
     // The Request Manager must canonicalize the incoming Cloud JSON-RPC ID and enforce the following order:
@@ -704,14 +716,17 @@ The error represents a local result-processing failure. It must not report that 
     // must be performed atomically under one Request Manager synchronization boundary. To avoid deadlocks, the lock ordering
     // must be: acquire `DefaultRequestManager.mu` first, then call `TransactionCache.Get` (which acquires the cache RWMutex).
     // If respondToCloud is false (e.g. for notifications), the implementation MUST NOT insert an empty/null Cloud ID into activeCloudRequests or TransactionCache.
-    // CreateTransaction records the configured downstream timeout duration, but does not start the downstream response timer or set TimeoutAt.
+    // CreateTransaction records the configured downstream timeout duration, sets DispatchDeadline
+    // using the manager's configured dispatchTimeout, but does not start the downstream response timer or set ResponseDeadline.
     func (m *DefaultRequestManager) CreateTransaction(cloudRPCID json.RawMessage, respondToCloud bool, method string, timeout time.Duration, isStateChanging bool) (*Transaction, error)
+    // MarkPreparingDispatch transitions the transaction from TxCreated to TxPreparingDispatch.
     func (m *DefaultRequestManager) MarkPreparingDispatch(correlationID string) error
+    // MarkPendingPublish transitions the transaction from TxPreparingDispatch to TxPendingPublish.
     func (m *DefaultRequestManager) MarkPendingPublish(correlationID string) error
-    // MarkInFlight atomically transitions to TxInFlight, calculates and sets TimeoutAt using TimeoutDuration, 
+    // MarkInFlight atomically transitions from TxPendingPublish to TxInFlight, calculates and sets ResponseDeadline using TimeoutDuration, 
     // and starts the downstream response timer. Timeout is invalid in TxCreated, TxPreparingDispatch, and TxPendingPublish.
     func (m *DefaultRequestManager) MarkInFlight(correlationID string) error
-    // Terminal methods must atomically insert into the transaction cache,
+    // Terminal methods must validate the transition legality, atomically insert into the transaction cache,
     // cleanup the active transaction, and release the activeStateTx lock if held.
     // Complete, Fail, Timeout, and Cancel are concurrency-safe and may be invoked
     // by the dedicated result-processing loop or by a NATS subscriber when enqueueing
@@ -940,6 +955,11 @@ The uCentral client must not register a NATS responder for `ucentral.v1.device.<
         *   `queues.nats_publish_capacity`: Default 100; must be > 0
         *   `queues.command_result_capacity`: Default 50; must be > 0
         *   `queues.telemetry_capacity`: Default 500; must be > 0
+    *   **Timeout Variables:** The following environment variables must be strictly parsed via `time.ParseDuration`. Missing values safely fall back to defaults, but malformed strings or non-positive durations (e.g. `<= 0`) are fatal validation errors:
+        *   `OLG_TIMEOUT_DISPATCH`: Default `5s`
+        *   `OLG_TIMEOUT_CONFIGURE`: Default `30s`
+        *   `OLG_TIMEOUT_ACTION_DEFAULT`: Default `60s`
+        *   `OLG_TIMEOUT_ACTION_EXTENDED`: Default `120s`
     *   **Startup Behavior:** Configuration parsing or validation failure is fatal. The daemon must log the specific invalid field, avoid starting any Cloud or NATS connection loops, and exit immediately with a non-zero status.
 
 *   **Initialization & Signal Handling:**

@@ -71,33 +71,29 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-037`
     *   *Setup:* Send JSON-RPC `leds` requests with varied `pattern` and `duration`.
     *   *Assert:* Request maps exactly to NATS payload. Returns LED status object.
-*   **TC-ACT-008 (OWGW RRM Request Contract):**
+*   **TC-ACT-008 (OWGW Telemetry Request Contract):**
     *   *Requirement Mapping:* `REQ-038`
-    *   *Setup:* Send JSON-RPC `rrm` requests.
-    *   *Assert:* Request maps exactly to NATS payload. Returns RRM status object.
-*   **TC-ACT-009 (OWGW Telemetry Request Contract):**
-    *   *Requirement Mapping:* `REQ-039`
     *   *Setup:* Send JSON-RPC `telemetry` requests with various `interval` and `types`.
-    *   *Assert:* Validation must strictly enforce `0 <= interval <= 60`, `types` length between 1 and 2, exact match for "dhcp" or "rrm", and no duplicates. Valid requests map exactly to NATS payload. Returns telemetry status object.
-*   **TC-ACT-010 (OWGW Remote Access / RTTY Request Contract):**
-    *   *Requirement Mapping:* `REQ-040`
+    *   *Assert:* Validation must strictly enforce `0 <= interval <= 60`, `types` length of 1, exact match for "dhcp", and no duplicates. Valid requests map exactly to NATS payload. Returns telemetry status object.
+*   **TC-ACT-009 (OWGW Remote Access / RTTY Request Contract):**
+    *   *Requirement Mapping:* `REQ-039`
     *   *Setup:* Send JSON-RPC `remote_access` requests testing `method="rtty"`, exact `token`, `server`, `port` fields. Mock response with optional `meta`.
     *   *Assert:* Non-"rtty" methods or missing mandatory fields return Invalid Params. Valid requests map exactly to NATS `action: "rtty"` payload. Returns remote_access status object while correctly preserving optional `meta`.
-*   **TC-ACT-011 (OWGW Certupdate Request and Response Contract):**
-    *   *Requirement Mapping:* `REQ-041`
+*   **TC-ACT-010 (OWGW Certupdate Request and Response Contract):**
+    *   *Requirement Mapping:* `REQ-040`
     *   *Setup:* Send JSON-RPC `certupdate` request containing base64 encoded certificates payload.
     *   *Assert:* Request maps exactly to NATS `action: "certupdate"`. Response must translate NATS result to `error` and `txt` properties. Validates: (1) malformed base64 returns Invalid Params, (2) decoded bundle over 2 MB returns Invalid Params, (3) valid base64 remains unchanged in `ActionCommand.payload`, and (4) certificate data never appears in logs.
-*   **TC-ACT-012 (OWGW Reenroll Request and Response Contract):**
-    *   *Requirement Mapping:* `REQ-042`
+*   **TC-ACT-011 (OWGW Reenroll Request and Response Contract):**
+    *   *Requirement Mapping:* `REQ-041`
     *   *Setup:* Send JSON-RPC `reenroll` requests in parallel with other state-changing requests like `reboot`.
     *   *Assert:* missing/0 `when` is accepted, nonzero `when` returns Invalid Params. Reenroll must strictly acquire the serialization state lock. Assert correct conversion into `ActionCommand` and accurate translation of NATS `error` / `txt` responses.
-*   **TC-ACT-013 (OWGW Script Request and Response Contract):**
-    *   *Requirement Mapping:* `REQ-043`
+*   **TC-ACT-012 (OWGW Script Request and Response Contract):**
+    *   *Requirement Mapping:* `REQ-042`
     *   *Setup:* Send JSON-RPC `script` requests with combinations: (1) valid base64 script, (2) invalid base64 script, (3) `scriptId` included (must be rejected as non-standard), (4) invalid type, (5) invalid URI, (6) oversized script. Mock various results (timeout, gzipped result).
     *   *Assert:* Must enforce strict base64 decoding validation and forbid `scriptId`. Scenarios 2, 3, 4, 5, and 6 return Invalid Params. Scenario 1 maps exactly to NATS payload. Validate execution timeout errors. Translate NATS response formats properly into `error`, `result_64`, `result_sz`, or `result`. Verify sensitive script contents or execution logs are not printed to audit stream.
-*   **TC-ACT-014 (Unsupported Commands Rejection):**
+*   **TC-ACT-013 (Unsupported Commands Rejection):**
     *   *Requirement Mapping:* `REQ-032`
-    *   *Setup:* Send JSON-RPC requests for out-of-scope features: `wifiscan`, `fixedconfig`, `powercycle`, `request`, event buffer retrieval, and `transfer`.
+    *   *Setup:* Send JSON-RPC requests for out-of-scope features: `rrm`, `wifiscan`, `fixedconfig`, `powercycle`, `request`, event buffer retrieval, and `transfer`.
     *   *Assert:* The daemon must immediately reject the requests and return JSON-RPC `-32601 Method Not Found`.
 ---
 
@@ -214,6 +210,10 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-027` (JSON-RPC ID Preservation & Edge Cases)
     *   *Setup:* Submit: (1) a notification (no `id`), (2) a numeric ID `42`, (3) a string ID `"42"`, and (4) a reused ID while the original is still active, and (5) a reused ID matching a completed cached transaction.
     *   *Assert:* (1) Notification generates a valid `correlation_id` but sends no Cloud response. (2/3) Numeric `42` and string `"42"` process in parallel independently without key collision, maintaining raw type in Cloud response. (4) Reused canonical Cloud ID matching an active transaction is rejected, while (5) a completed matching ID replays the cached response. NATS payloads must only contain `correlation_id`.
+*   **TC-RM-008 (PendingPublish Dispatch Deadline):**
+    *   *Requirement Mapping:* `REQ-007` (Transaction Lifecycle)
+    *   *Setup:* Create an action transaction. Move it to `PendingPublish`. Put its payload into the dispatch buffer. Stall the dispatch consumer so no NATS publish occurs. Let the dispatch deadline expire.
+    *   *Assert:* State becomes `Failed`. State never becomes `InFlight`. Downstream timeout never starts. Active maps are cleaned. State-changing reservation is released. Cloud receives `local_service_unavailable`. A later delayed buffer item must not be published as an active command.
 
 ---
 
@@ -306,8 +306,8 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Assert:* The daemon treats the WebSocket writer path as unhealthy and triggers recovery, fails affected transactions, and increments the overflow metric instead of allowing unbounded memory growth.
 *   **TC-INT-005 (Configuration Validation & Startup Failure):**
     *   *Requirement Mapping:* `REQ-030` (Startup Configuration Validation)
-    *   *Setup:* Attempt to boot the daemon with various invalid configurations: missing serial, `http://` cloud URL, insecure `nats://` server, unreadable credentials, and zero/negative bounds (`compression_threshold_bytes <= 0`, `cloud.connect_timeout_seconds <= 0`, and all queue capacities <= 0).
-    *   *Assert:* The daemon must strictly validate the configuration before starting any connection loops, log the specific invalid field, and exit immediately with a non-zero status. Booting with valid defaults must succeed and correctly apply `connect_timeout_seconds=10`, `compression_threshold_bytes=2048`, `ws_writer_capacity=500`, `emergency_capacity=100`, `nats_publish_capacity=100`, `command_result_capacity=50`, and `telemetry_capacity=500`.
+    *   *Setup:* Attempt to boot the daemon with various invalid configurations: missing serial, `http://` cloud URL, insecure `nats://` server, unreadable credentials, zero/negative bounds (`compression_threshold_bytes <= 0`, `cloud.connect_timeout_seconds <= 0`, queue capacities <= 0), and invalid timeout environment variables (malformed strings, `0s`, and `-5s`). Also boot with missing timeout variables to test defaults, and with valid overrides (e.g., `OLG_TIMEOUT_DISPATCH=2s`).
+    *   *Assert:* The daemon must strictly validate the configuration before starting any connection loops, log the specific invalid field, and exit immediately with a non-zero status for invalid configurations. Booting with missing timeout variables must succeed and apply the exact defaults (`5s`, `30s`, `60s`, `120s`). Booting with valid overrides must succeed and accurately apply the overridden durations. Booting with valid config defaults must correctly apply `connect_timeout_seconds=10`, `compression_threshold_bytes=2048`, `ws_writer_capacity=500`, `emergency_capacity=100`, `nats_publish_capacity=100`, `command_result_capacity=50`, and `telemetry_capacity=500`.
 
 ---
 
@@ -321,7 +321,7 @@ This document details the test plans, test cases, and verification strategies fo
 | **REQ-004** | Subject Schema Versioning | `TC-SEC-001` |
 | **REQ-005** | Permissive Parameter Validation | `TC-VAL-001` |
 | **REQ-006** | JetStream KV Consistency Contract | `TC-NET-003`, `TC-INT-002` |
-| **REQ-007** | Transaction Lifecycle | `TC-RM-001` |
+| **REQ-007** | Transaction Lifecycle | `TC-RM-001`, `TC-RM-008` |
 | **REQ-008** | Concurrency Serialization | `TC-RM-002`, `TC-RM-003` |
 | **REQ-009** | Duplicate Active Request Rejection | `TC-RM-004` |
 | **REQ-010** | Operation-Specific Caching & TTL | `TC-RM-005` |
@@ -346,15 +346,14 @@ This document details the test plans, test cases, and verification strategies fo
 | **REQ-029** | Graceful Teardown | `TC-INT-001` |
 | **REQ-030** | Startup Configuration Validation | `TC-INT-005` |
 | **REQ-031** | OWGW Configure Protocol Compatibility | `TC-CON-006` |
-| **REQ-032** | Out of Scope Features | `TC-ACT-014` |
+| **REQ-032** | Out of Scope Features | `TC-ACT-013` |
 | **REQ-033** | OWGW Reboot Protocol Compatibility | `TC-ACT-001` |
 | **REQ-034** | OWGW Factory Protocol Compatibility | `TC-ACT-002` |
 | **REQ-035** | OWGW Trace Protocol Compatibility | `TC-ACT-005` |
 | **REQ-036** | OWGW Ping Protocol Compatibility | `TC-ACT-006` |
 | **REQ-037** | OWGW LEDs Protocol Compatibility | `TC-ACT-007` |
-| **REQ-038** | OWGW RRM Protocol Compatibility | `TC-ACT-008` |
-| **REQ-039** | OWGW Telemetry Protocol Compatibility | `TC-ACT-009` |
-| **REQ-040** | OWGW RTTY Protocol Compatibility | `TC-ACT-010` |
-| **REQ-041** | OWGW Certupdate Protocol Compatibility | `TC-ACT-011` |
-| **REQ-042** | OWGW Reenroll Protocol Compatibility | `TC-ACT-012` |
-| **REQ-043** | OWGW Script Protocol Compatibility | `TC-ACT-013` |
+| **REQ-038** | OWGW Telemetry Protocol Compatibility | `TC-ACT-008` |
+| **REQ-039** | OWGW RTTY Protocol Compatibility | `TC-ACT-009` |
+| **REQ-040** | OWGW Certupdate Protocol Compatibility | `TC-ACT-010` |
+| **REQ-041** | OWGW Reenroll Protocol Compatibility | `TC-ACT-011` |
+| **REQ-042** | OWGW Script Protocol Compatibility | `TC-ACT-012` |

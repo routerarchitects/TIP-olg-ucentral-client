@@ -368,7 +368,7 @@ Queue sizes are configurable via daemon configuration file parameters.
 | Queue Name | Purpose / Type | Capacity | Overflow / Failure Policy |
 | :--- | :--- | :--- | :--- |
 | **Command Dispatch Buffer** | Short-lived NATS handoff buffer (Not durable). | Default: 100 messages | If full or NATS is disconnected, fails fast and rejects the Cloud request with `local_service_unavailable` (JSON-RPC code -32603, application_code 3). |
-| **Command Result Priority Queue** | Handles NATS replies for config/action processing. | Default: 50 messages | High priority and bounded. Because state-changing commands are serialized per device, this queue is not expected to fill during normal operation. Command results must not be silently dropped. If overflow occurs, it is treated as an exceptional local result-delivery failure: the client records an overflow metric, logs the `correlation_id`, command type, and subject, and completes the matching Cloud transaction with an indeterminate local delivery error. The error must state that the downstream result could not be processed locally and must not claim that the downstream operation itself failed. If the result cannot be correlated to an active transaction, it may be discarded after logging and metric emission. |
+| **Command Result Priority Queue** | Handles NATS replies for config/action processing. | Default: 50 messages | High priority and bounded. Because state-changing commands are serialized per device, this queue is not expected to fill during normal operation. Command results must not be silently dropped. If overflow occurs, the client records the overflow metric and logs the `correlation_id`, command type, and subject. The exact correlated downstream result is passed directly to the Request Manager and finalized according to the true downstream outcome. The client must not replace the original result with a generated -32603 error and must not rewrite a successful transaction as Failed. The exact final Cloud response is stored in the TransactionCache. If the response cannot be delivered through the Priority-0 WebSocket queue, the client treats the WebSocket delivery path as unhealthy and triggers path recovery. After reconnection, a Cloud retry using the same request ID receives the exact cached response. |
 | **State Coalescer** | Keeps only the latest state report (last-write-wins). | 1 Slot per Serial | Overwrites previous un-flushed stats with newer state reports. Flushes every 10 seconds. |
 | **Telemetry/Log Ring Buffer** | Bounded FIFO queue for logs and events. | Default: 500 messages | Bounded FIFO. Drops oldest low-priority events on overflow (FIFO drop). Excludes high-severity audit logs. |
 
@@ -379,7 +379,7 @@ Exposes a priority-aware message dispatch queue writing to the WebSocket connect
 *   **Priority 2:** Coalesced device state reports.
 *   **Priority 3:** Standard telemetry events and syslog logs.
 
-**Circuit Breaker on Priority 0 Overflow:** Priority 0 (JSON-RPC responses) bypasses lower-priority backlog but remains bounded by a fixed emergency queue limit to prevent unbounded memory growth when the WebSocket path is stalled. When this limit is exhausted, the daemon must treat the WebSocket writer path as unhealthy and trigger recovery if needed, fail affected transactions, and increment an overflow metric.
+**Circuit Breaker on Priority 0 Overflow:** Priority 0 (JSON-RPC responses) bypasses lower-priority backlog but remains bounded by a fixed emergency queue limit to prevent unbounded memory growth when the WebSocket path is stalled. When this limit is exhausted, the daemon must treat the WebSocket writer path as unhealthy, preserve the terminal transaction state and cached response, trigger recovery if needed, and increment an overflow metric.
 
 **Non-Blocking Safety on Priority 1:** To prevent deadlocking the core NATS handler loop during critical downstream operations, pushes to the Priority 1 queue must be strictly non-blocking. If the queue reaches capacity (e.g., due to a stalled WebSocket), it must return a fast error and record an `audit_delivery_failure` metric instead of blocking the caller.
 ### 4.3 Rate Limiting & Sizing Constraints
@@ -456,7 +456,7 @@ The client maps internal failures to standard JSON-RPC 2.0 error codes:
 | **-32603 (data.application_code = 4)** | Validation Failed | Schema check failed at the uCentral client validator. |
 | **-32603 (data.application_code = 5)** | Rollback Completed | Configuration failed but rollback to previous UUID succeeded. |
 | **-32603 (data.application_code = 6)** | Rollback Failed | Configuration failed and rollback to previous UUID also failed. |
-| **-32603 (data.application_code = 7)** | Result Delivery Failed | Downstream operation outcome is indeterminate because the uCentral client could not process or deliver the result locally. |
+
 
 ### 8.2 Result Enums
 All result structures return one of the following standard values:

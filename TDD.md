@@ -144,10 +144,10 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-013` (Command Result Priority Queue)
     *   *Setup:* Fill the NATS command result queue (capacity 50) to 90% capacity. Send telemetry events.
     *   *Assert:* The client must throttle/delay telemetry forwarding to prioritize command results, ensuring core loops do not block.
-*   **TC-QUE-002 (Command Result Queue Overflow Produces Indeterminate Result):**
+*   **TC-QUE-002 (Command Result Queue Overflow Preserves Downstream Result):**
     *   *Requirement Mapping:* `REQ-013`, `REQ-021`
     *   *Setup:* Fill the Command Result Priority Queue to capacity. Simulate a correlated downstream command result arriving with a known `correlation_id`.
-    *   *Assert:* `Push()` must return `ErrQueueFull`; the daemon must log the `correlation_id`, command type, and subject, increment `command_result_overflow`, and trigger path recovery (e.g. WebSocket reconnect). The Request Manager MUST NOT rewrite the transaction state to Failed and MUST NOT cache a `-32603` failure. The exact original downstream response must be preserved in the `TransactionCache`. When the Cloud reconnects and retries, it must receive the exact original cached response.
+    *   *Assert:* `Push()` must return `ErrQueueFull`; the daemon must log the `correlation_id`, command type, and subject and increment `command_result_overflow`. The Request Manager MUST NOT rewrite the transaction state to Failed and MUST NOT cache a generated `-32603` failure. The exact original downstream response must be processed directly and preserved in the `TransactionCache`. If subsequent delivery to the Priority-0 WebSocket scheduler also fails, the daemon must trigger WebSocket path recovery. When the Cloud reconnects and retries, it must receive the exact original cached response.
 *   **TC-BUF-004 (WebSocket permessage-deflate Negotiation & Threshold):**
     *   *Requirement Mapping:* `REQ-024` (Payload Compression)
     *   *Setup:* Set `compression_threshold_bytes` to 2048. Perform WebSocket handshake simulating a controller that accepts `permessage-deflate`. Generate a payload of size 1024 bytes and another of size 3072 bytes.
@@ -345,7 +345,7 @@ This document details the test plans, test cases, and verification strategies fo
 *   **TC-INT-004 (Priority 0 Overflow Recovery):**
     *   *Requirement Mapping:* `REQ-014`
     *   *Setup:* Simulate a stalled WebSocket writer while the daemon continues generating Priority 0 responses.
-    *   *Assert:* The daemon treats the WebSocket writer path as unhealthy and triggers recovery, fails affected transactions, and increments the overflow metric instead of allowing unbounded memory growth.
+    *   *Assert:* The daemon treats the WebSocket writer path as unhealthy, triggers recovery, preserves the terminal transaction state and cached response, and increments the overflow metric instead of allowing unbounded memory growth.
 *   **TC-INT-005 (Configuration Validation & Startup Failure):**
     *   *Requirement Mapping:* `REQ-030` (Startup Configuration Validation)
     *   *Setup:* Attempt to boot the daemon with various invalid configurations: missing serial, `http://` cloud URL, insecure `nats://` server, unreadable credentials, zero/negative bounds (`compression_threshold_bytes <= 0`, `cloud.connect_timeout_seconds <= 0`, queue capacities <= 0), and invalid timeout environment variables (malformed strings, `0s`, and `-5s`). Also boot with missing timeout variables to test defaults, and with valid overrides (e.g., `OLG_TIMEOUT_DISPATCH=2s`).

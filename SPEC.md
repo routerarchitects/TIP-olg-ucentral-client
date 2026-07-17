@@ -76,7 +76,7 @@ TIP-olg-ucentral-client/
     	ErrValidationFailed    = 4
     	ErrRollbackSuccess     = 5
     	ErrRollbackFailed      = 6
-    	ErrResultDeliveryFailed = 7 // Queue overflow maps to this, not ErrAppFailure
+
     )
 
     type JSONRPCRequest struct {
@@ -529,7 +529,7 @@ TIP-olg-ucentral-client/
     // - Pushes append the message to the corresponding priority queue.
     // - ALL PUSHES ARE STRICTLY NON-BLOCKING. If any queue (Priority 0, 1, 2, or 3) reaches its maximum capacity, Push() must immediately return ErrQueueFull. 
     // - Note on Ownership: The scheduler itself does not implement LIFO overwriting or FIFO dropping policies. Those rate-limiting policies are exclusively owned and executed by the upstream StateCoalescer and TelemetryRingBuffer before data is ever pushed to the scheduler.
-    // - For Priority 0, if Push() returns ErrQueueFull, the caller must treat the WebSocket writer path as unhealthy, trigger recovery if needed, fail affected transactions, and record an overflow metric.
+    // - For Priority 0, if Push() returns ErrQueueFull, the caller must preserve the terminal transaction state and cached response, treat the WebSocket writer path as unhealthy, trigger path recovery, and record an overflow metric.
     // - For Priority 1, if Push() returns ErrQueueFull, the caller must return immediately, increment audit_delivery_failure, and must not generate another audit message.
     // - For Priority 2, if Push() returns ErrQueueFull, the caller must do nothing; the state remains in the upstream StateCoalescer for the next flush.
     // - For Priority 3, if Push() returns ErrQueueFull, the caller must drop the payload and record a dropped_by_reason.scheduler_full metric.
@@ -642,12 +642,11 @@ TIP-olg-ucentral-client/
 If `Push()` returns `ErrQueueFull`, the subscriber must not silently discard the correlated result or wait for the transaction timeout. Using the already-extracted `correlation_id`, it must:
 1. Record the `command_result_overflow` metric.
 2. Log the correlation ID, command type, and NATS subject.
-3. Construct a JSON-RPC error response using `-32603` with `error.data.application_code = 7` (`Result Delivery Failed`).
-4. Call `RequestManager.TerminalFailAndDeliverDirect(correlationID, errResponse)` method.
+3. Pass the exact, original JSON response payload into the normal `RequestManager.Complete()` or `Fail()` methods to finalize the transaction according to the true device outcome.
 
-`RequestManager.TerminalFailAndDeliverDirect()` performs the normal terminal transaction processing (marking the transaction as Failed, caching the terminal response, removing the active transaction, and releasing the state lock). Instead of queueing to the Command Result Queue, it attempts direct delivery to the Priority-0 WebSocket scheduler. If the Priority-0 scheduler is also full, it must record a separate outbound-delivery failure and trigger Priority-0 WebSocket path recovery.
+The Request Manager MUST NOT rewrite the transaction state to Failed and MUST NOT cache a generated `-32603` failure. The exact original downstream response must be preserved in the `TransactionCache`. When `Complete()` or `Fail()` subsequently attempt to enqueue the response to the Priority-0 WebSocket scheduler, and if that queue is also full, the Request Manager must trigger Priority-0 WebSocket path recovery (e.g. WebSocket reconnect). When the Cloud reconnects and retries the command, it will receive the exact original cached response.
 
-The error represents a local result-processing failure. It must not report that the downstream operation itself failed, because the downstream operation may already have completed. If the result payload cannot be decoded or its `correlation_id` does not match an active transaction, it may be discarded only after logging and metric emission.
+If the result payload cannot be decoded or its `correlation_id` does not match an active transaction, it may be discarded only after logging and metric emission.
 *   **Telemetry and Log Throttling (Activation & Release):** The Main loop polls `Utilization()` before processing telemetry or standard logs.
     *   **Activation:** If `Utilization() >= 0.90` (90% capacity, e.g., 45/50 items), the daemon engages throttling, pausing all reads of both telemetry and standard logs from the `TelemetryRingBuffer` (which is shared by both streams).
     *   **Release:** Throttling remains engaged until `Utilization() <= 0.50` (queue drops to 50% capacity), creating a hysteresis loop to prevent rapid toggling, at which point telemetry and log forwarding resumes.
@@ -783,7 +782,7 @@ The error represents a local result-processing failure. It must not report that 
     // (2) Persist the OperationStore record. (3) Transfer state-changing reservation ownership from CorrelationID to OperationID.
     // (4) Cancel the ordinary response timer. (5) Cache the initial "started" response. (6) Remove the JSON-RPC transaction from active maps and mark it completed. (7) Release mutex and enqueue response.
     func (m *DefaultRequestManager) RespondAndRetain(correlationID string, response []byte) error
-    func (m *DefaultRequestManager) TerminalFailAndDeliverDirect(correlationID string, errResponse []byte) error
+
     func (m *DefaultRequestManager) Fail(correlationID string, errResponse []byte) error
     func (m *DefaultRequestManager) Timeout(correlationID string) error
 

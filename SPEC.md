@@ -770,7 +770,7 @@ If the result payload cannot be decoded or its `correlation_id` does not match a
     // (1b) If the transaction is in TxPendingPublish, store the response in pendingReplies, return nil, and DO NOT proceed.
     // (2) Immediately mark the transaction state as terminal to win the race.
     // (3) Translate the downstream result and build the exact final Cloud response.
-    // (4) Store the response in TransactionCache (only if RespondToCloud=true and RequestKey is valid).
+    // (4) Store the response in TransactionCache (only if RespondToCloud=true and RequestKey is valid), determining the correct TTL by calling `TTLForMethod(transaction.Method)`.
     // (5) Remove active indexes (activeCloudRequests, transactionsByCorrelationID) and release the activeStateTx lock if held by this correlationID.
     // (6) Release the Request Manager mutex.
     // (7) Reserve/enqueue Priority-0 delivery of the cached response. If reservation fails, DO NOT alter the transaction state. The true device outcome must be preserved. Simply trigger path recovery.
@@ -971,6 +971,26 @@ The uCentral client must not register a NATS responder for `ucentral.v1.device.<
         CommandResultCapacity int `json:"command_result_capacity"`
         TelemetryCapacity     int `json:"telemetry_capacity"`
     }
+
+    type CacheTTLConfig struct {
+        Configure    int
+        LEDs         int
+        Reboot       int
+        RemoteAccess int
+        Factory      int
+        CertUpdate   int
+        Reenroll     int
+        Script       int
+        Upgrade      int
+        Default      int
+    }
+
+    // LoadCacheTTLConfigFromEnv parses the OLG_CACHE_TTL_* environment variables as Go durations,
+    // applies the documented defaults if unset, and rejects malformed or negative durations.
+    func LoadCacheTTLConfigFromEnv() (CacheTTLConfig, error)
+    
+    // TTLForMethod returns the configured TTL in seconds for a specific JSON-RPC method.
+    func (c CacheTTLConfig) TTLForMethod(method string) int
     ```
     *   **Validation Rules & Defaults:**
         *   `serial`: Required, non-empty

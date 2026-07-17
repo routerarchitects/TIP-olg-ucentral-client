@@ -55,12 +55,25 @@ The uCentral client is a lightweight, Go-based gateway daemon that bridges a clo
 
 ## 3. Environment Variables
 
-The daemon utilizes container environment variables to configure operational timeouts safely. All durations must be specified in valid Go duration syntax (e.g., `5s`, `1m30s`). If an environment variable is omitted, the daemon uses the default value. If a variable is malformed or zero/negative, the daemon triggers a fatal startup error.
+The daemon utilizes container environment variables to configure operational timeouts and cache durations safely. All durations must be specified in valid Go duration syntax (e.g., `5s`, `1m30s`, `1h`). If an environment variable is omitted, the daemon uses the default value. If a variable is malformed or zero/negative, the daemon triggers a fatal startup error.
 
+**Timeouts:**
 *   `OLG_TIMEOUT_DISPATCH` (Default: `5s`): Bounded timeout for the local preparation and NATS dispatch phases.
 *   `OLG_TIMEOUT_CONFIGURE` (Default: `30s`): Maximum downstream response wait time for `configure`.
 *   `OLG_TIMEOUT_ACTION_EXTENDED` (Default: `120s`): Extended response wait time for heavy actions (`upgrade`, `certupdate`, `script`, `trace`).
 *   `OLG_TIMEOUT_ACTION_DEFAULT` (Default: `60s`): Maximum downstream response wait time for all other standard actions (e.g., `ping`, `reboot`, `factory`).
+
+**Cache TTLs:**
+*   `OLG_CACHE_TTL_DEFAULT` (Default: `2m`): TTL for read-only diagnostics (`ping`, `trace`, `telemetry`, `capabilities.get`, `status.get`).
+*   `OLG_CACHE_TTL_CONFIGURE` (Default: `5m`): TTL for `configure`.
+*   `OLG_CACHE_TTL_LEDS` (Default: `5m`): TTL for `leds`.
+*   `OLG_CACHE_TTL_REBOOT` (Default: `10m`): TTL for `reboot`.
+*   `OLG_CACHE_TTL_REMOTE_ACCESS` (Default: `10m`): TTL for `remote_access`.
+*   `OLG_CACHE_TTL_FACTORY` (Default: `30m`): TTL for `factory`.
+*   `OLG_CACHE_TTL_CERTUPDATE` (Default: `30m`): TTL for `certupdate`.
+*   `OLG_CACHE_TTL_REENROLL` (Default: `30m`): TTL for `reenroll`.
+*   `OLG_CACHE_TTL_SCRIPT` (Default: `30m`): TTL for `script`.
+*   `OLG_CACHE_TTL_UPGRADE` (Default: `60m`): TTL for `upgrade` (measured from completion).
 
 ---
 

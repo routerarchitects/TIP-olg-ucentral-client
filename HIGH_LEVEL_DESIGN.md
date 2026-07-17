@@ -300,7 +300,7 @@ When the downstream agent fails to apply a configuration and triggers a rollback
 *   The uCentral Client translates this into a JSON-RPC response containing error code `-32603` (Internal Error) with `application_code` equal to `5` (Rollback Completed) in the `error.data` object, a message stating `"Configuration apply failed. Rolled back to active configuration UUID <uuid>"`, and lists any offending rejected configuration keys.
 
 ### 3.8 Startup & Reconnect Dependency Handling
-The client boots and connects to the Cloud and NATS **concurrently and independently** using separate background execution threads. Cloud connectivity does **not** block on NATS.
+The client boots and connects to the Cloud and NATS **concurrently and independently** using separate background execution threads. Cloud connectivity does **not** block on NATS. The `GlobalState` is continuously derived from the underlying `CloudState` and `NATSState`.
 
 ```mermaid
 stateDiagram-v2
@@ -324,13 +324,14 @@ stateDiagram-v2
         }
     }
     
-    state GlobalState {
-        SystemConnecting --> Offline : Cloud != Connected AND NATS != Connected
-        SystemConnecting --> Operational : CloudConnected + NATSConnected
-        SystemConnecting --> ProtocolFailure : CloudConnected + Cloud Explicitly Rejects Version (Takes Precedence)
-        SystemConnecting --> CloudDegraded : (CloudOffline or CloudConnecting) + NATSConnected
-        SystemConnecting --> NATSDegraded : CloudConnected + (NATSOffline or NATSConnecting)
-    }
+    note right of SystemConnecting
+        GlobalState is continuously derived:
+        if protocolRejected: ProtocolFailure
+        else if cloudConnected && natsConnected: Operational
+        else if !cloudConnected && natsConnected: CloudDegraded
+        else if cloudConnected && !natsConnected: NATSDegraded
+        else: Offline
+    end note
 ```
 
 *   **Asynchronous Reconnection:** If the Cloud connection drops, the client enters the `CloudDegraded` global state, attempting to reconnect to the Cloud in the background using backoff while NATS continues to function. **No daemon restart is required** for intermittent WAN outages.

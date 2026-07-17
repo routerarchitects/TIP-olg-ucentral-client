@@ -60,39 +60,39 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Setup:* Send JSON-RPC `factory` requests: (1) Missing/zero `when`, (2) non-zero `when`, (3) missing `keep_redirector`, (4) `keep_redirector` = 0, (5) `keep_redirector` = 1, (6) invalid `keep_redirector` (e.g. 2). Then mock internal NATS `ResultEnvelope` statuses (success, busy, rejected).
     *   *Assert:* (1) Missing/zero `when` is accepted. (2) Non-zero `when` yields Invalid Params. (3) Missing `keep_redirector` yields Invalid Params. (4,5) `keep_redirector` values 0 and 1 are accepted. (6) Invalid `keep_redirector` yields Invalid Params. The `keep_redirector` field must be preserved in the `action: "factory"` NATS payload. For responses: Internal success maps to `status.error = 0`, busy maps to `1`, rejection maps to `2`. Ensure the response preserves the original JSON-RPC `id` and serial.
 *   **TC-ACT-005 (OWGW Trace Request Contract):**
-    *   *Requirement Mapping:* `REQ-036`
+    *   *Requirement Mapping:* `REQ-035`
     *   *Setup:* Send JSON-RPC `trace` requests with `duration`, `packets`, `network`, `interface`, and `uri`.
     *   *Assert:* Request maps exactly to NATS payload. Returns trace status object.
 *   **TC-ACT-006 (OWGW Ping Request Contract):**
-    *   *Requirement Mapping:* `REQ-037`
+    *   *Requirement Mapping:* `REQ-036`
     *   *Setup:* Send JSON-RPC `ping` requests. Mock NATS response with ping info.
     *   *Assert:* Request maps to NATS payload. Response properly translates `serial`, `uuid`, and `deviceUTCTime` without mapping arbitrary internal strings.
 *   **TC-ACT-007 (OWGW LEDs Request Contract):**
-    *   *Requirement Mapping:* `REQ-038`
+    *   *Requirement Mapping:* `REQ-037`
     *   *Setup:* Send JSON-RPC `leds` requests with varied `pattern` and `duration`.
     *   *Assert:* Request maps exactly to NATS payload. Returns LED status object.
 *   **TC-ACT-008 (OWGW RRM Request Contract):**
-    *   *Requirement Mapping:* `REQ-039`
+    *   *Requirement Mapping:* `REQ-038`
     *   *Setup:* Send JSON-RPC `rrm` requests.
     *   *Assert:* Request maps exactly to NATS payload. Returns RRM status object.
 *   **TC-ACT-009 (OWGW Telemetry Request Contract):**
-    *   *Requirement Mapping:* `REQ-040`
+    *   *Requirement Mapping:* `REQ-039`
     *   *Setup:* Send JSON-RPC `telemetry` requests with various `interval` and `types`.
     *   *Assert:* Validation must strictly enforce `0 <= interval <= 60`, `types` length between 1 and 2, exact match for "dhcp" or "rrm", and no duplicates. Valid requests map exactly to NATS payload. Returns telemetry status object.
 *   **TC-ACT-010 (OWGW Remote Access / RTTY Request Contract):**
-    *   *Requirement Mapping:* `REQ-041`
+    *   *Requirement Mapping:* `REQ-040`
     *   *Setup:* Send JSON-RPC `remote_access` requests testing `method="rtty"`, exact `token`, `server`, `port` fields. Mock response with optional `meta`.
     *   *Assert:* Non-"rtty" methods or missing mandatory fields return Invalid Params. Valid requests map exactly to NATS `action: "rtty"` payload. Returns remote_access status object while correctly preserving optional `meta`.
 *   **TC-ACT-011 (OWGW Certupdate Request and Response Contract):**
-    *   *Requirement Mapping:* `REQ-042`
+    *   *Requirement Mapping:* `REQ-041`
     *   *Setup:* Send JSON-RPC `certupdate` request containing base64 encoded certificates payload.
     *   *Assert:* Request maps exactly to NATS `action: "certupdate"`. Response must translate NATS result to `error` and `txt` properties. Validates: (1) malformed base64 returns Invalid Params, (2) decoded bundle over 2 MB returns Invalid Params, (3) valid base64 remains unchanged in `ActionCommand.payload`, and (4) certificate data never appears in logs.
 *   **TC-ACT-012 (OWGW Reenroll Request and Response Contract):**
-    *   *Requirement Mapping:* `REQ-043`
+    *   *Requirement Mapping:* `REQ-042`
     *   *Setup:* Send JSON-RPC `reenroll` requests in parallel with other state-changing requests like `reboot`.
     *   *Assert:* missing/0 `when` is accepted, nonzero `when` returns Invalid Params. Reenroll must strictly acquire the serialization state lock. Assert correct conversion into `ActionCommand` and accurate translation of NATS `error` / `txt` responses.
 *   **TC-ACT-013 (OWGW Script Request and Response Contract):**
-    *   *Requirement Mapping:* `REQ-044`
+    *   *Requirement Mapping:* `REQ-043`
     *   *Setup:* Send JSON-RPC `script` requests with combinations: (1) valid base64 script, (2) invalid base64 script, (3) `scriptId` included (must be rejected as non-standard), (4) invalid type, (5) invalid URI, (6) oversized script. Mock various results (timeout, gzipped result).
     *   *Assert:* Must enforce strict base64 decoding validation and forbid `scriptId`. Scenarios 2, 3, 4, 5, and 6 return Invalid Params. Scenario 1 maps exactly to NATS payload. Validate execution timeout errors. Translate NATS response formats properly into `error`, `result_64`, `result_sz`, or `result`. Verify sensitive script contents or execution logs are not printed to audit stream.
 *   **TC-ACT-014 (Unsupported Commands Rejection):**
@@ -150,10 +150,10 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-013`, `REQ-021`
     *   *Setup:* Fill the Command Result Priority Queue to capacity. Simulate a correlated downstream command result arriving with a known `correlation_id`.
     *   *Assert:* `Push()` must return `ErrQueueFull`; the daemon must log the `correlation_id`, command type, and subject, increment `command_result_overflow`, and complete the matching Cloud transaction with JSON-RPC `-32603` and `error.data.application_code = 7` (`Result Delivery Failed`). The response must state that the downstream result could not be processed locally and must not claim that the downstream operation failed.
-*   **TC-BUF-004 (Gzip Compression Trigger Threshold):**
+*   **TC-BUF-004 (WebSocket permessage-deflate Negotiation & Threshold):**
     *   *Requirement Mapping:* `REQ-024` (Payload Compression)
-    *   *Setup:* Set `compression_threshold_bytes` to 2048. Generate a payload of size 1024 bytes and another of size 3072 bytes.
-    *   *Assert:* The 1024-byte payload must be sent uncompressed. The 3072-byte payload must be gzipped before WebSocket transmission.
+    *   *Setup:* Set `compression_threshold_bytes` to 2048. Perform WebSocket handshake simulating a controller that accepts `permessage-deflate`. Generate a payload of size 1024 bytes and another of size 3072 bytes.
+    *   *Assert:* The client must successfully negotiate the `permessage-deflate` extension during handshake. The 1024-byte payload must be sent as an uncompressed WebSocket frame. The 3072-byte payload must be sent as a compressed WebSocket frame managed transparently by the WebSocket layer. Unconditional application-level gzip mapping to a binary or non-standard format is prohibited.
 *   **TC-QUE-003 (Priority 3 Read Hysteresis for Telemetry and Logs):**
     *   *Requirement Mapping:* `REQ-013` (Command Result Priority Queue)
     *   *Setup:* Fill the Command Result Priority queue beyond its critical threshold. While in this state, attempt to poll `TelemetryRingBuffer` for both telemetry and log events. Drain the Command Result queue below its resume threshold and poll again.
@@ -349,12 +349,12 @@ This document details the test plans, test cases, and verification strategies fo
 | **REQ-032** | Out of Scope Features | `TC-ACT-014` |
 | **REQ-033** | OWGW Reboot Protocol Compatibility | `TC-ACT-001` |
 | **REQ-034** | OWGW Factory Protocol Compatibility | `TC-ACT-002` |
-| **REQ-036** | OWGW Trace Protocol Compatibility | `TC-ACT-005` |
-| **REQ-037** | OWGW Ping Protocol Compatibility | `TC-ACT-006` |
-| **REQ-038** | OWGW LEDs Protocol Compatibility | `TC-ACT-007` |
-| **REQ-039** | OWGW RRM Protocol Compatibility | `TC-ACT-008` |
-| **REQ-040** | OWGW Telemetry Protocol Compatibility | `TC-ACT-009` |
-| **REQ-041** | OWGW RTTY Protocol Compatibility | `TC-ACT-010` |
-| **REQ-042** | OWGW Certupdate Protocol Compatibility | `TC-ACT-011` |
-| **REQ-043** | OWGW Reenroll Protocol Compatibility | `TC-ACT-012` |
-| **REQ-044** | OWGW Script Protocol Compatibility | `TC-ACT-013` |
+| **REQ-035** | OWGW Trace Protocol Compatibility | `TC-ACT-005` |
+| **REQ-036** | OWGW Ping Protocol Compatibility | `TC-ACT-006` |
+| **REQ-037** | OWGW LEDs Protocol Compatibility | `TC-ACT-007` |
+| **REQ-038** | OWGW RRM Protocol Compatibility | `TC-ACT-008` |
+| **REQ-039** | OWGW Telemetry Protocol Compatibility | `TC-ACT-009` |
+| **REQ-040** | OWGW RTTY Protocol Compatibility | `TC-ACT-010` |
+| **REQ-041** | OWGW Certupdate Protocol Compatibility | `TC-ACT-011` |
+| **REQ-042** | OWGW Reenroll Protocol Compatibility | `TC-ACT-012` |
+| **REQ-043** | OWGW Script Protocol Compatibility | `TC-ACT-013` |

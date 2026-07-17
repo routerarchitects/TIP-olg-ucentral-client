@@ -724,6 +724,7 @@ If the result payload cannot be decoded or its `correlation_id` does not match a
     	stateLock                   sync.Mutex              // Enforces serialized state-changing commands
     	activeStateTx               string                  // CorrelationID or OperationID holding the state lock
     	cache                       *TransactionCache
+    	cacheTTLConfig              CacheTTLConfig
     	scheduler                   *PriorityScheduler
     	store                       OperationStore
     	pendingReplies              map[string][]byte       // Key: CorrelationID
@@ -734,7 +735,7 @@ If the result payload cannot be decoded or its `correlation_id` does not match a
     // activeCloudRequests, TransactionCache, duplicate-active detection, and completed-response replay.
     func CanonicalRequestKey(method string, id json.RawMessage) (string, error)
 
-    func NewRequestManager(dispatchTimeout time.Duration, cache *TransactionCache, scheduler *PriorityScheduler, store OperationStore) *DefaultRequestManager
+    func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLConfig, cache *TransactionCache, scheduler *PriorityScheduler, store OperationStore) *DefaultRequestManager
     
     // CreateTransaction creates a new transaction.
     // The Request Manager must canonicalize the incoming Cloud JSON-RPC ID and enforce the following order:
@@ -770,7 +771,7 @@ If the result payload cannot be decoded or its `correlation_id` does not match a
     // (1b) If the transaction is in TxPendingPublish, store the response in pendingReplies, return nil, and DO NOT proceed.
     // (2) Immediately mark the transaction state as terminal to win the race.
     // (3) Translate the downstream result and build the exact final Cloud response.
-    // (4) Store the response in TransactionCache (only if RespondToCloud=true and RequestKey is valid), determining the correct TTL by calling `TTLForMethod(transaction.Method)`.
+    // (4) Store the response in TransactionCache (only if RespondToCloud=true and RequestKey is valid), determining the correct TTL by calling `m.cacheTTLConfig.TTLForMethod(transaction.Method)`.
     // (5) Remove active indexes (activeCloudRequests, transactionsByCorrelationID) and release the activeStateTx lock if held by this correlationID.
     // (6) Release the Request Manager mutex.
     // (7) Reserve/enqueue Priority-0 delivery of the cached response. If reservation fails, DO NOT alter the transaction state. The true device outcome must be preserved. Simply trigger path recovery.
@@ -1014,9 +1015,11 @@ The uCentral client must not register a NATS responder for `ucentral.v1.device.<
 
 *   **Initialization & Signal Handling:**
     *   Loads and strictly validates JSON configuration.
+    *   Loads `CacheTTLConfig` via `LoadCacheTTLConfigFromEnv()`. If an error is returned (malformed/zero/negative values), startup must fail immediately.
     *   Instantiates Queues, Request Manager, WebSocket client, NATS wrapper.
         * `NewPriorityScheduler(queues.ws_writer_capacity, queues.emergency_capacity)`
         * `NewTelemetryRingBuffer(queues.telemetry_capacity)`
+        * `NewRequestManager(dispatchTimeout, cacheTTLConfig, cache, scheduler, store)`
     *   Launches parallel reconnection threads.
     *   Listens for `SIGINT` / `SIGTERM` to perform graceful resource teardowns.
 

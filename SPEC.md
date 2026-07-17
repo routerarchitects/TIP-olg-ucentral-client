@@ -668,14 +668,15 @@ The error represents a local result-processing failure. It must not report that 
     )
 
     type Transaction struct {
-    	CorrelationID  string
-    	CloudRPCID     json.RawMessage
-    	RespondToCloud bool
-    	Method         string
-    	State          TransactionState
-    	CreatedAt      time.Time
-    	TimeoutAt      time.Time
-    	Cancel         context.CancelFunc
+    	CorrelationID   string
+    	CloudRPCID      json.RawMessage
+    	RespondToCloud  bool
+    	Method          string
+    	State           TransactionState
+    	CreatedAt       time.Time
+    	TimeoutDuration time.Duration
+    	TimeoutAt       time.Time
+    	Cancel          context.CancelFunc
     }
 
     type DefaultRequestManager struct {
@@ -703,9 +704,12 @@ The error represents a local result-processing failure. It must not report that 
     // must be performed atomically under one Request Manager synchronization boundary. To avoid deadlocks, the lock ordering
     // must be: acquire `DefaultRequestManager.mu` first, then call `TransactionCache.Get` (which acquires the cache RWMutex).
     // If respondToCloud is false (e.g. for notifications), the implementation MUST NOT insert an empty/null Cloud ID into activeCloudRequests or TransactionCache.
+    // CreateTransaction records the configured downstream timeout duration, but does not start the downstream response timer or set TimeoutAt.
     func (m *DefaultRequestManager) CreateTransaction(cloudRPCID json.RawMessage, respondToCloud bool, method string, timeout time.Duration, isStateChanging bool) (*Transaction, error)
     func (m *DefaultRequestManager) MarkPreparingDispatch(correlationID string) error
     func (m *DefaultRequestManager) MarkPendingPublish(correlationID string) error
+    // MarkInFlight atomically transitions to TxInFlight, calculates and sets TimeoutAt using TimeoutDuration, 
+    // and starts the downstream response timer. Timeout is invalid in TxCreated, TxPreparingDispatch, and TxPendingPublish.
     func (m *DefaultRequestManager) MarkInFlight(correlationID string) error
     // Terminal methods must atomically insert into the transaction cache,
     // cleanup the active transaction, and release the activeStateTx lock if held.

@@ -690,6 +690,7 @@ The error represents a local result-processing failure. It must not report that 
     type Transaction struct {
     	CorrelationID    string
     	CloudRPCID       json.RawMessage
+    	CanonicalCloudID string
     	RespondToCloud   bool
     	Method           string
     	State            TransactionState
@@ -742,20 +743,29 @@ The error represents a local result-processing failure. It must not report that 
     func (m *DefaultRequestManager) MarkPreparingDispatch(correlationID string) error
     // MarkPendingPublish transitions the transaction from TxPreparingDispatch to TxPendingPublish.
     func (m *DefaultRequestManager) MarkPendingPublish(correlationID string) error
-    // MarkInFlight atomically transitions from TxPendingPublish to TxInFlight, calculates and sets ResponseDeadline using TimeoutDuration, 
-    // and starts the downstream response timer. Timeout is invalid in TxCreated, TxPreparingDispatch, and TxPendingPublish.
+    // MarkInFlight is the final step of action dispatch. The dispatch sequence MUST be:
+    // (1) Create/register transaction, (2) Install/register NATS reply inbox subscription,
+    // (3) Prepare NATS command, (4) Publish to NATS successfully, (5) Call MarkInFlight.
+    // MarkInFlight atomically transitions from TxPendingPublish to TxInFlight, calculates and sets
+    // ResponseDeadline using TimeoutDuration, and starts the downstream response timer.
+    // Timeout is invalid in TxCreated, TxPreparingDispatch, and TxPendingPublish.
+    // If a fast reply arrives before MarkInFlight completes, it must queue or successfully map via the active state.
     func (m *DefaultRequestManager) MarkInFlight(correlationID string) error
-    // Terminal methods must validate the transition legality, atomically insert into the transaction cache,
-    // cleanup the active transaction, and release the activeStateTx lock if held.
-    // Complete, Fail, Timeout, and Cancel are concurrency-safe and may be invoked
-    // by the dedicated result-processing loop or by a NATS subscriber when enqueueing
-    // a correlated result fails.
+    // Terminal methods (Complete, Fail, Timeout) perform terminal processing as an atomic logical sequence:
+    // (1) The first terminal transition performed under the Request Manager mutex wins. Subsequent attempts
+    //     must return a typed ErrAlreadyTerminal, which is treated as an expected concurrency race, not an assertion failure.
+    // (2) Translate the downstream result.
+    // (3) Reserve/enqueue Priority-0 delivery. If reservation fails, transition to Failed (app code 7), cache the delivery error, and trigger path recovery.
+    // (4) Cache the exact response only if RespondToCloud=true and CanonicalCloudID is valid (notifications are not cached).
+    // (5) Remove active indexes and release the activeStateTx lock if held.
+    // (6) Mark terminal state.
+    // These methods are concurrency-safe and may be invoked by the dedicated result-processing loop,
+    // by a NATS subscriber, or by the timeout timer.
     func (m *DefaultRequestManager) Complete(correlationID string, response []byte) error
     func (m *DefaultRequestManager) RespondAndRetain(correlationID string, response []byte) error
     func (m *DefaultRequestManager) TerminalFailAndDeliverDirect(correlationID string, errResponse []byte) error
     func (m *DefaultRequestManager) Fail(correlationID string, errResponse []byte) error
     func (m *DefaultRequestManager) Timeout(correlationID string) error
-    func (m *DefaultRequestManager) Cancel(correlationID string) error
 
 #### PR 3.2: Duplicate Attachment & Cache TTL
 *   **Target File:** `pkg/reqmgr/cache.go`, `pkg/reqmgr/store.go`, `pkg/reqmgr/manager.go` (extensions)

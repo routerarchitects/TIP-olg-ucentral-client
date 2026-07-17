@@ -11,17 +11,17 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-028` (NATS Envelope Serialization Contract)
     *   *Setup:* Create instances of `ConfigureCommand`, `ActionCommand`, and `ResultEnvelope`.
     *   *Assert:* Marshalling to JSON must produce exact keys for each envelope type:
-        *   `ActionCommand`: `version`, `correlation_id`, `target`, `command_type`, `action`, `payload`, `timestamp`. Must assert that if `payload` is nil, it is correctly omitted or formatted. Furthermore, if `action` is `upgrade` and `operation_id` is empty, serialization must fail explicitly.
+        *   `ActionCommand`: `version`, `correlation_id`, `target`, `command_type`, `action`, `payload`, `timestamp`. Must assert that if `payload` is nil, it is correctly omitted or formatted. Furthermore, calling `Validate()` must explicitly fail if `action` is `upgrade` and `operation_id` is empty before attempting serialization or dispatch.
         *   `ConfigureCommand`: `version`, `correlation_id`, `target`, `uuid`, `kv_key`, `kv_revision`, `timestamp`. Must assert that the raw `payload` is absent.
         *   `ResultEnvelope`: `version`, `correlation_id`, `target`, `command_type`, `result`, `message`, `timestamp`. Verify payload is serialized for command-specific results such as script, certupdate, and ping, and omitted when empty. Additionally verify that `operation_id` is serialized for upgrade operations, `uuid` is serialized for configure operations, and omitted fields are absent from the JSON.
 *   **TC-CON-002 (Error Mappings):**
     *   *Requirement Mapping:* `REQ-021` (JSON-RPC Error Mapping)
     *   *Setup:* Pass internal error enum `ErrServiceUnavailable` to JSON-RPC error encoder helper.
     *   *Assert:* Encoder must output JSON-RPC error payload with `code = -32603` (Internal Error) and `data.application_code` equal to `3` (Local Service Unavailable).
-*   **TC-CON-003 (Version Verification Fallback):**
+*   **TC-CON-003 (Version Verification Fallback & Protocol State):**
     *   *Requirement Mapping:* `REQ-003` (Version Verification Fallback)
-    *   *Setup:* Initiate a mock WebSocket connection, transmit `connect.capabilities` with client supported versions, and simulate the Cloud returning an explicitly defined fatal version-rejection response.
-    *   *Assert:* Client must transition to `ProtocolFailure` state, remain connected for health reporting, and return `local_service_unavailable` (JSON-RPC code -32603, application_code 3) for configuration/action commands.
+    *   *Setup:* (1) Initiate a mock WebSocket connection with NATS offline, transmit `connect.capabilities`, and simulate the Cloud returning a successful `connect` response (error=0). (2) Simulate the Cloud returning an explicitly defined fatal version-rejection response.
+    *   *Assert:* (1) Client must mark protocol verification as successful but remain in `NATSDegraded` state because NATS is offline. It must not enter `Operational` until NATS connects. (2) Client must transition to `ProtocolFailure` state, remain connected for health reporting, and return `local_service_unavailable` (JSON-RPC code -32603, application_code 3) for configuration/action commands.
 *   **TC-VAL-001 (Permissive Parameter Validation):**
     *   *Requirement Mapping:* `REQ-005` (Permissive Parameter Validation)
     *   *Setup:* Submit a configuration payload containing a known schema property with an invalid type, and an unknown future schema property.

@@ -730,7 +730,9 @@ The error represents a local result-processing failure. It must not report that 
     // The Request Manager must canonicalize the incoming Cloud JSON-RPC ID and enforce the following order:
     // 1. If a valid, unexpired entry exists in the TransactionCache, replay it and do NOT create a transaction.
     // 2. If the ID matches an active transaction in Created, PreparingDispatch, PendingPublish, or InFlight, reject with JSON-RPC -32603 busy.
-    // 3. If isStateChanging is true, check if the stateLock is available. If it is already held by another active transaction, reject with JSON-RPC -32603 busy.
+    // 3. If isStateChanging is true:
+    //    a. If respondToCloud is false (JSON-RPC notification), reject the request immediately. State-changing commands MUST have an ID.
+    //    b. Check if the stateLock is available. If it is already held by another active transaction, reject with JSON-RPC -32603 busy.
     // 4. Otherwise, atomically acquire/reserve the stateLock (if isStateChanging), create the new transaction, and enter Created.
     // The cache lookup, active-map lookup, state-lock reservation, correlation ID generation, and transaction creation
     // must be performed atomically under one Request Manager synchronization boundary. To avoid deadlocks, the lock ordering

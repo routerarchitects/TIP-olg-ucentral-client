@@ -147,7 +147,7 @@ This document details the test plans, test cases, and verification strategies fo
 *   **TC-QUE-002 (Command Result Queue Overflow Produces Indeterminate Result):**
     *   *Requirement Mapping:* `REQ-013`, `REQ-021`
     *   *Setup:* Fill the Command Result Priority Queue to capacity. Simulate a correlated downstream command result arriving with a known `correlation_id`.
-    *   *Assert:* `Push()` must return `ErrQueueFull`; the daemon must log the `correlation_id`, command type, and subject, increment `command_result_overflow`, and complete the matching Cloud transaction with JSON-RPC `-32603` and `error.data.application_code = 7` (`Result Delivery Failed`). The response must state that the downstream result could not be processed locally and must not claim that the downstream operation failed.
+    *   *Assert:* `Push()` must return `ErrQueueFull`; the daemon must log the `correlation_id`, command type, and subject, increment `command_result_overflow`, and trigger path recovery (e.g. WebSocket reconnect). The Request Manager MUST NOT rewrite the transaction state to Failed and MUST NOT cache a `-32603` failure. The exact original downstream response must be preserved in the `TransactionCache`. When the Cloud reconnects and retries, it must receive the exact original cached response.
 *   **TC-BUF-004 (WebSocket permessage-deflate Negotiation & Threshold):**
     *   *Requirement Mapping:* `REQ-024` (Payload Compression)
     *   *Setup:* Set `compression_threshold_bytes` to 2048. Perform WebSocket handshake simulating a controller that accepts `permessage-deflate`. Generate a payload of size 1024 bytes and another of size 3072 bytes.
@@ -232,7 +232,7 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Assert:* The first to acquire the Request Manager mutex wins. If the timer wins, it transitions to `TimedOut`. If the reply wins, it transitions to `Completed`. The loser must receive `ErrAlreadyTerminal` and gracefully exit without crashing or panicking.
 *   **TC-RM-013 (Fast Reply vs MarkInFlight Race):**
     *   *Setup:* A fast downstream reply arrives before `MarkInFlight` is called. The result handler calls `Complete()`.
-    *   *Assert:* `Complete()` successfully transitions the state from `TxPendingPublish` to `TxCompleted`. When `MarkInFlight` is subsequently called, it gracefully returns `nil` (or `ErrAlreadyTerminal`) and does NOT overwrite the state or start the response timer.
+    *   *Assert:* `Complete()` MUST NOT transition the state to terminal; instead, it must park the response in the `pendingReplies` buffer and exit gracefully. When `MarkInFlight` is subsequently called, it successfully enters `TxInFlight` and immediately discovers the buffered reply, forwarding it to the terminal sequence.
 *   **TC-RM-014 (Priority-0 Delivery Failure):**
     *   *Setup:* Complete a transaction successfully. Fill the Priority-0 websocket queue to capacity so reservation fails.
     *   *Assert:* The transaction state remains `Completed` (the true device outcome). The exact success response is cached. The system triggers path recovery (WebSocket reconnect) rather than rewriting the transaction state to `Failed`.

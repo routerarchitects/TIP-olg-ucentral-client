@@ -328,14 +328,14 @@ stateDiagram-v2
         else if cloudConnected && natsConnected: Operational
         else if !cloudConnected && natsConnected: CloudDegraded
         else if cloudConnected && !natsConnected: NATSDegraded
-        else: Offline
+        else: Connecting
     end note
 ```
 
 *   **Two-State Machine Philosophy:** The connection lifecycle is driven by strictly **two actual state machines** (the Cloud loop and the NATS loop). The `DerivedStatus` is not a state machine that drives behavior; it is simply a read-only computed projection used for logs, diagnostics, and high-level request circuit-breaking. 
 *   **Cloud Connected Semantics:** `CloudConnected` means that both the WSS transport is open AND the uCentral `connect` JSON-RPC exchange has completed successfully (or encountered a fatal version rejection). Until that exchange concludes, the Cloud link remains `Connecting`. If a fatal version rejection occurs, the WSS transport remains open, the Cloud link enters `Connected`, `protocolRejected` is set to true, and the Derived Status evaluates to `ProtocolFailure`.
-*   **Asynchronous Reconnection:** If the Cloud connection drops, the Cloud link transitions to `Connecting`. The derived status becomes `CloudDegraded` when NATS remains connected, or `Offline` when NATS is also connecting. The client attempts to reconnect to the Cloud in the background using backoff while NATS continues to function. **No daemon restart is required** for intermittent WAN outages.
-*   **Independence:** The client attempts to establish a Cloud connection even if NATS is down or unconfigured. While NATS is `Connecting`, the derived status is `NATSDegraded` if Cloud is connected, or `Offline` if Cloud is also connecting.
+*   **Asynchronous Reconnection:** If the Cloud connection drops, the Cloud link transitions to `Connecting`. The derived status becomes `CloudDegraded` when NATS remains connected, or `Connecting` when NATS is also connecting. The client attempts to reconnect to the Cloud in the background using backoff while NATS continues to function. **No daemon restart is required** for intermittent WAN outages.
+*   **Independence:** The client attempts to establish a Cloud connection even if NATS is down or unconfigured. While NATS is `Connecting`, the derived status is `NATSDegraded` if Cloud is connected, or `Connecting` if Cloud is also connecting.
 *   **Reconnect Backoff (Cloud):** 
     *   *Initial Delay:* **2 seconds**
     *   *Max Delay:* **300 seconds (5 minutes)**

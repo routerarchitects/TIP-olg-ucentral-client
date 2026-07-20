@@ -8,7 +8,8 @@ The uCentral client is a lightweight, Go-based gateway daemon that bridges a clo
 
 ### 1.1 Prerequisites
 *   Go (version 1.20 or later)
-*   A local NATS broker (running on NATS port 4222)
+*   A local NATS broker configured strictly for **TLS 1.3** and **NKey/JWT Authentication**. (Plaintext connections and insecure `nats://` URLs are architecturally prohibited by the daemon).
+    *   You must generate a valid CA certificate (`ca.pem`) and a NATS credential file (`nats.creds`) and map them in your `config.json` before the daemon will start.
 
 ### 1.2 Build & Run
 1.  Initialize Go dependencies:

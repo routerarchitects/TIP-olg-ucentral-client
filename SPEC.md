@@ -478,7 +478,7 @@ TIP-olg-ucentral-client/
     type ConnectionState string
 
     const (
-    	StateOffline         ConnectionState = "offline"
+    	StateConnecting      ConnectionState = "connecting"
     	StateOperational     ConnectionState = "operational"
     	StateCloudDegraded   ConnectionState = "cloud_degraded"
     	StateNATSDegraded    ConnectionState = "nats_degraded"

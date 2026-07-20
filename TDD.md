@@ -312,10 +312,10 @@ This document details the test plans, test cases, and verification strategies fo
         * Cloud Connected + NATS Connected = `Operational`.
         * Cloud Connecting + NATS Connected = `CloudDegraded`.
         * Cloud Connected + NATS Connecting = `NATSDegraded`.
-        * Neither connection Connected = `Offline`.
+        * Neither connection Connected = `Connecting`.
         * Fatal protocol rejection with NATS connected = `ProtocolFailure`.
         * Fatal protocol rejection with NATS Connecting = `ProtocolFailure`.
-        * Cloud disconnect after rejection resets protocol state to Unknown and produces `CloudDegraded` or `Offline` (not `ProtocolFailure`).
+        * Cloud disconnect after rejection resets protocol state to Unknown and produces `CloudDegraded` or `Connecting` (not `ProtocolFailure`).
         * A subsequent successful Cloud reconnection clears the previous rejection and yields `Operational` when NATS is connected, or `NATSDegraded` when NATS is connecting.
         * WSS connected but uCentral connect response still pending = `Connecting`.
         * Protocol success with NATS Connecting = `NATSDegraded`.

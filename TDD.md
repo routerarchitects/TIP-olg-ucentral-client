@@ -264,14 +264,14 @@ This document details the test plans, test cases, and verification strategies fo
 ## Epic 4: Network & Transport Clients
 
 ### PR 4.1: WebSocket Client Tests
-*   **TC-NET-001 (Randomized Reconnect Backoff):**
-    *   *Requirement Mapping:* `REQ-002` (Reconnection State Machine)
-    *   *Setup:* Instantiate reconnection backoff loops. Simulate connection drops.
-    *   *Assert:* Reconnect delays must fall within exponential bounds (e.g. attempt 2 delay is between `4.0s` and `4.8s` given base `4s` and `10-20%` randomized additive jitter).
+*   **TC-NET-001 (Randomized Reconnect Backoff & Reset):**
+    *   *Requirement Mapping:* `REQ-002` (Reconnection State Machine), `REQ-043` (Strict WebSocket Lifecycle)
+    *   *Setup:* Instantiate reconnection backoff loops. Simulate connection drops. Later, simulate a stable connection that remains open longer than the stable-session duration threshold.
+    *   *Assert:* Reconnect delays must fall within exponential bounds (e.g. attempt 2 delay is between `4.0s` and `4.8s` given base `4s` and `10-20%` randomized additive jitter). After a stable connection duration is reached, the backoff multiplier must strictly reset to the base interval.
 *   **TC-NET-018 (WebSocket Handshake & Protocol Verification):**
-    *   *Requirement Mapping:* `REQ-003` (Version Verification Fallback)
-    *   *Setup:* Start `ReconnectLoop`. Simulate successful WSS dial. Send `connect.capabilities` JSON-RPC. Return successful response. Then simulate a connection drop and a second dial returning a fatal `-32600` version rejection.
-    *   *Assert:* The client must emit `Connecting`/`Verifying` during the pending handshake. It must emit `Connected`/`Accepted` on success. On the second dial, it must emit `Connected`/`Rejected`. A subsequent disconnect must reset the state to `Connecting`/`Unknown`.
+    *   *Requirement Mapping:* `REQ-003` (Version Verification Fallback), `REQ-043` (Strict WebSocket Lifecycle)
+    *   *Setup:* Start `ReconnectLoop`. Simulate successful WSS dial. (1) Cloud accepts TCP/WSS but never answers the `connect` request. (2) Send `connect` and return a successful response. (3) Simulate a connection drop and a second dial returning a fatal `-32600` version rejection.
+    *   *Assert:* (1) The connect handshake must timeout and close the connection. (2) The client must emit `Connecting`/`Verifying` during the pending handshake and `Connected`/`Accepted` on success. (3) On the second dial, it must emit `Connected`/`Rejected`, but MUST keep the socket open for heartbeat and health handling. A subsequent disconnect must reset the state to `Connecting`/`Unknown`.
 *   **TC-NET-019 (WebSocket Reader Bounded Payloads):**
     *   *Requirement Mapping:* `REQ-020` (Protocol Strictness & Memory Bounds)
     *   *Setup:* Send an oversized garbage stream with no valid JSON. Send a 15MB compressed `configure` payload. Send an oversized payload that does contain a valid JSON-RPC `id` at the beginning.
@@ -292,10 +292,10 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-010` (Operation-Specific Caching & TTL), `REQ-043` (Strict WebSocket Lifecycle)
     *   *Setup:* Disconnect the Cloud while a Priority-0 response is held in the OutboundScheduler. Reconnect the Cloud (establishing a new Session ID).
     *   *Assert:* The writer loop must discard or ignore the stale-session message. It must NOT write it to the new WebSocket connection. A subsequent Cloud request reusing the same JSON-RPC ID must NOT automatically receive the cached response from the old session.
-*   **TC-NET-024 (Coordinated Goroutine Teardown):**
+*   **TC-NET-024 (Coordinated Goroutine Teardown & Single Writer):**
     *   *Requirement Mapping:* `REQ-043` (Strict WebSocket Lifecycle)
-    *   *Setup:* Start the `ReconnectLoop`. Simulate a fatal reader error (e.g., protocol violation) while the writer is blocked on `scheduler.Next()`. Conversely, simulate a writer timeout while the reader is blocked reading frames. 
-    *   *Assert:* The sibling goroutine must be cleanly canceled via the session context. The stale generation must NOT be able to close a newer connection spawned by a subsequent reconnect race.
+    *   *Setup:* Start the `ReconnectLoop`. Simulate a fatal reader error (e.g., protocol violation) while the writer is blocked on `scheduler.Next()`. Conversely, simulate a writer timeout while the reader is blocked reading frames. Attempt to spawn a duplicate writer or let a stale reconnect overwrite the connection.
+    *   *Assert:* The sibling goroutine must be cleanly canceled via the session context. Only one writer goroutine must ever write application data and control frames to the Gorilla connection. A stale reconnect attempt must NOT be able to install its connection or close a newer connection spawned by a subsequent reconnect race.
 *   **TC-NET-025 (Strict TLS Authentication):**
     *   *Requirement Mapping:* `REQ-043` (Strict WebSocket Lifecycle)
     *   *Setup:* Start `ReconnectLoop` using a Cloud gateway with an untrusted certificate, a mismatched hostname, or missing client certificates.
@@ -389,7 +389,7 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Assert:* The daemon treats the WebSocket writer path as unhealthy, triggers recovery, preserves the terminal transaction state and cached response, and increments the overflow metric instead of allowing unbounded memory growth.
 *   **TC-INT-005 (Configuration Validation & Startup Failure):**
     *   *Requirement Mapping:* `REQ-030` (Startup Configuration Validation)
-    *   *Setup:* Attempt to boot the daemon with various invalid configurations: missing serial, `http://` cloud URL, insecure `nats://` server, unreadable credentials, zero/negative bounds (`compression_threshold_bytes <= 0`, `cloud.connect_timeout_seconds <= 0`, queue capacities <= 0), and invalid timeout environment variables (malformed strings, `0s`, and `-5s`). Also boot with missing timeout variables to test defaults, and with valid overrides (e.g., `OLG_TIMEOUT_DISPATCH=2s`).
+    *   *Setup:* Attempt to boot the daemon with various invalid configurations: missing serial, `http://` cloud URL, insecure `nats://` server, unreadable credentials, zero/negative bounds (`compression_threshold_bytes <= 0`, `cloud.connect_timeout_seconds <= 0`, queue capacities <= 0), invalid heartbeat constraints (`ping_interval_seconds <= 0` or `pong_timeout_seconds <= ping_interval_seconds`), and invalid timeout environment variables (malformed strings, `0s`, and `-5s`). Also boot with missing timeout variables to test defaults, and with valid overrides (e.g., `OLG_TIMEOUT_DISPATCH=2s`).
     *   *Assert:* The daemon must strictly validate the configuration before starting any connection loops, log the specific invalid field, and exit immediately with a non-zero status for invalid configurations. Booting with missing timeout variables must succeed and apply the exact defaults (`5s`, `30s`, `60s`, `120s`). Booting with valid overrides must succeed and accurately apply the overridden durations. Booting with valid config defaults must correctly apply `connect_timeout_seconds=10`, `compression_threshold_bytes=2048`, `ws_writer_capacity=500`, `emergency_capacity=100`, `nats_publish_capacity=100`, `command_result_capacity=50`, and `telemetry_capacity=500`.
 
 ---
@@ -427,7 +427,7 @@ This document details the test plans, test cases, and verification strategies fo
 | **REQ-027** | JSON-RPC ID Preservation & Edge Cases | `TC-CON-005`, `TC-RM-007`, `TC-NET-022` |
 | **REQ-028** | NATS Envelope Serialization Contract | `TC-CON-001` |
 | **REQ-029** | Graceful Teardown | `TC-INT-001` |
-| **REQ-030** | Startup Dependency Validation | `TC-NET-010` |
+| **REQ-030** | Startup Dependency Validation | `TC-INT-005`, `TC-NET-025` |
 | **REQ-031** | OWGW Configure Protocol Compatibility | `TC-CON-006` |
 | **REQ-032** | Out of Scope Features | `TC-ACT-013` |
 | **REQ-033** | OWGW Reboot Protocol Compatibility | `TC-ACT-001` |

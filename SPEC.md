@@ -904,30 +904,22 @@ If the result payload cannot be decoded or its `correlation_id` does not match a
     	"context"
     	"sync"
     	gws "github.com/gorilla/websocket"
+    	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/config"
     	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/contracts"
     	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/queues"
     )
-
-    type CloudTLSConfig struct {
-    	CAFile         string `json:"ca_file"`
-    	ClientCertFile string `json:"client_cert_file"`
-    	ClientKeyFile  string `json:"client_key_file"`
-    	ServerName     string `json:"server_name,omitempty"`
-    }
-
-    type CloudConfig struct {
-    	URL                   string         `json:"url"`
-    	ConnectTimeoutSeconds int            `json:"connect_timeout_seconds"`
-    	WriteTimeoutSeconds   int            `json:"write_timeout_seconds"`
-    	PingIntervalSeconds   int            `json:"ping_interval_seconds"`
-    	PongTimeoutSeconds    int            `json:"pong_timeout_seconds"`
-    	TLS                   CloudTLSConfig `json:"tls"`
-    }
 
     type CloudConnectParams struct {
     	Serial       string         `json:"serial"`
     	Firmware     string         `json:"firmware"`
     	Capabilities map[string]any `json:"capabilities"`
+    }
+
+    type ConnectMetadataProvider interface {
+    	// ConnectParams must return the handshake payload. If capabilities are temporarily 
+    	// unavailable from the downstream responder, it should return an empty or default 
+    	// capability map rather than permanently blocking the WebSocket reconnect loop.
+    	ConnectParams(ctx context.Context) (CloudConnectParams, error)
     }
 
     type CloudConnectResult struct {
@@ -958,12 +950,13 @@ If the result payload cannot be decoded or its `correlation_id` does not match a
     	conn          *gws.Conn
     	generation    uint64
     	cancel        context.CancelFunc
-    	config        CloudConfig
+    	config        config.CloudConfig
     	scheduler     queues.OutboundScheduler
+    	metaProvider  ConnectMetadataProvider
     	onStateChange func(cloud contracts.LinkState, protocol contracts.ProtocolState)
     }
 
-    func NewWSClient(config CloudConfig, scheduler queues.OutboundScheduler, onStateChange func(contracts.LinkState, contracts.ProtocolState)) *WSClient
+    func NewWSClient(cfg config.CloudConfig, scheduler queues.OutboundScheduler, metaProvider ConnectMetadataProvider, onStateChange func(contracts.LinkState, contracts.ProtocolState)) *WSClient
     
     // ReconnectLoop continuously dials the WSS transport (with strict TLS chain and hostname validation) 
     // and negotiates the JSON-RPC connect handshake.
@@ -1075,6 +1068,8 @@ The uCentral client must not register a NATS responder for `ucentral.v1.device.<
 *   **Target File:** `cmd/ucentral-client/main.go`
 *   **Configuration Contract:**
     ```go
+    package config
+
     type Config struct {
         Serial                    string      `json:"serial"`
         CompressionThresholdBytes int         `json:"compression_threshold_bytes"`
@@ -1083,9 +1078,20 @@ The uCentral client must not register a NATS responder for `ucentral.v1.device.<
         Queues                    QueueConfig `json:"queues"`
     }
 
+    type CloudTLSConfig struct {
+        CAFile         string `json:"ca_file"`
+        ClientCertFile string `json:"client_cert_file"`
+        ClientKeyFile  string `json:"client_key_file"`
+        ServerName     string `json:"server_name,omitempty"`
+    }
+
     type CloudConfig struct {
-        URL                   string `json:"url"`
-        ConnectTimeoutSeconds int    `json:"connect_timeout_seconds"`
+        URL                   string         `json:"url"`
+        ConnectTimeoutSeconds int            `json:"connect_timeout_seconds"`
+        WriteTimeoutSeconds   int            `json:"write_timeout_seconds"`
+        PingIntervalSeconds   int            `json:"ping_interval_seconds"`
+        PongTimeoutSeconds    int            `json:"pong_timeout_seconds"`
+        TLS                   CloudTLSConfig `json:"tls"`
     }
 
     type NATSConfig struct {
@@ -1126,6 +1132,12 @@ The uCentral client must not register a NATS responder for `ucentral.v1.device.<
         *   `serial`: Required, non-empty
         *   `cloud.url`: Required, valid `wss://` URL
         *   `cloud.connect_timeout_seconds`: Default 10; must be > 0
+        *   `cloud.write_timeout_seconds`: Default 10; must be > 0
+        *   `cloud.ping_interval_seconds`: Default 30; must be > 0
+        *   `cloud.pong_timeout_seconds`: Default 60; must be > `cloud.ping_interval_seconds`
+        *   `cloud.tls.ca_file`: Required and readable file path
+        *   `cloud.tls.client_cert_file`: Required and readable file path
+        *   `cloud.tls.client_key_file`: Required and readable file path
         *   `nats.servers`: At least one entry; each must use `tls://`
         *   `nats.credentials_file`: Required and readable file path
         *   `nats.ca_file`: Required and readable file path

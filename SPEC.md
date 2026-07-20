@@ -25,6 +25,8 @@ TIP-olg-ucentral-client/
     │   ├── rpc.go                  # JSON-RPC 2.0 messages & error codes
     │   ├── envelopes.go            # NATS messages (Configure, Action, Result)
     │   └── enums.go                # Result states and connection enums
+    ├── config/                     # Application configuration
+    │   └── config.go               # Configuration structs (Cloud, NATS, Queues)
     ├── queues/                     # Priority queues, buffers, & scheduler
     │   ├── scheduler.go            # Priority Outbound WebSocket Scheduler
     │   ├── buffer.go               # Bounded Ring Buffer & NATS Dispatch Buffer
@@ -542,6 +544,70 @@ TIP-olg-ucentral-client/
 
 ---
 
+#### PR 1.3: Shared Configuration Types
+*   **Target File:** `pkg/config/config.go`
+*   **Structures:**
+    ```go
+    package config
+
+    type Config struct {
+        Serial                    string      `json:"serial"`
+        CompressionThresholdBytes int         `json:"compression_threshold_bytes"`
+        Cloud                     CloudConfig `json:"cloud"`
+        NATS                      NATSConfig  `json:"nats"`
+        Queues                    QueueConfig `json:"queues"`
+    }
+
+    type CloudTLSConfig struct {
+        CAFile         string `json:"ca_file"`
+        ClientCertFile string `json:"client_cert_file"`
+        ClientKeyFile  string `json:"client_key_file"`
+        ServerName     string `json:"server_name,omitempty"`
+    }
+
+    type CloudConfig struct {
+        URL                   string         `json:"url"`
+        ConnectTimeoutSeconds int            `json:"connect_timeout_seconds"`
+        WriteTimeoutSeconds   int            `json:"write_timeout_seconds"`
+        PingIntervalSeconds   int            `json:"ping_interval_seconds"`
+        PongTimeoutSeconds    int            `json:"pong_timeout_seconds"`
+        TLS                   CloudTLSConfig `json:"tls"`
+    }
+
+    type NATSConfig struct {
+        Servers         []string `json:"servers"`
+        CredentialsFile string   `json:"credentials_file"`
+        CAFile          string   `json:"ca_file"`
+    }
+
+    type QueueConfig struct {
+        WSWriterCapacity      int `json:"ws_writer_capacity"`
+        EmergencyCapacity     int `json:"emergency_capacity"`
+        NATSPublishCapacity   int `json:"nats_publish_capacity"`
+        CommandResultCapacity int `json:"command_result_capacity"`
+        TelemetryCapacity     int `json:"telemetry_capacity"`
+    }
+
+    type CacheTTLConfig struct {
+        Configure    int
+        LEDs         int
+        Reboot       int
+        RemoteAccess int
+        Factory      int
+        Upgrade      int
+        Default      int
+    }
+
+    // LoadCacheTTLConfigFromEnv parses the OLG_CACHE_TTL_* environment variables as Go durations,
+    // applies the documented defaults if unset, and rejects malformed or negative durations.
+    func LoadCacheTTLConfigFromEnv() (CacheTTLConfig, error)
+    
+    // TTLForMethod returns the configured TTL in seconds for a specific JSON-RPC method.
+    func (c CacheTTLConfig) TTLForMethod(method string) int
+    ```
+
+---
+
 ### Epic 2: Traffic Queues & Priority Scheduler
 
 #### PR 2.1: Priority Outbound Scheduler
@@ -890,8 +956,6 @@ If the result payload cannot be decoded or its `correlation_id` does not match a
     }
     ```
 
----
-
 ### Epic 4: Network & Transport Clients
 
 #### PR 4.1: WebSocket Client & JSON-RPC Handler
@@ -911,6 +975,7 @@ If the result payload cannot be decoded or its `correlation_id` does not match a
 
     type CloudConnectParams struct {
     	Serial       string         `json:"serial"`
+    	UUID         uint64         `json:"uuid"`
     	Firmware     string         `json:"firmware"`
     	Capabilities map[string]any `json:"capabilities"`
     }
@@ -926,6 +991,36 @@ If the result payload cannot be decoded or its `correlation_id` does not match a
     	Error int    `json:"error"`
     	Text  string `json:"text,omitempty"`
     }
+
+    // WebSocket Connect Handshake Wire Protocol (Compliant with OWGW ucentralgw):
+    // Method Name: "connect"
+    // Timeout Source: config.CloudConfig.ConnectTimeoutSeconds (covers TCP dial + TLS + handshake)
+    // 
+    // Request Shape:
+    // {
+    //   "jsonrpc": "2.0",
+    //   "method": "connect",
+    //   "id": 1,
+    //   "params": {
+    //     "serial": "...",
+    //     "uuid": 0,
+    //     "firmware": "...",
+    //     "capabilities": { ... }
+    //   }
+    // }
+    //
+    // Response Shape (Success):
+    // {
+    //   "jsonrpc": "2.0",
+    //   "id": 1,
+    //   "result": { "error": 0, "text": "Success" }
+    // }
+    //
+    // Rules & State Transitions:
+    // 1. Handshake ID is internally generated (e.g. 1) to block and await the specific reply from ucentralgw.
+    // 2. Success (Accepted): Top-level "error" is absent AND "result.error" == 0.
+    // 3. Fatal Rejection (Rejected): Top-level JSON-RPC "error.code" == -32600, OR "result.error" != 0.
+    // 4. Timeout/Disconnect (Unknown): If deadline expires or socket drops.
 
     type InboundFrame struct {
     	SessionID string
@@ -971,23 +1066,26 @@ If the result payload cannot be decoded or its `correlation_id` does not match a
     func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler)
 
     // performConnectHandshake transmits CloudConnectParams and validates the CloudConnectResult.
-    // If rejected, WSS remains open, Protocol = Rejected. The daemon does not reconnect purely on rejection,
-    // continues heartbeat handling, allows only health messages, and rejects ordinary commands with -32603/app_code=3.
+    // If rejected, WSS remains open, Protocol = Rejected. The daemon does not reconnect purely on rejection.
+    // While protocol state is Verifying or Rejected, the daemon may process only WebSocket Ping/Pong control frames 
+    // and the Cloud JSON-RPC ping health method. No other JSON-RPC method is permitted. All other requests must be 
+    // rejected with -32603 and application_code = 3.
     func (c *WSClient) performConnectHandshake(ctx context.Context, sessionID string) error
     
     // Close cleanly shuts down the active WebSocket connection.
     func (c *WSClient) Close() error
     
     // startReaderLoop MUST enforce memory safety and structured disposition:
-    // 1. Enforce a hard maximum frame size at the transport layer. Exceeding it immediately closes the connection.
-    // 2. If the payload is within transport bounds, parse the complete JSON-RPC envelope.
-    // 3. Return an ID-correlated -32602 error ONLY if the outer envelope is valid but a nested operation payload (e.g. configure) exceeds its operation-specific limit.
-    // 4. Handle Pong messages to extend the read deadline.
+    // 1. Enforce a hard maximum frame size at the transport layer (e.g. 11MB). This acts as a global safety net because the underlying WebSocket library (gorilla/websocket) buffers incoming network frames in memory; without this, a malicious uncompressible 1GB frame would OOM the device before decompression even starts.
+    // 2. MUST use a bounded reader (post-decompression limit) when permessage-deflate is active to enforce operation-specific limits (e.g. 10MB configure, 1MB state) and prevent zip-bomb OOMs. Compressed frames must not bypass uncompressed limits.
+    // 3. If the payload is within transport bounds, parse the complete JSON-RPC envelope.
+    // 4. Return an ID-correlated -32602 error ONLY if the outer envelope is valid but a nested operation payload (e.g. configure) exceeds its operation-specific limit.
+    // 5. Handle Pong messages to extend the read deadline.
     func (c *WSClient) startReaderLoop(ctx context.Context, handler FrameHandler) error
 
     // startWriterLoop MUST enforce recovery, heartbeat, and cross-session isolation:
     // 1. Use configured ping interval and pong timeout. Writer loop exclusively sends Ping.
-    // 2. Discard or safely retain-for-replay any OutboundMessage whose SessionID does not match the active connection.
+    // 2. Discard Priority-0 OutboundMessages whose SessionID does not match the active connection. Process Priority 1-3 messages regardless of SessionID.
     // 3. Treat write timeouts, heartbeat timeouts, socket closes, or Priority-0 overflows as fatal path failures.
     func (c *WSClient) startWriterLoop(ctx context.Context) error
     ```
@@ -1067,67 +1165,6 @@ The uCentral client must not register a NATS responder for `ucentral.v1.device.<
 #### PR 5.1: Main Loop & Configuration
 *   **Target File:** `cmd/ucentral-client/main.go`
 *   **Configuration Contract:**
-    ```go
-    package config
-
-    type Config struct {
-        Serial                    string      `json:"serial"`
-        CompressionThresholdBytes int         `json:"compression_threshold_bytes"`
-        Cloud                     CloudConfig `json:"cloud"`
-        NATS                      NATSConfig  `json:"nats"`
-        Queues                    QueueConfig `json:"queues"`
-    }
-
-    type CloudTLSConfig struct {
-        CAFile         string `json:"ca_file"`
-        ClientCertFile string `json:"client_cert_file"`
-        ClientKeyFile  string `json:"client_key_file"`
-        ServerName     string `json:"server_name,omitempty"`
-    }
-
-    type CloudConfig struct {
-        URL                   string         `json:"url"`
-        ConnectTimeoutSeconds int            `json:"connect_timeout_seconds"`
-        WriteTimeoutSeconds   int            `json:"write_timeout_seconds"`
-        PingIntervalSeconds   int            `json:"ping_interval_seconds"`
-        PongTimeoutSeconds    int            `json:"pong_timeout_seconds"`
-        TLS                   CloudTLSConfig `json:"tls"`
-    }
-
-    type NATSConfig struct {
-        Servers         []string `json:"servers"`
-        CredentialsFile string   `json:"credentials_file"`
-        CAFile          string   `json:"ca_file"`
-    }
-
-    type QueueConfig struct {
-        WSWriterCapacity      int `json:"ws_writer_capacity"`
-        EmergencyCapacity     int `json:"emergency_capacity"`
-        NATSPublishCapacity   int `json:"nats_publish_capacity"`
-        CommandResultCapacity int `json:"command_result_capacity"`
-        TelemetryCapacity     int `json:"telemetry_capacity"`
-    }
-
-    type CacheTTLConfig struct {
-        Configure    int
-        LEDs         int
-        Reboot       int
-        RemoteAccess int
-        Factory      int
-        CertUpdate   int
-        Reenroll     int
-        Script       int
-        Upgrade      int
-        Default      int
-    }
-
-    // LoadCacheTTLConfigFromEnv parses the OLG_CACHE_TTL_* environment variables as Go durations,
-    // applies the documented defaults if unset, and rejects malformed or negative durations.
-    func LoadCacheTTLConfigFromEnv() (CacheTTLConfig, error)
-    
-    // TTLForMethod returns the configured TTL in seconds for a specific JSON-RPC method.
-    func (c CacheTTLConfig) TTLForMethod(method string) int
-    ```
     *   **Validation Rules & Defaults:**
         *   `serial`: Required, non-empty
         *   `cloud.url`: Required, valid `wss://` URL

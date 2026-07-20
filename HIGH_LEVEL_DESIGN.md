@@ -306,33 +306,25 @@ When the downstream agent fails to apply a configuration and triggers a rollback
 *   The uCentral Client translates this into a JSON-RPC response containing error code `-32603` (Internal Error) with `application_code` equal to `5` (Rollback Completed) in the `error.data` object, a message stating `"Configuration apply failed. Rolled back to active configuration UUID <uuid>"`, and lists any offending rejected configuration keys.
 
 ### 3.8 Startup & Reconnect Dependency Handling
-The client boots and connects to the Cloud and NATS **concurrently and independently** using separate background execution threads. Cloud connectivity does **not** block on NATS. The `GlobalState` is continuously derived from the underlying `CloudState` and `NATSState`.
+The client boots and connects to the Cloud and NATS **concurrently and independently** using separate background execution threads. Cloud connectivity does **not** block on NATS. The `DerivedStatus` is continuously derived from the underlying `CloudState` and `NATSState`.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Offline
-    Offline --> SystemConnecting : Start Daemon
-    
-    state SystemConnecting {
-        [*] --> CloudState
-        [*] --> NATSState
-        
-        state CloudState {
-            [*] --> CloudConnecting
-            CloudConnecting --> CloudConnected : Handshake Success
-            CloudConnected --> CloudConnecting : Connection Lost
-        }
-        
-        state NATSState {
-            [*] --> NATSConnecting
-            NATSConnecting --> NATSConnected : Connected
-            NATSConnected --> NATSConnecting : Connection Lost
-        }
+    state Cloud_Connection_Loop {
+        [*] --> CloudConnecting
+        CloudConnecting --> CloudConnected : WSS Open & Connect RPC Complete
+        CloudConnected --> CloudConnecting : Connection Lost
     }
     
-    note right of SystemConnecting
-        GlobalState is continuously derived:
-        if protocolRejected: ProtocolFailure
+    state NATS_Connection_Loop {
+        [*] --> NATSConnecting
+        NATSConnecting --> NATSConnected : Connected
+        NATSConnected --> NATSConnecting : Connection Lost
+    }
+    
+    note right of Cloud_Connection_Loop
+        DerivedStatus is continuously evaluated:
+        if cloudConnected && protocolRejected: ProtocolFailure
         else if cloudConnected && natsConnected: Operational
         else if !cloudConnected && natsConnected: CloudDegraded
         else if cloudConnected && !natsConnected: NATSDegraded
@@ -340,13 +332,21 @@ stateDiagram-v2
     end note
 ```
 
-*   **Asynchronous Reconnection:** If the Cloud connection drops, the client enters the `CloudDegraded` global state, attempting to reconnect to the Cloud in the background using backoff while NATS continues to function. **No daemon restart is required** for intermittent WAN outages.
-*   **Independence:** The client attempts to establish a Cloud connection even if NATS is down or unconfigured. In this "NATS Down" state, the client reports its status as `NATSDegraded` to the Cloud.
+*   **Two-State Machine Philosophy:** The connection lifecycle is driven by strictly **two actual state machines** (the Cloud loop and the NATS loop). The `DerivedStatus` is not a state machine that drives behavior; it is simply a read-only computed projection used for logs, diagnostics, and high-level request circuit-breaking. 
+*   **Cloud Connected Semantics:** `CloudConnected` means that both the WSS transport is open AND the uCentral `connect` JSON-RPC exchange has completed successfully (or encountered a fatal version rejection). Until that exchange concludes, the Cloud link remains `Connecting`. If a fatal version rejection occurs, the WSS transport remains open, the Cloud link enters `Connected`, `protocolRejected` is set to true, and the Derived Status evaluates to `ProtocolFailure`.
+*   **Asynchronous Reconnection:** If the Cloud connection drops, the Cloud link transitions to `Connecting`. The derived status becomes `CloudDegraded` when NATS remains connected, or `Offline` when NATS is also connecting. The client attempts to reconnect to the Cloud in the background using backoff while NATS continues to function. **No daemon restart is required** for intermittent WAN outages.
+*   **Independence:** The client attempts to establish a Cloud connection even if NATS is down or unconfigured. While NATS is `Connecting`, the derived status is `NATSDegraded` if Cloud is connected, or `Offline` if Cloud is also connecting.
 *   **Reconnect Backoff (Cloud):** 
     *   *Initial Delay:* **2 seconds**
     *   *Max Delay:* **300 seconds (5 minutes)**
     *   *Multiplier:* **2.0**
     *   *Jitter:* **Randomized Jitter of 10% to 20%** added to backoff intervals to prevent thundering herd issues on the uCentral gateway.
+*   **Reconnect Backoff (NATS):** The client delegates the NATS reconnection loop directly to the **NATS library's automatic reconnect policy** rather than managing a manual dial loop. 
+    *   *Initial Delay:* **2 seconds**
+    *   *Max Delay:* **60 seconds (1 minute)**
+    *   *Multiplier:* **2.0**
+    *   *Jitter:* **Randomized Jitter of 10% to 20%**
+    *   *State Callbacks:* The daemon registers asynchronous NATS `DisconnectErrHandler`, `ReconnectHandler`, and `ClosedHandler` callbacks to update the internal `natsConnected` boolean and immediately trigger the pure `DeriveConnectionState` recalculation.
 
 ---
 
@@ -533,4 +533,4 @@ For `ping`, the downstream result is translated to the OWGW response containing 
 
 The `ResultEnvelope` responses from NATS for other actions are mapped to their highly specific JSON-RPC counterparts rather than using a generic reboot status.
 
-**System and Security Actions Mapping:** For security-sensitive commands (`certupdate`, `reenroll`, `script`), execution policies are highly constrained. They follow the generic `ActionCommand` envelope pattern but require the Request Manager state lock, strictly prohibit automatic retries, mandate sensitive payload scrubbing/redaction from audit logging, and impose explicit execution/script size limits. Responses are mapped to precise JSON-RPC layouts (e.g., `result_64` or `result_sz` for `script`, and strict `error`/`txt` for `certupdate` and `reenroll`).
+**System and Security Actions Mapping:** For security-sensitive commands (`certupdate`, `reenroll`, `script`), execution policies are highly constrained. They follow the generic `ActionCommand` envelope pattern but require the Request Manager state lock, strictly prohibit automatic retries, mandate sensitive payload scrubbing/redaction from audit logging, and impose explicit execution/script size limits. For `certupdate`, the client validates base64 syntax and calculates the decoded certificate archive size using a bounded decoder. It rejects decoded payloads exceeding 2 MB but must not unpack, inspect, persist, or log the archive. Valid base64 is forwarded to NATS unchanged. Responses are mapped to precise JSON-RPC layouts (e.g., `result_64` or `result_sz` for `script`, and strict `error`/`txt` for `certupdate` and `reenroll`).

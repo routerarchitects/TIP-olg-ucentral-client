@@ -20,8 +20,8 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Assert:* Encoder must output JSON-RPC error payload with `code = -32603` (Internal Error) and `data.application_code` equal to `3` (Local Service Unavailable).
 *   **TC-CON-003 (Version Verification Fallback & Protocol State):**
     *   *Requirement Mapping:* `REQ-003` (Version Verification Fallback)
-    *   *Setup:* (1) Initiate a mock WebSocket connection with NATS offline, transmit `connect.capabilities`, and simulate the Cloud returning a successful `connect` response (error=0). (2) Simulate the Cloud returning an explicitly defined fatal version-rejection response.
-    *   *Assert:* (1) Client must mark protocol verification as successful but remain in `NATSDegraded` state because NATS is offline. It must not enter `Operational` until NATS connects. (2) Client must transition to `ProtocolFailure` state, remain connected for health reporting, and return `local_service_unavailable` (JSON-RPC code -32603, application_code 3) for configuration/action commands.
+    *   *Setup:* (1) Initiate a mock WebSocket connection with NATS connecting, transmit `connect.capabilities`, and simulate the Cloud returning a successful `connect` response (error=0). (2) Simulate the Cloud returning an explicitly defined fatal version-rejection response.
+    *   *Assert:* (1) Client must mark protocol verification as successful but remain in `NATSDegraded` state because NATS is connecting. It must not enter `Operational` until NATS connects. (2) Client must transition to `ProtocolFailure` state, remain connected for health reporting, and return `local_service_unavailable` (JSON-RPC code -32603, application_code 3) for configuration/action commands.
 *   **TC-VAL-001 (Permissive Parameter Validation):**
     *   *Requirement Mapping:* `REQ-005` (Permissive Parameter Validation)
     *   *Setup:* Submit a configuration payload containing a known schema property with an invalid type, and an unknown future schema property.
@@ -138,7 +138,7 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Assert:* `Peek()` must return State B and its generation. `Commit()` must return `false` because a newer update exists (State C). State C must remain available in the coalescer for the next `Peek()`.
 *   **TC-BUF-003 (NATS Dispatch Buffer Busy Rejection):**
     *   *Requirement Mapping:* `REQ-012` (Command Dispatch Buffer)
-    *   *Setup:* (A) Instantiate `NATSDispatchBuffer` with capacity = 2. Push 2 messages, then push a 3rd. (B) Push a message when the underlying NATS connection state is offline.
+    *   *Setup:* (A) Instantiate `NATSDispatchBuffer` with capacity = 2. Push 2 messages, then push a 3rd. (B) Push a message when the underlying NATS connection state is connecting.
     *   *Assert:* In case (A), the 3rd push must return a queue full error immediately. In case (B), the caller must return a fast error (`local_service_unavailable`) without blocking or relying solely on buffer capacity.
 *   **TC-QUE-001 (Telemetry Throttling on Full Results Queue):**
     *   *Requirement Mapping:* `REQ-013` (Command Result Priority Queue)
@@ -305,17 +305,24 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-022` (Capability Caching & Lifecycle)
     *   *Setup:* Start the client with NATS and the downstream responder initially unavailable. Verify retry backoff. Bring NATS and the responder online. Trigger a subsequent NATS reconnect event.
     *   *Assert:* The client must retry capability retrieval with bounded backoff until successful. Once the cache is successfully populated, no new fetch must be triggered on subsequent NATS reconnect events. Simulate a local Unix socket capabilities refresh command; the capabilities must be updated.
-*   **TC-NET-010 (Independent Connection-State Transitions):**
+*   **TC-NET-010 (Independent Connection-State Transitions & Lifecycle Edges):**
     *   *Requirement Mapping:* `REQ-002`
     *   *Setup:* Independently change Cloud, NATS, and protocol verification states.
     *   *Assert:*
         * Cloud Connected + NATS Connected = `Operational`.
-        * Cloud Offline/Connecting + NATS Connected = `CloudDegraded`.
-        * Cloud Connected + NATS Offline/Connecting = `NATSDegraded`.
+        * Cloud Connecting + NATS Connected = `CloudDegraded`.
+        * Cloud Connected + NATS Connecting = `NATSDegraded`.
         * Neither connection Connected = `Offline`.
-        * Cloud Connected + Protocol Verification Failed = `ProtocolFailure` (takes strict precedence regardless of NATS state).
+        * Fatal protocol rejection with NATS connected = `ProtocolFailure`.
+        * Fatal protocol rejection with NATS Connecting = `ProtocolFailure`.
+        * Cloud disconnect after rejection resets protocol state to Unknown and produces `CloudDegraded` or `Offline` (not `ProtocolFailure`).
+        * A subsequent successful Cloud reconnection clears the previous rejection and yields `Operational` when NATS is connected, or `NATSDegraded` when NATS is connecting.
+        * WSS connected but uCentral connect response still pending = `Connecting`.
+        * Protocol success with NATS Connecting = `NATSDegraded`.
+        * Both links repeatedly failing and backing off do not cause daemon restart.
         * Losing Cloud does not change or reconnect the NATS link.
         * Losing NATS does not change or reconnect the Cloud link.
+        * `DeriveConnectionState` gracefully rejects invalid string enum values (e.g. `LinkState("offline")` or `LinkState("")`) with an explicit error rather than silently mapping them to `Offline`.
 *   **TC-NET-011 (Unix Socket Rate Limiting & Auditing):**
     *   *Requirement Mapping:* `REQ-017` (Local Management Signal Security), `REQ-018` (Audit Logging & Loop Prevention)
     *   *Setup:* Send 10 capability refresh requests to the Unix socket in 1 second. Trigger sensitive actions (`reboot`, `factory`, `upgrade`, `certupdate`, `reenroll`, `script`).
@@ -343,7 +350,7 @@ This document details the test plans, test cases, and verification strategies fo
 *   **TC-INT-003 (Concurrent Startup Loops and Independent Connections):**
     *   *Requirement Mapping:* `REQ-001` (Concurrent Startup Loops), `REQ-002` (Reconnection State Machine)
     *   *Setup:* Start the daemon with NATS connection blocked (unreachable broker) but Cloud WebSocket reachable.
-    *   *Assert:* Daemon must successfully establish connection to the Cloud WebSocket and report status as `NATSDegraded` (due to NATS being offline) without hanging or blocking on the NATS connection loop.
+    *   *Assert:* Daemon must successfully establish connection to the Cloud WebSocket and report status as `NATSDegraded` (due to NATS being connecting) without hanging or blocking on the NATS connection loop.
 *   **TC-INT-004 (Priority 0 Overflow Recovery):**
     *   *Requirement Mapping:* `REQ-014`
     *   *Setup:* Simulate a stalled WebSocket writer while the daemon continues generating Priority 0 responses.

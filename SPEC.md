@@ -317,6 +317,10 @@ TIP-olg-ucentral-client/
     	Status CloudRemoteAccessStatus `json:"status"`
     }
 
+    // Certupdate Contract:
+    // * Validate base64 syntax and calculate the decoded payload size using a bounded decoder.
+    // * Reject decoded payloads exceeding 2 MB.
+    // * The client must not unpack, inspect, persist, or log the certificate archive.
     type CloudCertupdateRequest struct {
     	Serial       string `json:"serial"`
     	Certificates string `json:"certificates"`
@@ -484,16 +488,41 @@ TIP-olg-ucentral-client/
     type LinkState string
 
     const (
-    	LinkOffline    LinkState = "offline"
     	LinkConnecting LinkState = "connecting"
     	LinkConnected  LinkState = "connected"
+    )
+
+    type ProtocolState string
+
+    const (
+    	ProtocolUnknown   ProtocolState = "unknown"
+    	ProtocolVerifying ProtocolState = "verifying"
+    	ProtocolAccepted  ProtocolState = "accepted"
+    	ProtocolRejected  ProtocolState = "rejected"
     )
 
     type ConnectionStatus struct {
     	Cloud       LinkState
     	NATS        LinkState
-    	Global      ConnectionState
+    	Protocol    ProtocolState
     }
+
+    // DeriveConnectionState evaluates the pure derived status from the independent loops.
+    // It returns an error if any invalid/unrecognized string enum values are provided.
+    func DeriveConnectionState(cloud LinkState, nats LinkState, protocol ProtocolState) (ConnectionState, error)
+
+    // Protocol State Lifecycle:
+    // Protocol state MUST be strictly scoped to a single Cloud session to prevent 
+    // stale rejections from contaminating future reconnections.
+    // 
+    // 1. Cloud connection drops/disconnects:
+    //    Cloud = Connecting, Protocol = ProtocolUnknown
+    // 2. WSS connection opens, transmitting connect.capabilities:
+    //    Cloud = Connecting, Protocol = ProtocolVerifying
+    // 3. Cloud returns successful connect JSON-RPC response:
+    //    Cloud = Connected, Protocol = ProtocolAccepted
+    // 4. Cloud returns explicit fatal rejection response:
+    //    Cloud = Connected, Protocol = ProtocolRejected (DerivedStatus evaluates to ProtocolFailure)
     ```
 
 ---
@@ -608,8 +637,8 @@ TIP-olg-ucentral-client/
     func (c *StateCoalescer) Commit(generation uint64) bool
 
     // NATSDispatchBuffer buffers commands headed for NATS. Rejects immediately when full.
-    // The caller (e.g., Request Manager) MUST explicitly verify that NATS is connected 
-    // before calling Push(), returning local_service_unavailable if NATS is offline.
+    // - It provides fail-fast behavior for the Request Manager, which must peek at the connection state
+    // before calling Push(), returning local_service_unavailable if NATS is connecting.
     type NATSDispatchBuffer struct {
     	ch chan []byte
     }

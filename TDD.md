@@ -268,6 +268,26 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-002` (Reconnection State Machine)
     *   *Setup:* Instantiate reconnection backoff loops. Simulate connection drops.
     *   *Assert:* Reconnect delays must fall within exponential bounds (e.g. attempt 2 delay is between `4.0s` and `4.8s` given base `4s` and `10-20%` randomized additive jitter).
+*   **TC-NET-018 (WebSocket Handshake & Protocol Verification):**
+    *   *Requirement Mapping:* `REQ-003` (Version Verification Fallback)
+    *   *Setup:* Start `ReconnectLoop`. Simulate successful WSS dial. Send `connect.capabilities` JSON-RPC. Return successful response. Then simulate a connection drop and a second dial returning a fatal `-32600` version rejection.
+    *   *Assert:* The client must emit `Connecting`/`Verifying` during the pending handshake. It must emit `Connected`/`Accepted` on success. On the second dial, it must emit `Connected`/`Rejected`. A subsequent disconnect must reset the state to `Connecting`/`Unknown`.
+*   **TC-NET-019 (WebSocket Reader Bounded Payloads):**
+    *   *Requirement Mapping:* `REQ-020` (Protocol Strictness & Memory Bounds)
+    *   *Setup:* Send an oversized garbage stream with no valid JSON. Send a 15MB compressed `configure` payload. Send an oversized payload that does contain a valid JSON-RPC `id` at the beginning.
+    *   *Assert:* The garbage stream must immediately close the connection, drop the payload, and emit a metric. The decompression bomb must halt strictly at 10MB uncompressed limit. The oversized valid-ID payload must NOT close the connection, but must gracefully return JSON-RPC error `-32602` with `application_code = 4`.
+*   **TC-NET-020 (WebSocket Writer Priority & Deadlines):**
+    *   *Requirement Mapping:* `REQ-014` (Outbound Queue Preemption & Overflow Recovery)
+    *   *Setup:* Populate the `OutboundScheduler` with a mix of Priority 3 (telemetry) and Priority 0 (critical responses). Block the mock WebSocket server from reading.
+    *   *Assert:* The writer loop must preferentially pull Priority 0 messages. The write attempt must strictly enforce a write deadline timeout and bubble the timeout error back to `ReconnectLoop`.
+*   **TC-NET-021 (WebSocket Writer Stalls & Heartbeat Recovery):**
+    *   *Requirement Mapping:* `REQ-014` (Priority-0 Overflow Recovery)
+    *   *Setup:* Simulate a silent network partition (no TCP FIN). The reader loop stops receiving ping/pong heartbeats.
+    *   *Assert:* The heartbeat timeout must trigger a writer-path health failure. `ReconnectLoop` must close the socket, set `Protocol = Unknown`, and initiate exponential backoff. Cached Priority-0 responses must NOT be overwritten as "Failed" due to this transport stall.
+*   **TC-NET-022 (JSON-RPC Notification No-Response):**
+    *   *Requirement Mapping:* `REQ-027` (JSON-RPC ID Preservation & Edge Cases)
+    *   *Setup:* Send a valid JSON-RPC 2.0 notification (a request containing no `id` field).
+    *   *Assert:* The client must parse and process the notification (if applicable) but MUST NOT queue any response payload to the writer loop.
 
 ### PR 4.2: NATS Integration Client Tests
 *   **TC-NET-003 (JetStream KV Revision Guard & Trigger Contract):**
@@ -368,7 +388,7 @@ This document details the test plans, test cases, and verification strategies fo
 | :--- | :--- | :--- |
 | **REQ-001** | Concurrent Startup Loops | `TC-INT-003` |
 | **REQ-002** | Reconnection State Machine | `TC-NET-001`, `TC-NET-010`, `TC-INT-003` |
-| **REQ-003** | Version Negotiation Fallback | `TC-CON-003` |
+| **REQ-003** | Version Negotiation Fallback | `TC-CON-003`, `TC-NET-018` |
 | **REQ-004** | Subject Schema Versioning | `TC-SEC-001` |
 | **REQ-005** | Permissive Parameter Validation | `TC-VAL-001` |
 | **REQ-006** | JetStream KV Consistency Contract | `TC-NET-003`, `TC-INT-002` |
@@ -379,20 +399,20 @@ This document details the test plans, test cases, and verification strategies fo
 | **REQ-011** | Asynchronous Upgrade Tracking & Crash Recovery | `TC-UPG-001`, `TC-UPG-002`, `TC-UPG-003` |
 | **REQ-012** | Command Dispatch Buffer | `TC-BUF-003` |
 | **REQ-013** | Command Result Priority Queue | `TC-QUE-001`, `TC-QUE-002`, `TC-QUE-003`, `TC-BUF-006` |
-| **REQ-014** | WebSocket Outbound Priority Scheduler | `TC-SCH-001`, `TC-SCH-002`, `TC-SCH-003`, `TC-SCH-004`, `TC-SCH-005`, `TC-SCH-006`, `TC-INT-004` |
+| **REQ-014** | WebSocket Outbound Priority Scheduler | `TC-SCH-001`, `TC-SCH-002`, `TC-SCH-003`, `TC-SCH-004`, `TC-SCH-005`, `TC-SCH-006`, `TC-INT-004`, `TC-NET-020`, `TC-NET-021` |
 | **REQ-015** | State Coalescer & Telemetry Ring Buffer | `TC-BUF-001`, `TC-BUF-002`, `TC-BUF-007` |
 | **REQ-016** | NATS Security & Target Isolation | `TC-SEC-001` |
 | **REQ-017** | Local Management Signal Security | `TC-NET-005`, `TC-NET-011` |
 | **REQ-018** | Audit Logging & Loop Prevention | `TC-NET-006`, `TC-NET-011` |
 | **REQ-019** | NATS-Native Health Reporting | `TC-NET-007` |
-| **REQ-020** | Sizing Constraints | `TC-CON-004` |
+| **REQ-020** | Sizing Constraints | `TC-CON-004`, `TC-NET-019` |
 | **REQ-021** | JSON-RPC Error Mapping | `TC-CON-002`, `TC-QUE-002`, `TC-INT-002` |
 | **REQ-022** | Capability Caching & Lifecycle | `TC-NET-008`, `TC-NET-012` |
 | **REQ-023** | TLS v1.3 Security | `TC-SEC-002` |
 | **REQ-024** | Payload Compression | `TC-BUF-004` |
 | **REQ-025** | Request Manager Retry Policy | `TC-RM-006` |
 | **REQ-026** | Desired/Applied Cloud Reconciliation Contract | `TC-NET-013` |
-| **REQ-027** | JSON-RPC ID Preservation | `TC-CON-005`, `TC-RM-007` |
+| **REQ-027** | JSON-RPC ID Preservation & Edge Cases | `TC-CON-005`, `TC-RM-007`, `TC-NET-022` |
 | **REQ-028** | NATS Envelope Serialization Contract | `TC-CON-001` |
 | **REQ-029** | Graceful Teardown | `TC-INT-001` |
 | **REQ-030** | Startup Configuration Validation | `TC-INT-005` |

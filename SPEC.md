@@ -899,19 +899,51 @@ If the result payload cannot be decoded or its `correlation_id` does not match a
 
     import (
     	"context"
-    	"github.com/gorilla/websocket"
+    	gws "github.com/gorilla/websocket"
     	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/queues"
     )
 
     type WSClient struct {
-    	conn      *websocket.Conn
-    	scheduler queues.OutboundScheduler
-    	url       string
+    	conn          *gws.Conn
+    	scheduler     queues.OutboundScheduler
+    	url           string
+    	onStateChange func(cloud LinkState, protocol ProtocolState)
     }
 
-    func NewWSClient(url string, scheduler queues.OutboundScheduler) *WSClient
-    func (c *WSClient) StartReaderLoop(ctx context.Context, handler func([]byte))
-    func (c *WSClient) StartWriterLoop(ctx context.Context)
+    func NewWSClient(url string, scheduler queues.OutboundScheduler, onStateChange func(LinkState, ProtocolState)) *WSClient
+    
+    // ReconnectLoop continuously dials the WSS transport, performs the JSON-RPC connect 
+    // handshake, blocks on the internal reader/writer loops, and applies randomized 
+    // exponential backoff on fatal errors.
+    // 
+    // It MUST explicitly fire onStateChange callbacks during the lifecycle:
+    // 1. Before Dial/During Backoff:   Cloud = Connecting, Protocol = Unknown
+    // 2. WSS Open, pending connect:    Cloud = Connecting, Protocol = Verifying
+    // 3. Successful connect response:  Cloud = Connected,  Protocol = Accepted
+    // 4. Fatal version rejection:      Cloud = Connected,  Protocol = Rejected
+    // 5. Reader/Writer loop failure:   Cloud = Connecting, Protocol = Unknown (triggers reconnect)
+    func (c *WSClient) ReconnectLoop(ctx context.Context, handler func([]byte))
+    
+    // Close cleanly shuts down the active WebSocket connection.
+    func (c *WSClient) Close() error
+    
+    // Internal loops return fatal errors to the ReconnectLoop rather than dying silently.
+    // 
+    // startReaderLoop MUST enforce the following memory safety boundaries:
+    // 1. Enforce a configured maximum frame/message size at the websocket transport layer.
+    // 2. Parse the JSON-RPC `id` through a bounded pre-parser before attempting full unmarshalling.
+    // 3. Stop compressed `configure` decompression strictly at the 10MB uncompressed limit to prevent decompression bombs.
+    // 4. If an oversized garbage stream lacks a parseable/valid `id`, immediately close the connection, drop the payload, and emit a metric.
+    // 5. If the payload is oversized/invalid but a valid `id` WAS pre-parsed, return a JSON-RPC `-32602` error with `application_code=4` and keep the connection alive.
+    func (c *WSClient) startReaderLoop(ctx context.Context, handler func([]byte)) error
+    // startWriterLoop MUST enforce the following recovery contract:
+    // 1. Consume messages from the OutboundScheduler and write them to the active WSS connection using a strict write deadline.
+    // 2. Use ping/pong or equivalent heartbeat timeout handling to detect stale Cloud connections.
+    // 3. Treat any write timeout, heartbeat timeout, socket close, or scheduler Priority-0 overflow signal as a WebSocket writer-path health failure.
+    // 4. Return writer failures to ReconnectLoop so it can close the socket, set Cloud=Connecting and Protocol=Unknown, and reconnect with backoff.
+    // 5. Record metrics for write timeout, socket write failure, heartbeat timeout, and Priority-0 overflow.
+    // 6. Never rewrite terminal transaction outcomes because of WebSocket delivery failure. Cached Priority-0 responses remain authoritative and must be replayed if the Cloud retries after reconnect.
+    func (c *WSClient) startWriterLoop(ctx context.Context) error
     ```
 
 #### PR 4.2: NATS Integration Client

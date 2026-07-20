@@ -271,7 +271,7 @@ This document details the test plans, test cases, and verification strategies fo
 *   **TC-NET-018 (WebSocket Handshake & Protocol Verification):**
     *   *Requirement Mapping:* `REQ-003` (Version Verification Fallback), `REQ-043` (Strict WebSocket Lifecycle)
     *   *Setup:* Start `ReconnectLoop`. Simulate successful WSS dial. (1) Cloud accepts TCP/WSS but never answers the `connect` request. (2) Send `connect` and return a successful response. (3) Simulate a connection drop and a second dial returning a fatal `-32600` version rejection.
-    *   *Assert:* (1) The connect handshake must timeout and close the connection. (2) The client must emit `Connecting`/`Verifying` during the pending handshake and `Connected`/`Accepted` on success. (3) On the second dial, it must emit `Connected`/`Rejected`, but MUST keep the socket open for heartbeat and health handling. A subsequent disconnect must reset the state to `Connecting`/`Unknown`.
+    *   *Assert:* The client must emit a JSON-RPC request containing `protocol_version` and `subject_schema` in the `capabilities` map even if downstream capabilities are unavailable. (1) The connect handshake must timeout and close the connection. (2) The client must emit `Connecting`/`Verifying` during the pending handshake and `Connected`/`Accepted` on success. (3) On the second dial, it must emit `Connected`/`Rejected`, but MUST keep the socket open for heartbeat and health handling. A subsequent disconnect must reset the state to `Connecting`/`Unknown`.
 *   **TC-NET-019 (WebSocket Reader Bounded Payloads):**
     *   *Requirement Mapping:* `REQ-020` (Protocol Strictness & Memory Bounds)
     *   *Setup:* Send an oversized garbage stream with no valid JSON. Send a 15MB compressed `configure` payload. Send an oversized payload that does contain a valid JSON-RPC `id` at the beginning.
@@ -300,6 +300,10 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-043` (Strict WebSocket Lifecycle)
     *   *Setup:* Start `ReconnectLoop` using a Cloud gateway with an untrusted certificate, a mismatched hostname, or missing client certificates.
     *   *Assert:* The WSS dial must fatally fail TLS validation. It must not proceed to the connect handshake.
+*   **TC-NET-026 (Protocol Rejected State Gating):**
+    *   *Requirement Mapping:* `REQ-043` (Strict WebSocket Lifecycle)
+    *   *Setup:* Start `ReconnectLoop` and mock a `HandshakeRejectedKeepOpen` (e.g., protocol version mismatch). While the socket is open, simulate incoming `ping`, `configure`, and `reboot` requests from the Cloud.
+    *   *Assert:* The reader loop must successfully process the `ping` (and Ping/Pong control frames). It must intercept `configure` and `reboot` before dispatching to the `FrameHandler` and immediately return `-32603` with `application_code = 3`. The socket must remain open until explicitly disconnected by the Cloud or a heartbeat timeout occurs.
 
 ### PR 4.2: NATS Integration Client Tests
 *   **TC-NET-003 (JetStream KV Revision Guard & Trigger Contract):**
@@ -407,7 +411,7 @@ This document details the test plans, test cases, and verification strategies fo
 | **REQ-007** | Transaction Lifecycle | `TC-RM-001`, `TC-RM-008` |
 | **REQ-008** | Concurrency Serialization | `TC-RM-002`, `TC-RM-003` |
 | **REQ-009** | Duplicate Active Request Rejection | `TC-RM-004` |
-| **REQ-010** | Operation-Specific Caching & TTL | `TC-RM-006`, `TC-NET-023` |
+| **REQ-010** | Operation-Specific Caching & TTL | `TC-RM-005`, `TC-NET-023` |
 | **REQ-011** | Asynchronous Upgrade Tracking & Crash Recovery | `TC-UPG-001`, `TC-UPG-002`, `TC-UPG-003` |
 | **REQ-012** | Command Dispatch Buffer | `TC-BUF-003` |
 | **REQ-013** | Command Result Priority Queue | `TC-QUE-001`, `TC-QUE-002`, `TC-QUE-003`, `TC-BUF-006` |
@@ -439,5 +443,5 @@ This document details the test plans, test cases, and verification strategies fo
 | **REQ-039** | OWGW RTTY Protocol Compatibility | `TC-ACT-009` |
 | **REQ-040** | OWGW Certupdate Protocol Compatibility | `TC-ACT-010` |
 | **REQ-041** | OWGW Reenroll Protocol Compatibility | `TC-ACT-011` |
-| **REQ-042** | OWGW Script Protocol Compatibility | `TC-ACT-005`, `TC-CON-004` |
-| **REQ-043** | Strict WebSocket Lifecycle and Security | `TC-NET-023`, `TC-NET-024`, `TC-NET-025` |
+| **REQ-042** | OWGW Script Protocol Compatibility | `TC-ACT-012`, `TC-CON-004` |
+| **REQ-043** | Strict WebSocket Lifecycle and Security | `TC-NET-023`, `TC-NET-024`, `TC-NET-025`, `TC-NET-026` |

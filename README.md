@@ -32,13 +32,14 @@ The uCentral client is a lightweight, Go-based gateway daemon that bridges a clo
 ```json
 {
   "serial": "00:11:22:33:44:55",
-  "compression_threshold_bytes": 2048,
   "cloud": {
     "url": "wss://cloud.gateway.example.com:15002",
     "connect_timeout_seconds": 10,
     "write_timeout_seconds": 10,
     "ping_interval_seconds": 30,
     "pong_timeout_seconds": 60,
+    "stable_session_threshold_seconds": 300,
+    "compression_threshold_bytes": 2048,
     "tls": {
       "ca_file": "/etc/ucentral/cloud-ca.pem",
       "client_cert_file": "/etc/ucentral/cloud-cert.pem",

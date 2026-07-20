@@ -552,7 +552,6 @@ TIP-olg-ucentral-client/
 
     type Config struct {
         Serial                    string      `json:"serial"`
-        CompressionThresholdBytes int         `json:"compression_threshold_bytes"`
         Cloud                     CloudConfig `json:"cloud"`
         NATS                      NATSConfig  `json:"nats"`
         Queues                    QueueConfig `json:"queues"`
@@ -566,12 +565,14 @@ TIP-olg-ucentral-client/
     }
 
     type CloudConfig struct {
-        URL                   string         `json:"url"`
-        ConnectTimeoutSeconds int            `json:"connect_timeout_seconds"`
-        WriteTimeoutSeconds   int            `json:"write_timeout_seconds"`
-        PingIntervalSeconds   int            `json:"ping_interval_seconds"`
-        PongTimeoutSeconds    int            `json:"pong_timeout_seconds"`
-        TLS                   CloudTLSConfig `json:"tls"`
+        URL                           string         `json:"url"`
+        ConnectTimeoutSeconds         int            `json:"connect_timeout_seconds"`
+        WriteTimeoutSeconds           int            `json:"write_timeout_seconds"`
+        PingIntervalSeconds           int            `json:"ping_interval_seconds"`
+        PongTimeoutSeconds            int            `json:"pong_timeout_seconds"`
+        StableSessionThresholdSeconds int            `json:"stable_session_threshold_seconds"`
+        CompressionThresholdBytes     int            `json:"compression_threshold_bytes"` // Defines compression threshold mapped to permessage-deflate behavior
+        TLS                           CloudTLSConfig `json:"tls"`
     }
 
     type NATSConfig struct {
@@ -595,10 +596,14 @@ TIP-olg-ucentral-client/
         RemoteAccess int
         Factory      int
         Upgrade      int
+        Certupdate   int
+        Reenroll     int
+        Script       int
         Default      int
     }
 
-    // LoadCacheTTLConfigFromEnv parses the OLG_CACHE_TTL_* environment variables as Go durations,
+    // LoadCacheTTLConfigFromEnv parses the OLG_CACHE_TTL_* environment variables (including 
+    // OLG_CACHE_TTL_CERTUPDATE, OLG_CACHE_TTL_REENROLL, and OLG_CACHE_TTL_SCRIPT) as Go durations,
     // applies the documented defaults if unset, and rejects malformed or negative durations.
     func LoadCacheTTLConfigFromEnv() (CacheTTLConfig, error)
     
@@ -973,6 +978,9 @@ If the result payload cannot be decoded or its `correlation_id` does not match a
     	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/queues"
     )
 
+    // CloudConnectParams defines the required fields for the connect JSON-RPC handshake.
+    // The Capabilities map must, at minimum, include the exact keys `protocol_version`, 
+    // `subject_schema`, and any optional extension flags (e.g. `extensions.upgrade_progress`).
     type CloudConnectParams struct {
     	Serial       string         `json:"serial"`
     	UUID         uint64         `json:"uuid"`
@@ -1065,12 +1073,19 @@ If the result payload cannot be decoded or its `correlation_id` does not match a
     // 6. Never allows overlapping reconnect sessions.
     func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler)
 
+    type HandshakeResult int
+
+    const (
+    	HandshakeAccepted HandshakeResult = iota
+    	HandshakeRejectedKeepOpen
+    	HandshakeRetryableFailure
+    	HandshakeFatalClose
+    )
+
     // performConnectHandshake transmits CloudConnectParams and validates the CloudConnectResult.
-    // If rejected, WSS remains open, Protocol = Rejected. The daemon does not reconnect purely on rejection.
-    // While protocol state is Verifying or Rejected, the daemon may process only WebSocket Ping/Pong control frames 
-    // and the Cloud JSON-RPC ping health method. No other JSON-RPC method is permitted. All other requests must be 
-    // rejected with -32603 and application_code = 3.
-    func (c *WSClient) performConnectHandshake(ctx context.Context, sessionID string) error
+    // Returns HandshakeAccepted, HandshakeRejectedKeepOpen (for protocol/version rejections), 
+    // or HandshakeRetryableFailure/HandshakeFatalClose for network/timeout errors.
+    func (c *WSClient) performConnectHandshake(ctx context.Context, sessionID string) HandshakeResult
     
     // Close cleanly shuts down the active WebSocket connection.
     func (c *WSClient) Close() error
@@ -1079,8 +1094,9 @@ If the result payload cannot be decoded or its `correlation_id` does not match a
     // 1. Enforce a hard maximum frame size at the transport layer (e.g. 11MB). This acts as a global safety net because the underlying WebSocket library (gorilla/websocket) buffers incoming network frames in memory; without this, a malicious uncompressible 1GB frame would OOM the device before decompression even starts.
     // 2. MUST use a bounded reader (post-decompression limit) when permessage-deflate is active to enforce operation-specific limits (e.g. 10MB configure, 1MB state) and prevent zip-bomb OOMs. Compressed frames must not bypass uncompressed limits.
     // 3. If the payload is within transport bounds, parse the complete JSON-RPC envelope.
-    // 4. Return an ID-correlated -32602 error ONLY if the outer envelope is valid but a nested operation payload (e.g. configure) exceeds its operation-specific limit.
-    // 5. Handle Pong messages to extend the read deadline.
+    // 4. MUST enforce protocol state gating before dispatching to FrameHandler: If protocol state is Verifying or Rejected, discard all methods except ping, returning -32603/app_code=3 for rejected methods.
+    // 5. Return an ID-correlated -32602 error ONLY if the outer envelope is valid but a nested operation payload (e.g. configure) exceeds its operation-specific limit.
+    // 6. Handle Pong messages to extend the read deadline.
     func (c *WSClient) startReaderLoop(ctx context.Context, handler FrameHandler) error
 
     // startWriterLoop MUST enforce recovery, heartbeat, and cross-session isolation:
@@ -1175,10 +1191,11 @@ The uCentral client must not register a NATS responder for `ucentral.v1.device.<
         *   `cloud.tls.ca_file`: Required and readable file path
         *   `cloud.tls.client_cert_file`: Required and readable file path
         *   `cloud.tls.client_key_file`: Required and readable file path
+        *   `cloud.compression_threshold_bytes`: Default 2048; must be > 0
+        *   `cloud.stable_session_threshold_seconds`: Default 300; must be > 0
         *   `nats.servers`: At least one entry; each must use `tls://`
         *   `nats.credentials_file`: Required and readable file path
         *   `nats.ca_file`: Required and readable file path
-        *   `compression_threshold_bytes`: Default 2048; must be > 0
         *   `queues.ws_writer_capacity`: Default 500; must be > 0
         *   `queues.emergency_capacity`: Default 100; must be > 0
         *   `queues.nats_publish_capacity`: Default 100; must be > 0

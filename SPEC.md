@@ -989,9 +989,10 @@ If the result payload cannot be decoded or its `correlation_id` does not match a
     }
 
     type ConnectMetadataProvider interface {
-    	// ConnectParams must return the handshake payload. If capabilities are temporarily 
-    	// unavailable from the downstream responder, it should return an empty or default 
-    	// capability map rather than permanently blocking the WebSocket reconnect loop.
+    	// ConnectParams must return the handshake payload. If downstream capabilities are 
+    	// temporarily unavailable, it should return default downstream capability fields rather 
+    	// than blocking the WebSocket reconnect loop, but it must always include protocol-owned 
+    	// keys (e.g. protocol_version and subject_schema).
     	ConnectParams(ctx context.Context) (CloudConnectParams, error)
     }
 

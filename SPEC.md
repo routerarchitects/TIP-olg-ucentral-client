@@ -508,12 +508,27 @@ TIP-olg-ucentral-client/
     }
 
     // DeriveConnectionState evaluates the pure derived status from the independent loops.
-    // It returns an error if any invalid/unrecognized string enum values are provided.
+    // It returns an error if any invalid/unrecognized string enum values are provided,
+    // or if an architecturally impossible state combination is provided.
+    //
+    // Truth Table:
+    // | Cloud        | NATS         | Protocol          | Returns               |
+    // |--------------|--------------|-------------------|-----------------------|
+    // | Connecting   | Connecting   | Unknown/Verifying | StateConnecting       |
+    // | Connecting   | Connected    | Unknown/Verifying | StateCloudDegraded    |
+    // | Connected    | Connecting   | Accepted          | StateNATSDegraded     |
+    // | Connected    | Connected    | Accepted          | StateOperational      |
+    // | Connected    | Connecting   | Rejected          | StateProtocolFailure  |
+    // | Connected    | Connected    | Rejected          | StateProtocolFailure  |
+    // | Connecting   | (Any)        | Accepted/Rejected | error (Impossible)    |
+    // | Connected    | (Any)        | Unknown/Verifying | error (Impossible)    |
     func DeriveConnectionState(cloud LinkState, nats LinkState, protocol ProtocolState) (ConnectionState, error)
 
     // Protocol State Lifecycle:
     // Protocol state MUST be strictly scoped to a single Cloud session to prevent 
-    // stale rejections from contaminating future reconnections.
+    // stale rejections from contaminating future reconnections. Note that `LinkConnected`
+    // for the Cloud link indicates ONLY that the WSS transport is open and the JSON-RPC
+    // exchange has finished; it does NOT imply protocol acceptance.
     // 
     // 1. Cloud connection drops/disconnects:
     //    Cloud = Connecting, Protocol = ProtocolUnknown

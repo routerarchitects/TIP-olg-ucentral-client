@@ -8,6 +8,7 @@ This document lists the strict, numbered requirements for the Go-based uCentral 
 
 *   **REQ-001 (Concurrent Startup Loops):** The daemon must launch separate, independent, concurrent connection loops to NATS and the Cloud WebSocket at boot. A failure or delay in NATS connection must not block the Cloud connection, and vice versa.
 *   **REQ-002 (Decoupled Connection State Machine):** The daemon must manage the Cloud and NATS connection lifecycles entirely independently. Their individual connection states (`Connecting` $\leftrightarrow$ `Connected`) must be evaluated continuously to form a composite Derived Status consisting of five distinct, globally observable connection states:
+    *(Note: Capitalized names below are used for architectural documentation; the actual wire/log values strictly serialize as lowercase snake_case, e.g., `operational`, `cloud_degraded`).*
     *   `Operational`: Cloud is `Connected`, NATS is `Connected`.
     *   `CloudDegraded`: Cloud is `Connecting`, but NATS is `Connected`. (Daemon safely buffers telemetry locally; reconnects to Cloud with randomized exponential backoff of 2s-300s).
     *   `NATSDegraded`: NATS is `Connecting`, but Cloud is `Connected`. (Daemon fast-fails incoming Cloud commands with `local_service_unavailable`).

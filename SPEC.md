@@ -707,6 +707,7 @@ If the result payload cannot be decoded or its `correlation_id` does not match a
 
     import (
     	"context"
+    	"encoding/json"
     	"sync"
     	"time"
     )

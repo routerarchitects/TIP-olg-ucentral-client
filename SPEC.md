@@ -1083,6 +1083,9 @@ If the result payload cannot be decoded or its `correlation_id` does not match a
     )
 
     // performConnectHandshake transmits CloudConnectParams and validates the CloudConnectResult.
+    // It owns the Verifying read path: while awaiting the connect response, it must read from the socket
+    // and successfully process incoming Ping/Pong control frames and ping JSON-RPC requests, while 
+    // immediately rejecting any non-ping JSON-RPC frames with -32603/application_code=3.
     // Returns HandshakeAccepted, HandshakeRejectedKeepOpen (for protocol/version rejections), 
     // or HandshakeRetryableFailure/HandshakeFatalClose for network/timeout errors.
     func (c *WSClient) performConnectHandshake(ctx context.Context, sessionID string) HandshakeResult

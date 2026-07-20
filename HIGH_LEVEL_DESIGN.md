@@ -219,7 +219,7 @@ To protect device integrity, the client divides requests into two execution clas
 
 ### 3.3 Duplicate & Overlapping Requests
 *   **Overlapping Duplicate Requests:** If the Cloud retries a command sending the exact same Cloud `id` while a transaction is already active (`Created`, `PreparingDispatch`, `PendingPublish`, or `InFlight`), the client rejects the new request immediately with a JSON-RPC busy/internal error (`-32603`). This avoids complex fan-out/listener attachment logic and ensures predictable client behavior.
-*   **Duplicate Completed Requests:** If the request matches a cached Cloud `id` that has already completed, the Request Manager **replays the cached response** directly to the cloud.
+*   **Duplicate Completed Requests:** If the request matches a cached Cloud `id` that has already completed *within the same Cloud session*, the Request Manager **replays the cached response** directly to the cloud. Cross-session replay by ID is prohibited.
 *   **Cache TTL by Operation Type (Environment Configurable):**
     *   `configure`, `leds`: **5 minutes**
     *   `reboot`, `remote_access`: **10 minutes**
@@ -229,7 +229,7 @@ To protect device integrity, the client divides requests into two execution clas
 
 ### 3.4 Behavior Across Reconnects
 *   **Cloud Disconnections:** If the WAN connection to the Cloud drops while a transaction is `InFlight`, the client **continues running the operation downstream**. It does not abort the configuration or reboot.
-*   **Result Recovery:** If NATS replies while the Cloud is disconnected, the client stores the result in its transaction cache. Once the Cloud reconnects and queries the status or retries the command (using the same Cloud `id`), the client replays the cached result immediately.
+*   **Result Recovery:** If NATS replies while the Cloud is disconnected, the client stores the result in its transaction cache. Once the Cloud reconnects, old-session cached responses are *not* replayed merely by reusing the same JSON-RPC ID. The Cloud must use an explicit status query or `operation_id` mechanism to recover the final outcome, or initiate a new transaction.
 
 ### 3.5 Asynchronous Upgrades (Firmware)
 Firmware upgrades take minutes to complete and cannot block the Request Manager or hold the WebSocket connection open. The architecture defines the following cross-component contracts for upgrades:
@@ -369,7 +369,7 @@ Queue sizes are configurable via daemon configuration file parameters.
 | Queue Name | Purpose / Type | Capacity | Overflow / Failure Policy |
 | :--- | :--- | :--- | :--- |
 | **Command Dispatch Buffer** | Short-lived NATS handoff buffer (Not durable). | Default: 100 messages | If full or NATS is disconnected, fails fast and rejects the Cloud request with `local_service_unavailable` (JSON-RPC code -32603, application_code 3). |
-| **Command Result Priority Queue** | Handles NATS replies for config/action processing. | Default: 50 messages | High priority and bounded. Because state-changing commands are serialized per device, this queue is not expected to fill during normal operation. Command results must not be silently dropped. If overflow occurs, the client records the overflow metric and logs the `correlation_id`, command type, and subject. The exact correlated downstream result is passed directly to the Request Manager and finalized according to the true downstream outcome. The client must not replace the original result with a generated -32603 error and must not rewrite a successful transaction as Failed. The exact final Cloud response is stored in the TransactionCache. If the response cannot be delivered through the Priority-0 WebSocket queue, the client treats the WebSocket delivery path as unhealthy and triggers path recovery. After reconnection, a Cloud retry using the same request ID receives the exact cached response. |
+| **Command Result Priority Queue** | Handles NATS replies for config/action processing. | Default: 50 messages | High priority and bounded. Because state-changing commands are serialized per device, this queue is not expected to fill during normal operation. Command results must not be silently dropped. If overflow occurs, the client records the overflow metric and logs the `correlation_id`, command type, and subject. The exact correlated downstream result is passed directly to the Request Manager and finalized according to the true downstream outcome. The exact final Cloud response is stored in the TransactionCache. If the response cannot be delivered through the Priority-0 WebSocket queue, the client treats the WebSocket delivery path as unhealthy and triggers path recovery. After reconnection, the Cloud must use explicit state retrieval because cached responses from the dead session will not be replayed automatically upon a simple JSON-RPC ID retry. |
 | **State Coalescer** | Keeps only the latest state report (last-write-wins). | 1 Slot per Serial | Overwrites previous un-flushed stats with newer state reports. Flushes every 10 seconds. |
 | **Telemetry/Log Ring Buffer** | Bounded FIFO queue for logs and events. | Default: 500 messages | Bounded FIFO. Drops oldest low-priority events on overflow (FIFO drop). Excludes high-severity audit logs. |
 

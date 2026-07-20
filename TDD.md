@@ -147,7 +147,7 @@ This document details the test plans, test cases, and verification strategies fo
 *   **TC-QUE-002 (Command Result Queue Overflow Preserves Downstream Result):**
     *   *Requirement Mapping:* `REQ-013`, `REQ-021`
     *   *Setup:* Fill the Command Result Priority Queue to capacity. Simulate a correlated downstream command result arriving with a known `correlation_id`.
-    *   *Assert:* `Push()` must return `ErrQueueFull`; the daemon must log the `correlation_id`, command type, and subject and increment `command_result_overflow`. The Request Manager MUST NOT rewrite the transaction state to Failed and MUST NOT cache a generated `-32603` failure. The exact original downstream response must be processed directly and preserved in the `TransactionCache`. If subsequent delivery to the Priority-0 WebSocket scheduler also fails, the daemon must trigger WebSocket path recovery. When the Cloud reconnects and retries, it must receive the exact original cached response.
+    *   *Assert:* `Push()` must return `ErrQueueFull`; the daemon must log the `correlation_id`, command type, and subject and increment `command_result_overflow`. The Request Manager MUST NOT rewrite the transaction state to Failed and MUST NOT cache a generated `-32603` failure. The exact original downstream response must be processed directly and preserved in the `TransactionCache`. If delivery to the Priority-0 WebSocket scheduler also fails, the daemon must trigger WebSocket path recovery while preserving the exact original response in the old session's cache entry. A newly connected Cloud session must not receive that response merely by reusing the same JSON-RPC ID. Recovery must use an explicit status or operation_id mechanism.
 *   **TC-BUF-004 (WebSocket permessage-deflate Negotiation & Threshold):**
     *   *Requirement Mapping:* `REQ-024` (Payload Compression)
     *   *Setup:* Set `compression_threshold_bytes` to 2048. Perform WebSocket handshake simulating a controller that accepts `permessage-deflate`. Generate a payload of size 1024 bytes and another of size 3072 bytes.
@@ -288,6 +288,18 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-027` (JSON-RPC ID Preservation & Edge Cases)
     *   *Setup:* Send a valid JSON-RPC 2.0 notification (a request containing no `id` field).
     *   *Assert:* The client must parse and process the notification (if applicable) but MUST NOT queue any response payload to the writer loop.
+*   **TC-NET-023 (Session Isolation & Cross-Session Leakage):**
+    *   *Requirement Mapping:* `REQ-010` (Operation-Specific Caching & TTL), `REQ-043` (Strict WebSocket Lifecycle)
+    *   *Setup:* Disconnect the Cloud while a Priority-0 response is held in the OutboundScheduler. Reconnect the Cloud (establishing a new Session ID).
+    *   *Assert:* The writer loop must discard or ignore the stale-session message. It must NOT write it to the new WebSocket connection. A subsequent Cloud request reusing the same JSON-RPC ID must NOT automatically receive the cached response from the old session.
+*   **TC-NET-024 (Coordinated Goroutine Teardown):**
+    *   *Requirement Mapping:* `REQ-043` (Strict WebSocket Lifecycle)
+    *   *Setup:* Start the `ReconnectLoop`. Simulate a fatal reader error (e.g., protocol violation) while the writer is blocked on `scheduler.Next()`. Conversely, simulate a writer timeout while the reader is blocked reading frames. 
+    *   *Assert:* The sibling goroutine must be cleanly canceled via the session context. The stale generation must NOT be able to close a newer connection spawned by a subsequent reconnect race.
+*   **TC-NET-025 (Strict TLS Authentication):**
+    *   *Requirement Mapping:* `REQ-043` (Strict WebSocket Lifecycle)
+    *   *Setup:* Start `ReconnectLoop` using a Cloud gateway with an untrusted certificate, a mismatched hostname, or missing client certificates.
+    *   *Assert:* The WSS dial must fatally fail TLS validation. It must not proceed to the connect handshake.
 
 ### PR 4.2: NATS Integration Client Tests
 *   **TC-NET-003 (JetStream KV Revision Guard & Trigger Contract):**
@@ -395,7 +407,7 @@ This document details the test plans, test cases, and verification strategies fo
 | **REQ-007** | Transaction Lifecycle | `TC-RM-001`, `TC-RM-008` |
 | **REQ-008** | Concurrency Serialization | `TC-RM-002`, `TC-RM-003` |
 | **REQ-009** | Duplicate Active Request Rejection | `TC-RM-004` |
-| **REQ-010** | Operation-Specific Caching & TTL | `TC-RM-005` |
+| **REQ-010** | Operation-Specific Caching & TTL | `TC-RM-006`, `TC-NET-023` |
 | **REQ-011** | Asynchronous Upgrade Tracking & Crash Recovery | `TC-UPG-001`, `TC-UPG-002`, `TC-UPG-003` |
 | **REQ-012** | Command Dispatch Buffer | `TC-BUF-003` |
 | **REQ-013** | Command Result Priority Queue | `TC-QUE-001`, `TC-QUE-002`, `TC-QUE-003`, `TC-BUF-006` |
@@ -415,7 +427,7 @@ This document details the test plans, test cases, and verification strategies fo
 | **REQ-027** | JSON-RPC ID Preservation & Edge Cases | `TC-CON-005`, `TC-RM-007`, `TC-NET-022` |
 | **REQ-028** | NATS Envelope Serialization Contract | `TC-CON-001` |
 | **REQ-029** | Graceful Teardown | `TC-INT-001` |
-| **REQ-030** | Startup Configuration Validation | `TC-INT-005` |
+| **REQ-030** | Startup Dependency Validation | `TC-NET-010` |
 | **REQ-031** | OWGW Configure Protocol Compatibility | `TC-CON-006` |
 | **REQ-032** | Out of Scope Features | `TC-ACT-013` |
 | **REQ-033** | OWGW Reboot Protocol Compatibility | `TC-ACT-001` |
@@ -427,4 +439,5 @@ This document details the test plans, test cases, and verification strategies fo
 | **REQ-039** | OWGW RTTY Protocol Compatibility | `TC-ACT-009` |
 | **REQ-040** | OWGW Certupdate Protocol Compatibility | `TC-ACT-010` |
 | **REQ-041** | OWGW Reenroll Protocol Compatibility | `TC-ACT-011` |
-| **REQ-042** | OWGW Script Protocol Compatibility | `TC-ACT-012` |
+| **REQ-042** | OWGW Script Protocol Compatibility | `TC-ACT-005`, `TC-CON-004` |
+| **REQ-043** | Strict WebSocket Lifecycle and Security | `TC-NET-023`, `TC-NET-024`, `TC-NET-025` |

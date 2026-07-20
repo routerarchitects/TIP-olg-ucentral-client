@@ -83,14 +83,14 @@ TIP-olg-ucentral-client/
     	JSONRPC string          `json:"jsonrpc"`
     	Method  string          `json:"method"`
     	Params  json.RawMessage `json:"params"`
-    	ID      json.RawMessage `json:"id"`
+    	ID      json.RawMessage `json:"id,omitempty"`
     }
 
     type JSONRPCResponse struct {
     	JSONRPC string          `json:"jsonrpc"`
     	Result  json.RawMessage `json:"result,omitempty"`
     	Error   *JSONRPCError   `json:"error,omitempty"`
-    	ID      json.RawMessage `json:"id"`
+    	ID      json.RawMessage `json:"id,omitempty"`
     }
 
     type JSONRPCError struct {
@@ -565,8 +565,9 @@ TIP-olg-ucentral-client/
     )
 
     type OutboundMessage struct {
-    	Priority Priority
-    	Payload  []byte
+    	SessionID string
+    	Priority  Priority
+    	Payload   []byte
     }
 
     // OutboundScheduler defines the priority outbound queue interface.
@@ -590,7 +591,7 @@ TIP-olg-ucentral-client/
     type PriorityScheduler struct {
     	mu           sync.Mutex
     	cond         *sync.Cond
-    	queues       [4][][]byte
+    	queues       [4][]OutboundMessage
     	capacity     int // maximum entries for Priority 1, 2, and 3
     	emergencyCap int // maximum entries for the Priority 0 emergency queue
     }
@@ -688,7 +689,7 @@ If `Push()` returns `ErrQueueFull`, the subscriber must not silently discard the
 2. Log the correlation ID, command type, and NATS subject.
 3. Pass the exact, original JSON response payload into the normal `RequestManager.Complete()` or `Fail()` methods to finalize the transaction according to the true device outcome.
 
-The Request Manager MUST NOT rewrite the transaction state to Failed and MUST NOT cache a generated `-32603` failure. The exact original downstream response must be preserved in the `TransactionCache`. When `Complete()` or `Fail()` subsequently attempt to enqueue the response to the Priority-0 WebSocket scheduler, and if that queue is also full, the Request Manager must trigger Priority-0 WebSocket path recovery (e.g. WebSocket reconnect). When the Cloud reconnects and retries the command, it will receive the exact original cached response.
+The Request Manager MUST NOT rewrite the transaction state to Failed and MUST NOT cache a generated `-32603` failure. The exact original downstream response remains preserved in the `TransactionCache` under the original Cloud session key. It must not be automatically replayed to a newly connected Cloud session merely because that session reuses the same JSON-RPC ID. Cross-session recovery requires an explicit status query, `operation_id`, or another defined recovery mechanism.
 
 If the result payload cannot be decoded or its `correlation_id` does not match an active transaction, it may be discarded only after logging and metric emission.
 *   **Telemetry and Log Throttling (Activation & Release):** The Main loop polls `Utilization()` before processing telemetry or standard logs.
@@ -740,8 +741,9 @@ If the result payload cannot be decoded or its `correlation_id` does not match a
 
     type Transaction struct {
     	CorrelationID    string
+    	CloudSessionID   string
     	CloudRPCID       json.RawMessage
-    	RequestKey       string // method:canonicalID (e.g. "configure:number:42")
+    	RequestKey       string // sessionID:method:canonicalID (e.g. "session-uuid:configure:number:42")
     	RespondToCloud   bool
     	Method           string
     	State            TransactionState
@@ -775,10 +777,10 @@ If the result payload cannot be decoded or its `correlation_id` does not match a
     	pendingReplies              map[string][]byte       // Key: CorrelationID
     }
 
-    // CanonicalRequestKey formats the method and raw JSON-RPC ID into a strongly-typed string (e.g., "configure:number:42")
-    // to strictly prevent collisions across methods or numeric/string IDs. This key MUST be used by
+    // CanonicalRequestKey formats the session ID, method, and raw JSON-RPC ID into a strongly-typed string (e.g., "session-uuid:configure:number:42")
+    // to strictly prevent collisions across methods, numeric/string IDs, and different Cloud sessions. This key MUST be used by
     // activeCloudRequests, TransactionCache, duplicate-active detection, and completed-response replay.
-    func CanonicalRequestKey(method string, id json.RawMessage) (string, error)
+    func CanonicalRequestKey(sessionID string, method string, id json.RawMessage) (string, error)
 
     func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLConfig, cache *TransactionCache, scheduler *PriorityScheduler, store OperationStore) *DefaultRequestManager
     
@@ -797,7 +799,7 @@ If the result payload cannot be decoded or its `correlation_id` does not match a
     // CreateTransaction records the configured downstream timeout duration, sets DispatchDeadline
     // using the manager's configured dispatchTimeout, and initializes the DispatchTimer. The DispatchTimer callback MUST 
     // atomically verify the transaction identity and transition it to Failed if it expires before MarkInFlight is called.
-    func (m *DefaultRequestManager) CreateTransaction(cloudRPCID json.RawMessage, respondToCloud bool, method string, timeout time.Duration, isStateChanging bool) (*Transaction, error)
+    func (m *DefaultRequestManager) CreateTransaction(sessionID string, cloudRPCID json.RawMessage, respondToCloud bool, method string, timeout time.Duration, isStateChanging bool) (*Transaction, error)
     // MarkPreparingDispatch transitions the transaction from TxCreated to TxPreparingDispatch.
     func (m *DefaultRequestManager) MarkPreparingDispatch(correlationID string) error
     // MarkPendingPublish transitions the transaction from TxPreparingDispatch to TxPendingPublish.
@@ -900,50 +902,100 @@ If the result payload cannot be decoded or its `correlation_id` does not match a
 
     import (
     	"context"
+    	"sync"
     	gws "github.com/gorilla/websocket"
+    	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/contracts"
     	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/queues"
     )
 
-    type WSClient struct {
-    	conn          *gws.Conn
-    	scheduler     queues.OutboundScheduler
-    	url           string
-    	onStateChange func(cloud LinkState, protocol ProtocolState)
+    type CloudTLSConfig struct {
+    	CAFile         string `json:"ca_file"`
+    	ClientCertFile string `json:"client_cert_file"`
+    	ClientKeyFile  string `json:"client_key_file"`
+    	ServerName     string `json:"server_name,omitempty"`
     }
 
-    func NewWSClient(url string, scheduler queues.OutboundScheduler, onStateChange func(LinkState, ProtocolState)) *WSClient
+    type CloudConfig struct {
+    	URL                   string         `json:"url"`
+    	ConnectTimeoutSeconds int            `json:"connect_timeout_seconds"`
+    	WriteTimeoutSeconds   int            `json:"write_timeout_seconds"`
+    	PingIntervalSeconds   int            `json:"ping_interval_seconds"`
+    	PongTimeoutSeconds    int            `json:"pong_timeout_seconds"`
+    	TLS                   CloudTLSConfig `json:"tls"`
+    }
+
+    type CloudConnectParams struct {
+    	Serial       string         `json:"serial"`
+    	Firmware     string         `json:"firmware"`
+    	Capabilities map[string]any `json:"capabilities"`
+    }
+
+    type CloudConnectResult struct {
+    	Error int    `json:"error"`
+    	Text  string `json:"text,omitempty"`
+    }
+
+    type InboundFrame struct {
+    	SessionID string
+    	Type      int
+    	Payload   []byte
+    }
+
+    type FrameDisposition int
+
+    const (
+    	FrameAccepted FrameDisposition = iota
+    	FrameRejectedKeepConnection
+    	FrameFatalCloseConnection
+    )
+
+    type FrameHandler interface {
+    	HandleFrame(ctx context.Context, frame InboundFrame) (FrameDisposition, error)
+    }
+
+    type WSClient struct {
+    	mu            sync.Mutex
+    	conn          *gws.Conn
+    	generation    uint64
+    	cancel        context.CancelFunc
+    	config        CloudConfig
+    	scheduler     queues.OutboundScheduler
+    	onStateChange func(cloud contracts.LinkState, protocol contracts.ProtocolState)
+    }
+
+    func NewWSClient(config CloudConfig, scheduler queues.OutboundScheduler, onStateChange func(contracts.LinkState, contracts.ProtocolState)) *WSClient
     
-    // ReconnectLoop continuously dials the WSS transport, performs the JSON-RPC connect 
-    // handshake, blocks on the internal reader/writer loops, and applies randomized 
-    // exponential backoff on fatal errors.
+    // ReconnectLoop continuously dials the WSS transport (with strict TLS chain and hostname validation) 
+    // and negotiates the JSON-RPC connect handshake.
     // 
-    // It MUST explicitly fire onStateChange callbacks during the lifecycle:
-    // 1. Before Dial/During Backoff:   Cloud = Connecting, Protocol = Unknown
-    // 2. WSS Open, pending connect:    Cloud = Connecting, Protocol = Verifying
-    // 3. Successful connect response:  Cloud = Connected,  Protocol = Accepted
-    // 4. Fatal version rejection:      Cloud = Connected,  Protocol = Rejected
-    // 5. Reader/Writer loop failure:   Cloud = Connecting, Protocol = Unknown (triggers reconnect)
-    func (c *WSClient) ReconnectLoop(ctx context.Context, handler func([]byte))
+    // It enforces the following lifecycle:
+    // 1. Dials WSS. Creates a unique session_id, generation, and errgroup (sessionCtx).
+    // 2. Emits Connecting/Verifying. Calls performConnectHandshake().
+    // 3. Starts startReaderLoop() and startWriterLoop() concurrently via errgroup.Go.
+    // 4. Waits for errgroup.Wait(). The first error cancels sessionCtx, cleanly shutting down the sibling loop.
+    // 5. Explicitly resets backoff if the session remains stable for a configured duration.
+    // 6. Never allows overlapping reconnect sessions.
+    func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler)
+
+    // performConnectHandshake transmits CloudConnectParams and validates the CloudConnectResult.
+    // If rejected, WSS remains open, Protocol = Rejected. The daemon does not reconnect purely on rejection,
+    // continues heartbeat handling, allows only health messages, and rejects ordinary commands with -32603/app_code=3.
+    func (c *WSClient) performConnectHandshake(ctx context.Context, sessionID string) error
     
     // Close cleanly shuts down the active WebSocket connection.
     func (c *WSClient) Close() error
     
-    // Internal loops return fatal errors to the ReconnectLoop rather than dying silently.
-    // 
-    // startReaderLoop MUST enforce the following memory safety boundaries:
-    // 1. Enforce a configured maximum frame/message size at the websocket transport layer.
-    // 2. Parse the JSON-RPC `id` through a bounded pre-parser before attempting full unmarshalling.
-    // 3. Stop compressed `configure` decompression strictly at the 10MB uncompressed limit to prevent decompression bombs.
-    // 4. If an oversized garbage stream lacks a parseable/valid `id`, immediately close the connection, drop the payload, and emit a metric.
-    // 5. If the payload is oversized/invalid but a valid `id` WAS pre-parsed, return a JSON-RPC `-32602` error with `application_code=4` and keep the connection alive.
-    func (c *WSClient) startReaderLoop(ctx context.Context, handler func([]byte)) error
-    // startWriterLoop MUST enforce the following recovery contract:
-    // 1. Consume messages from the OutboundScheduler and write them to the active WSS connection using a strict write deadline.
-    // 2. Use ping/pong or equivalent heartbeat timeout handling to detect stale Cloud connections.
-    // 3. Treat any write timeout, heartbeat timeout, socket close, or scheduler Priority-0 overflow signal as a WebSocket writer-path health failure.
-    // 4. Return writer failures to ReconnectLoop so it can close the socket, set Cloud=Connecting and Protocol=Unknown, and reconnect with backoff.
-    // 5. Record metrics for write timeout, socket write failure, heartbeat timeout, and Priority-0 overflow.
-    // 6. Never rewrite terminal transaction outcomes because of WebSocket delivery failure. Cached Priority-0 responses remain authoritative and must be replayed if the Cloud retries after reconnect.
+    // startReaderLoop MUST enforce memory safety and structured disposition:
+    // 1. Enforce a hard maximum frame size at the transport layer. Exceeding it immediately closes the connection.
+    // 2. If the payload is within transport bounds, parse the complete JSON-RPC envelope.
+    // 3. Return an ID-correlated -32602 error ONLY if the outer envelope is valid but a nested operation payload (e.g. configure) exceeds its operation-specific limit.
+    // 4. Handle Pong messages to extend the read deadline.
+    func (c *WSClient) startReaderLoop(ctx context.Context, handler FrameHandler) error
+
+    // startWriterLoop MUST enforce recovery, heartbeat, and cross-session isolation:
+    // 1. Use configured ping interval and pong timeout. Writer loop exclusively sends Ping.
+    // 2. Discard or safely retain-for-replay any OutboundMessage whose SessionID does not match the active connection.
+    // 3. Treat write timeouts, heartbeat timeouts, socket closes, or Priority-0 overflows as fatal path failures.
     func (c *WSClient) startWriterLoop(ctx context.Context) error
     ```
 

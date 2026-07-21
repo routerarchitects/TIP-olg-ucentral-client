@@ -49,9 +49,17 @@ const (
 	CommandScript    CommandType = "script"
 	CommandReboot    CommandType = "reboot"
 
-	ActionUpgrade ActionType = "upgrade"
-	ActionReboot  ActionType = "reboot"
-	ActionExecute ActionType = "execute"
+	ActionUpgrade    ActionType = "upgrade"
+	ActionReboot     ActionType = "reboot"
+	ActionExecute    ActionType = "execute"
+	ActionFactory    ActionType = "factory"
+	ActionCertupdate ActionType = "certupdate"
+	ActionReenroll   ActionType = "reenroll"
+	ActionRTTY       ActionType = "rtty"
+	ActionLeds       ActionType = "leds"
+	ActionTrace      ActionType = "trace"
+	ActionPing       ActionType = "ping"
+	ActionTelemetry  ActionType = "telemetry"
 
 	ScriptTypeShell  ScriptType = "shell"
 	ScriptTypeUcode  ScriptType = "ucode"
@@ -71,7 +79,7 @@ func (c CommandType) Valid() bool {
 
 func (a ActionType) Valid() bool {
 	switch a {
-	case ActionUpgrade, ActionReboot, ActionExecute:
+	case ActionUpgrade, ActionReboot, ActionExecute, ActionFactory, ActionCertupdate, ActionReenroll, ActionRTTY, ActionLeds, ActionTrace, ActionPing, ActionTelemetry:
 		return true
 	default:
 		return false
@@ -99,7 +107,7 @@ func ValidCommandAction(command CommandType, action ActionType) bool {
 	switch command {
 	case CommandAction, CommandExecute:
 		// Generic transport commands can carry any valid operational action
-		return action == ActionUpgrade || action == ActionReboot || action == ActionExecute
+		return action.Valid()
 	case CommandUpgrade:
 		return action == ActionUpgrade || action == ""
 	case CommandReboot:

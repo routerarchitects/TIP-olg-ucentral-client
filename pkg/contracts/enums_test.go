@@ -76,6 +76,14 @@ func TestValidCommandAction(t *testing.T) {
 		{"Execute with Upgrade", CommandExecute, ActionUpgrade, true},
 		{"Execute with Reboot", CommandExecute, ActionReboot, true},
 		{"Execute with Execute", CommandExecute, ActionExecute, true},
+		{"Action with Factory", CommandAction, ActionFactory, true},
+		{"Action with Certupdate", CommandAction, ActionCertupdate, true},
+		{"Action with Reenroll", CommandAction, ActionReenroll, true},
+		{"Action with RTTY", CommandAction, ActionRTTY, true},
+		{"Action with Leds", CommandAction, ActionLeds, true},
+		{"Action with Trace", CommandAction, ActionTrace, true},
+		{"Action with Ping", CommandAction, ActionPing, true},
+		{"Action with Telemetry", CommandAction, ActionTelemetry, true},
 
 		// Direct commands
 		{"Upgrade with Upgrade", CommandUpgrade, ActionUpgrade, true},

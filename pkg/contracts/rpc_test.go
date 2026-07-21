@@ -319,12 +319,24 @@ func TestValidation_PositiveCases(t *testing.T) {
 		t.Errorf("Expected Reenroll to be valid, got: %v", err)
 	}
 
-	// Script (inline)
+	// Script (inline shell)
 	exact1MB := make([]byte, 1024*1024)
 	scriptEncoded := base64.StdEncoding.EncodeToString(exact1MB)
 	scriptReq := CloudScriptRequest{Serial: "1", Type: "shell", Script: scriptEncoded}
 	if err := scriptReq.Validate(); err != nil {
-		t.Errorf("Expected exactly 1MB Script to be valid, got: %v", err)
+		t.Errorf("Expected exactly 1MB shell Script to be valid, got: %v", err)
+	}
+
+	// Script (inline ucode)
+	scriptUcodeReq := CloudScriptRequest{Serial: "1", Type: "ucode", Script: scriptEncoded}
+	if err := scriptUcodeReq.Validate(); err != nil {
+		t.Errorf("Expected ucode Script to be valid, got: %v", err)
+	}
+
+	// Script (inline bundle)
+	scriptBundleReq := CloudScriptRequest{Serial: "1", Type: "bundle", Script: scriptEncoded}
+	if err := scriptBundleReq.Validate(); err != nil {
+		t.Errorf("Expected bundle Script to be valid, got: %v", err)
 	}
 
 	// Script (URI)

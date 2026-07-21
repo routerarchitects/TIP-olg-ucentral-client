@@ -476,7 +476,7 @@ func (r *CloudScriptRequest) Validate() error {
 	if r.Serial == "" {
 		return errors.New("serial is required")
 	}
-	if r.Type != ScriptTypeShell {
+	if r.Type != ScriptTypeShell && r.Type != ScriptTypeUcode && r.Type != ScriptTypeBundle {
 		return fmt.Errorf("invalid script type: %q", r.Type)
 	}
 	if r.When != 0 {

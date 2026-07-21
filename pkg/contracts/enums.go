@@ -53,7 +53,9 @@ const (
 	ActionReboot  ActionType = "reboot"
 	ActionExecute ActionType = "execute"
 
-	ScriptTypeShell ScriptType = "shell"
+	ScriptTypeShell  ScriptType = "shell"
+	ScriptTypeUcode  ScriptType = "ucode"
+	ScriptTypeBundle ScriptType = "bundle"
 
 	RemoteAccessRTTY RemoteAccessMethod = "rtty"
 )

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 )
 
 type ConfigureCommand struct {
@@ -56,39 +57,42 @@ func (c *ActionCommand) Validate() error {
 	if RequiresOperationID(c.CommandType, c.Action) && c.OperationID == "" {
 		return errors.New("operation_id is required for upgrade")
 	}
-	if err := ValidateActionPayload(c.Action, c.Payload); err != nil {
+	if err := ValidateCommandPayload(c.CommandType, c.Action, c.Payload); err != nil {
 		return err
 	}
 	return nil
 }
 
-// ValidateActionPayload decodes and strictly validates action-specific payloads.
-func ValidateActionPayload(action ActionType, payload json.RawMessage) error {
+// ValidateCommandPayload decodes and strictly validates action-specific payloads based on command and action.
+func ValidateCommandPayload(command CommandType, action ActionType, payload json.RawMessage) error {
 	var req interface{ Validate() error }
 
-	switch action {
-	case ActionFactory:
+	switch {
+	case action == ActionFactory:
 		req = &CloudFactoryRequest{}
-	case ActionCertupdate:
+	case action == ActionCertupdate:
 		req = &CloudCertupdateRequest{}
-	case ActionReenroll:
+	case action == ActionReenroll:
 		req = &CloudReenrollRequest{}
-	case ActionRTTY:
+	case action == ActionRTTY:
 		req = &CloudRemoteAccessRequest{}
-	case ActionLeds:
+	case action == ActionLeds:
 		req = &CloudLedsRequest{}
-	case ActionTrace:
+	case action == ActionTrace:
 		req = &CloudTraceRequest{}
-	case ActionPing:
+	case action == ActionPing:
 		req = &CloudPingRequest{}
-	case ActionTelemetry:
+	case action == ActionTelemetry:
 		req = &CloudTelemetryRequest{}
-	case ActionReboot:
+	case action == ActionReboot || command == CommandReboot:
 		req = &CloudRebootRequest{}
-	case ActionUpgrade:
+	case action == ActionUpgrade || command == CommandUpgrade:
 		req = &CloudUpgradeRequest{}
-	case ActionExecute:
+	case action == ActionExecute || command == CommandScript:
 		req = &CloudScriptRequest{}
+	case action == ActionCapabilitiesGet || action == ActionStatusGet || command == CommandQuery:
+		// Queries don't require nested payloads for validation here
+		return nil
 	default:
 		// Unknown or no-payload action
 		if len(payload) > 0 && !json.Valid(payload) {
@@ -98,19 +102,19 @@ func ValidateActionPayload(action ActionType, payload json.RawMessage) error {
 	}
 
 	if len(payload) == 0 || string(payload) == "null" {
-		return fmt.Errorf("payload is required for action %q", action)
+		return fmt.Errorf("payload is required for command %q action %q", command, action)
 	}
 
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	if err := decoder.Decode(req); err != nil {
-		return fmt.Errorf("malformed payload for action %q: %w", action, err)
+		return fmt.Errorf("malformed payload for command %q action %q: %w", command, action, err)
 	}
-	if decoder.More() {
-		return fmt.Errorf("trailing JSON in payload for action %q", action)
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return fmt.Errorf("trailing JSON in payload for command %q action %q", command, action)
 	}
 
 	if err := req.Validate(); err != nil {
-		return fmt.Errorf("invalid payload for action %q: %w", action, err)
+		return fmt.Errorf("invalid payload for command %q action %q: %w", command, action, err)
 	}
 
 	return nil

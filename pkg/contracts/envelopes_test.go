@@ -2,6 +2,7 @@ package contracts
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -304,9 +305,11 @@ func TestTC_CON_001_EnvelopeValidationBoundaries(t *testing.T) {
 		t.Error("Expected error for invalid json payload")
 	}
 	trailingPayloadAction := emptyPayloadAction
-	trailingPayloadAction.Payload = json.RawMessage(`{"serial":"123", "method":"rtty"} {"extra":"trailing"}`)
+	trailingPayloadAction.Payload = json.RawMessage(`{"serial":"123", "method":"rtty", "token":"123", "id":"123", "server":"srv", "port":123} {"extra":"trailing"}`)
 	if err := trailingPayloadAction.Validate(); err == nil {
 		t.Error("Expected error for trailing json payload")
+	} else if !strings.Contains(err.Error(), "trailing") {
+		t.Errorf("Expected trailing json error, got: %v", err)
 	}
 	invalidRequestAction := emptyPayloadAction
 	invalidRequestAction.Payload = json.RawMessage(`{"serial":"123", "method":"ssh"}`) // invalid method
@@ -317,5 +320,38 @@ func TestTC_CON_001_EnvelopeValidationBoundaries(t *testing.T) {
 	validPayloadAction.Payload = json.RawMessage(`{"serial":"123", "method":"rtty", "token":"123", "id":"123", "server":"srv", "port":123}`)
 	if err := validPayloadAction.Validate(); err != nil {
 		t.Errorf("Expected valid payload to pass, got: %v", err)
+	}
+
+	// Payload Bypasses Tests
+	bypasses := []struct {
+		Name    string
+		Command CommandType
+		Action  ActionType
+	}{
+		{"Upgrade with Action", CommandAction, ActionUpgrade},
+		{"Upgrade with Command", CommandUpgrade, ""},
+		{"Reboot with Action", CommandAction, ActionReboot},
+		{"Reboot with Command", CommandReboot, ""},
+		{"Script with Command", CommandScript, ""},
+	}
+
+	for _, tc := range bypasses {
+		t.Run(tc.Name, func(t *testing.T) {
+			cmd := ActionCommand{
+				Version:       "1.0",
+				CorrelationID: "corr-1",
+				Target:        "ap-1",
+				CommandType:   tc.Command,
+				Action:        tc.Action,
+				Payload:       json.RawMessage(`{}`), // empty object which misses mandatory fields
+				Timestamp:     "2023-10-01T12:00:00Z",
+			}
+			if tc.Command == CommandUpgrade || tc.Action == ActionUpgrade {
+				cmd.OperationID = "upg-1" // Provide valid operation ID to pass envelope validation
+			}
+			if err := cmd.Validate(); err == nil {
+				t.Errorf("Expected {} payload to fail inner validation for %s / %s", tc.Command, tc.Action)
+			}
+		})
 	}
 }

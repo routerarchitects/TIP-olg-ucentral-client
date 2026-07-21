@@ -92,6 +92,8 @@ func TestValidCommandAction(t *testing.T) {
 		{"Reboot with empty", CommandReboot, "", true},
 		{"Configure with empty", CommandConfigure, "", true},
 		{"Script with empty", CommandScript, "", true},
+		{"Query with CapabilitiesGet", CommandQuery, ActionCapabilitiesGet, true},
+		{"Query with StatusGet", CommandQuery, ActionStatusGet, true},
 
 		// Invalid combinations
 		{"Reboot with Upgrade", CommandReboot, ActionUpgrade, false},
@@ -99,6 +101,12 @@ func TestValidCommandAction(t *testing.T) {
 		{"Configure with Action", CommandConfigure, ActionReboot, false},
 		{"Script with Execute", CommandScript, ActionExecute, false},
 		{"Action with empty", CommandAction, "", false},
+		{"Query with invalid action", CommandQuery, ActionUpgrade, false},
+		{"Query with empty", CommandQuery, "", false},
+		{"Action with CapabilitiesGet", CommandAction, ActionCapabilitiesGet, false},
+		{"Action with StatusGet", CommandAction, ActionStatusGet, false},
+		{"Execute with CapabilitiesGet", CommandExecute, ActionCapabilitiesGet, false},
+		{"Execute with StatusGet", CommandExecute, ActionStatusGet, false},
 
 		// Invalid enums
 		{"Invalid command", CommandType("unknown"), ActionUpgrade, false},

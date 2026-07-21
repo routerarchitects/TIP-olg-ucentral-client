@@ -258,8 +258,7 @@ func TestTC_CON_001_EnvelopeValidationBoundaries(t *testing.T) {
 		Version:       "1.0",
 		CorrelationID: "1",
 		Target:        "ap",
-		CommandType:   CommandAction,
-		Action:        ActionUpgrade,
+		CommandType:   CommandUpgrade,
 		Result:        ResultSuccess,
 		Timestamp:     "time",
 	}

@@ -159,7 +159,6 @@ type ResultEnvelope struct {
 	CorrelationID string          `json:"correlation_id"`
 	Target        string          `json:"target"`
 	CommandType   CommandType     `json:"command_type"`
-	Action        ActionType      `json:"action,omitempty"`
 	OperationID   string          `json:"operation_id,omitempty"` // Mandatory for upgrade results
 	UUID          int64           `json:"uuid,omitempty"`         // Omitted for Action
 	Result        ResultType      `json:"result"`
@@ -172,13 +171,10 @@ func (r *ResultEnvelope) Validate() error {
 	if r.Version == "" || r.CorrelationID == "" || r.Target == "" || r.Result == "" || r.Timestamp == "" {
 		return errors.New("missing required fields in ResultEnvelope")
 	}
-	if !ValidCommandAction(r.CommandType, r.Action) {
-		return fmt.Errorf("inconsistent action %q for command_type %q", r.Action, r.CommandType)
-	}
 	if !r.Result.Valid() {
 		return fmt.Errorf("invalid result: %q", r.Result)
 	}
-	if RequiresOperationID(r.CommandType, r.Action) && r.OperationID == "" {
+	if r.CommandType == CommandUpgrade && r.OperationID == "" {
 		return errors.New("operation_id is required for upgrade")
 	}
 	if len(r.Payload) > 0 && !json.Valid(r.Payload) {

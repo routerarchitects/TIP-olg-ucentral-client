@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"testing"
+	"time"
 )
 
 func TestTC_RM_005_OperationSpecificCacheTTLs(t *testing.T) {
@@ -18,35 +19,35 @@ func TestTC_RM_005_OperationSpecificCacheTTLs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCacheTTLConfigFromEnv (defaults) failed: %v", err)
 	}
-	if cfg.Configure != 300 { // 5 minutes in seconds
-		t.Errorf("Expected Configure TTL 300, got %d", cfg.Configure)
+	if cfg.Configure != 5*time.Minute { // 5 minutes
+		t.Errorf("Expected Configure TTL 5m, got %v", cfg.Configure)
 	}
-	if cfg.LEDs != 300 {
-		t.Errorf("Expected LEDs TTL 300, got %d", cfg.LEDs)
+	if cfg.LEDs != 5*time.Minute {
+		t.Errorf("Expected LEDs TTL 5m, got %v", cfg.LEDs)
 	}
-	if cfg.Reboot != 600 { // 10 minutes in seconds
-		t.Errorf("Expected Reboot TTL 600, got %d", cfg.Reboot)
+	if cfg.Reboot != 10*time.Minute { // 10 minutes
+		t.Errorf("Expected Reboot TTL 10m, got %v", cfg.Reboot)
 	}
-	if cfg.RemoteAccess != 600 {
-		t.Errorf("Expected RemoteAccess TTL 600, got %d", cfg.RemoteAccess)
+	if cfg.RemoteAccess != 10*time.Minute {
+		t.Errorf("Expected RemoteAccess TTL 10m, got %v", cfg.RemoteAccess)
 	}
-	if cfg.Factory != 1800 { // 30 minutes in seconds
-		t.Errorf("Expected Factory TTL 1800, got %d", cfg.Factory)
+	if cfg.Factory != 30*time.Minute { // 30 minutes
+		t.Errorf("Expected Factory TTL 30m, got %v", cfg.Factory)
 	}
-	if cfg.Certupdate != 1800 {
-		t.Errorf("Expected Certupdate TTL 1800, got %d", cfg.Certupdate)
+	if cfg.Certupdate != 30*time.Minute {
+		t.Errorf("Expected Certupdate TTL 30m, got %v", cfg.Certupdate)
 	}
-	if cfg.Reenroll != 1800 {
-		t.Errorf("Expected Reenroll TTL 1800, got %d", cfg.Reenroll)
+	if cfg.Reenroll != 30*time.Minute {
+		t.Errorf("Expected Reenroll TTL 30m, got %v", cfg.Reenroll)
 	}
-	if cfg.Script != 1800 {
-		t.Errorf("Expected Script TTL 1800, got %d", cfg.Script)
+	if cfg.Script != 30*time.Minute {
+		t.Errorf("Expected Script TTL 30m, got %v", cfg.Script)
 	}
-	if cfg.Upgrade != 3600 { // 60 minutes in seconds
-		t.Errorf("Expected Upgrade TTL 3600, got %d", cfg.Upgrade)
+	if cfg.Upgrade != 60*time.Minute { // 60 minutes
+		t.Errorf("Expected Upgrade TTL 60m, got %v", cfg.Upgrade)
 	}
-	if cfg.Default != 120 { // 2 minutes in seconds
-		t.Errorf("Expected Default TTL 120, got %d", cfg.Default)
+	if cfg.Default != 2*time.Minute { // 2 minutes
+		t.Errorf("Expected Default TTL 2m, got %v", cfg.Default)
 	}
 
 	// Test Overrides
@@ -57,11 +58,11 @@ func TestTC_RM_005_OperationSpecificCacheTTLs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCacheTTLConfigFromEnv (overrides) failed: %v", err)
 	}
-	if cfg2.Configure != 3600 {
-		t.Errorf("Expected Configure TTL 3600, got %d", cfg2.Configure)
+	if cfg2.Configure != 60*time.Minute {
+		t.Errorf("Expected Configure TTL 60m, got %v", cfg2.Configure)
 	}
-	if cfg2.RemoteAccess != 1800 {
-		t.Errorf("Expected RemoteAccess TTL 1800, got %d", cfg2.RemoteAccess)
+	if cfg2.RemoteAccess != 30*time.Minute {
+		t.Errorf("Expected RemoteAccess TTL 30m, got %v", cfg2.RemoteAccess)
 	}
 
 	// Test Invalid Override
@@ -85,28 +86,28 @@ func TestTC_RM_005_OperationSpecificCacheTTLs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCacheTTLConfigFromEnv failed for 1s: %v", err)
 	}
-	if cfg3.Configure != 1 {
-		t.Errorf("Expected Configure TTL 1, got %d", cfg3.Configure)
+	if cfg3.Configure != time.Second {
+		t.Errorf("Expected Configure TTL 1s, got %v", cfg3.Configure)
 	}
 }
 
 func TestTTLForMethod(t *testing.T) {
 	cfg := CacheTTLConfig{
-		Configure:    10,
-		RemoteAccess: 20,
-		Default:      30,
+		Configure:    10 * time.Second,
+		RemoteAccess: 20 * time.Second,
+		Default:      30 * time.Second,
 	}
 
-	if ttl := cfg.TTLForMethod("configure"); ttl != 10 {
-		t.Errorf("Expected 10 for configure, got %d", ttl)
+	if ttl := cfg.TTLForMethod("configure"); ttl != 10*time.Second {
+		t.Errorf("Expected 10s for configure, got %v", ttl)
 	}
 
-	if ttl := cfg.TTLForMethod("remote_access"); ttl != 20 {
-		t.Errorf("Expected 20 for remote_access, got %d", ttl)
+	if ttl := cfg.TTLForMethod("remote_access"); ttl != 20*time.Second {
+		t.Errorf("Expected 20s for remote_access, got %v", ttl)
 	}
 
-	if ttl := cfg.TTLForMethod("remoteaccess"); ttl != 20 {
-		t.Errorf("Expected 20 for remoteaccess, got %d", ttl)
+	if ttl := cfg.TTLForMethod("remoteaccess"); ttl != 20*time.Second {
+		t.Errorf("Expected 20s for remoteaccess, got %v", ttl)
 	}
 
 	for _, method := range []string{
@@ -118,7 +119,7 @@ func TestTTLForMethod(t *testing.T) {
 		"unknown_method",
 	} {
 		if ttl := cfg.TTLForMethod(method); ttl != cfg.Default {
-			t.Errorf("TTLForMethod(%q) = %d, want %d", method, ttl, cfg.Default)
+			t.Errorf("TTLForMethod(%q) = %v, want %v", method, ttl, cfg.Default)
 		}
 	}
 }

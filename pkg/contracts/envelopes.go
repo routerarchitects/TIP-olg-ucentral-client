@@ -34,8 +34,8 @@ type ActionCommand struct {
 	CorrelationID string          `json:"correlation_id"`
 	OperationID   string          `json:"operation_id,omitempty"`
 	Target        string          `json:"target"`
-	CommandType   string          `json:"command_type"`
-	Action        string          `json:"action"`
+	CommandType   CommandType     `json:"command_type"`
+	Action        ActionType      `json:"action"`
 	Payload       json.RawMessage `json:"payload"`
 	Timestamp     string          `json:"timestamp"`
 }
@@ -46,8 +46,8 @@ func (c *ActionCommand) Validate() error {
 	if c.Version == "" || c.CorrelationID == "" || c.Target == "" || c.CommandType == "" || c.Action == "" || c.Timestamp == "" {
 		return errors.New("missing required fields in ActionCommand")
 	}
-	if c.Action == "upgrade" && c.OperationID == "" {
-		return errors.New("operation_id is mandatory for upgrade action")
+	if err := RequireOperationID(string(c.Action), c.OperationID); err != nil {
+		return err
 	}
 	if len(c.Payload) > 0 && !json.Valid(c.Payload) {
 		return errors.New("payload contains invalid JSON")
@@ -82,8 +82,8 @@ func (s *DeviceStatus) Validate() error {
 		return errors.New("operation_id is required for active operation status")
 	}
 
-	if s.Operation == "upgrade" && s.OperationID == "" {
-		return errors.New("operation_id is required for upgrade status")
+	if err := RequireOperationID(s.Operation, s.OperationID); err != nil {
+		return err
 	}
 
 	return nil
@@ -93,7 +93,7 @@ type ResultEnvelope struct {
 	Version       string          `json:"version"`
 	CorrelationID string          `json:"correlation_id"`
 	Target        string          `json:"target"`
-	CommandType   string          `json:"command_type"`
+	CommandType   CommandType     `json:"command_type"`
 	OperationID   string          `json:"operation_id,omitempty"` // Mandatory for upgrade results
 	UUID          int64           `json:"uuid,omitempty"`         // Omitted for Action
 	Result        ResultType      `json:"result"`
@@ -109,8 +109,8 @@ func (r *ResultEnvelope) Validate() error {
 	if !r.Result.Valid() {
 		return fmt.Errorf("invalid result: %q", r.Result)
 	}
-	if r.CommandType == "upgrade" && r.OperationID == "" {
-		return errors.New("operation_id is mandatory for upgrade results")
+	if err := RequireOperationID(string(r.CommandType), r.OperationID); err != nil {
+		return err
 	}
 	if len(r.Payload) > 0 && !json.Valid(r.Payload) {
 		return errors.New("payload contains invalid JSON")
@@ -120,19 +120,33 @@ func (r *ResultEnvelope) Validate() error {
 
 type CloudCapabilitiesQuery struct {
 	Version       string `json:"version"`
-	CorrelationID string `json:"correlation_id"`
-	Target        string `json:"target"`
-	CommandType   string `json:"command_type"`
-	Action        string `json:"action"`
-	Timestamp     string `json:"timestamp"`
+	CorrelationID string      `json:"correlation_id"`
+	Target        string      `json:"target"`
+	CommandType   CommandType `json:"command_type"`
+	Action        ActionType  `json:"action"`
+	Timestamp     string      `json:"timestamp"`
+}
+
+func (q *CloudCapabilitiesQuery) Validate() error {
+	if q.Version == "" || q.CorrelationID == "" || q.Target == "" || q.CommandType == "" || q.Action == "" || q.Timestamp == "" {
+		return errors.New("missing required fields in CloudCapabilitiesQuery")
+	}
+	return nil
 }
 
 type CloudDeviceStatusQuery struct {
 	Version       string `json:"version"`
 	CorrelationID string `json:"correlation_id"`
-	OperationID   string `json:"operation_id,omitempty"`
-	Target        string `json:"target"`
-	CommandType   string `json:"command_type"`
-	Action        string `json:"action"`
-	Timestamp     string `json:"timestamp"`
+	OperationID   string      `json:"operation_id,omitempty"`
+	Target        string      `json:"target"`
+	CommandType   CommandType `json:"command_type"`
+	Action        ActionType  `json:"action"`
+	Timestamp     string      `json:"timestamp"`
+}
+
+func (q *CloudDeviceStatusQuery) Validate() error {
+	if q.Version == "" || q.CorrelationID == "" || q.Target == "" || q.CommandType == "" || q.Action == "" || q.Timestamp == "" {
+		return errors.New("missing required fields in CloudDeviceStatusQuery")
+	}
+	return nil
 }

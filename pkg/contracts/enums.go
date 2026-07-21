@@ -1,6 +1,9 @@
 package contracts
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 type ResultType string
 
@@ -31,6 +34,36 @@ func (r ResultType) Valid() bool {
 	default:
 		return false
 	}
+}
+
+type CommandType string
+type ActionType string
+type ScriptType string
+type RemoteAccessMethod string
+
+const (
+	CommandAction    CommandType = "action"
+	CommandConfigure CommandType = "configure"
+	CommandExecute   CommandType = "execute"
+	CommandUpgrade   CommandType = "upgrade"
+	CommandScript    CommandType = "script"
+	CommandReboot    CommandType = "reboot"
+
+	ActionUpgrade ActionType = "upgrade"
+	ActionReboot  ActionType = "reboot"
+	ActionExecute ActionType = "execute"
+
+	ScriptTypeShell ScriptType = "shell"
+
+	RemoteAccessRTTY RemoteAccessMethod = "rtty"
+)
+
+// RequireOperationID enforces that an operation ID is present for operations that require it (e.g., upgrade).
+func RequireOperationID(operation string, operationID string) error {
+	if operation == string(ActionUpgrade) && operationID == "" {
+		return errors.New("operation_id is required for upgrade")
+	}
+	return nil
 }
 
 type ConnectionState string

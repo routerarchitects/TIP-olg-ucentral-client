@@ -11,6 +11,10 @@ import (
 	"strings"
 )
 
+type Validatable interface {
+	Validate() error
+}
+
 // Standard JSON-RPC 2.0 Error Codes
 const (
 	ErrParse          = -32700
@@ -189,6 +193,19 @@ type CloudUpgradeRequest struct {
 	When        int64  `json:"when,omitempty"`
 }
 
+func (r *CloudUpgradeRequest) Validate() error {
+	if r.Serial == "" {
+		return errors.New("serial is required")
+	}
+	if r.URI == "" {
+		return errors.New("uri is required")
+	}
+	if r.When != 0 {
+		return errors.New("when must be zero for upgrade")
+	}
+	return nil
+}
+
 type CloudUpgradeStatus struct {
 	Error int    `json:"error"`
 	Text  string `json:"text"`
@@ -225,6 +242,16 @@ type CloudTraceRequest struct {
 	URI       string `json:"uri,omitempty"`
 }
 
+func (r *CloudTraceRequest) Validate() error {
+	if r.Serial == "" {
+		return errors.New("serial is required")
+	}
+	if r.When != 0 {
+		return errors.New("when must be zero for trace")
+	}
+	return nil
+}
+
 type CloudTraceStatus struct {
 	Error int    `json:"error"`
 	Text  string `json:"text"`
@@ -240,6 +267,13 @@ type CloudPingRequest struct {
 	Serial string `json:"serial"`
 }
 
+func (r *CloudPingRequest) Validate() error {
+	if r.Serial == "" {
+		return errors.New("serial is required")
+	}
+	return nil
+}
+
 type CloudPingResponse struct {
 	Serial        string `json:"serial"`
 	UUID          int64  `json:"uuid"`
@@ -251,6 +285,19 @@ type CloudLedsRequest struct {
 	When     int64  `json:"when,omitempty"`
 	Duration *int   `json:"duration,omitempty"`
 	Pattern  string `json:"pattern"`
+}
+
+func (r *CloudLedsRequest) Validate() error {
+	if r.Serial == "" {
+		return errors.New("serial is required")
+	}
+	if r.Pattern != "on" && r.Pattern != "off" && r.Pattern != "blink" {
+		return errors.New("pattern must be on, off, or blink")
+	}
+	if r.When != 0 {
+		return errors.New("when must be zero for leds")
+	}
+	return nil
 }
 
 type CloudLedsStatus struct {
@@ -303,9 +350,9 @@ type CloudTelemetryEvent struct {
 }
 
 type CloudRemoteAccessRequest struct {
-	Method  string `json:"method,omitempty"`
-	Serial  string `json:"serial"`
-	Token   string `json:"token"`
+	Method  RemoteAccessMethod `json:"method,omitempty"`
+	Serial  string             `json:"serial"`
+	Token   string             `json:"token"`
 	ID      string `json:"id"`
 	Server  string `json:"server"`
 	Port    int    `json:"port"`
@@ -314,7 +361,7 @@ type CloudRemoteAccessRequest struct {
 }
 
 func (r *CloudRemoteAccessRequest) Validate() error {
-	if r.Method != "rtty" {
+	if r.Method != RemoteAccessRTTY {
 		return fmt.Errorf("invalid method for remote access: %q", r.Method)
 	}
 	if r.Serial == "" {
@@ -408,9 +455,9 @@ type CloudReenrollResponse struct {
 }
 
 type CloudScriptRequest struct {
-	Serial    string `json:"serial"`
-	Type      string `json:"type"`
-	Script    string `json:"script,omitempty"`
+	Serial    string     `json:"serial"`
+	Type      ScriptType `json:"type"`
+	Script    string     `json:"script,omitempty"`
 	Timeout   *int   `json:"timeout,omitempty"`
 	URI       string `json:"uri,omitempty"`
 	Signature string `json:"signature,omitempty"`
@@ -429,7 +476,7 @@ func (r *CloudScriptRequest) Validate() error {
 	if r.Serial == "" {
 		return errors.New("serial is required")
 	}
-	if r.Type != "shell" {
+	if r.Type != ScriptTypeShell {
 		return fmt.Errorf("invalid script type: %q", r.Type)
 	}
 	if r.When != 0 {

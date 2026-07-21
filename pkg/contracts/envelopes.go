@@ -41,7 +41,7 @@ func (c *ActionCommand) Validate() error {
 	if c.Version == "" || c.CorrelationID == "" || c.Target == "" || c.CommandType == "" || c.Action == "" || c.Timestamp == "" {
 		return errors.New("missing required fields in ActionCommand")
 	}
-	if c.Action == "upgrade" && c.OperationID == "" {
+	if c.CommandType == "upgrade" && c.OperationID == "" {
 		return errors.New("operation_id is mandatory for upgrade action")
 	}
 	if c.Payload != nil && !json.Valid(c.Payload) {

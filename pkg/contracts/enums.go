@@ -50,6 +50,16 @@ type ConnectionStatus struct {
 
 // DeriveConnectionState evaluates the pure derived status from the independent loops.
 func DeriveConnectionState(cloud LinkState, nats LinkState, protocol ProtocolState) (ConnectionState, error) {
+	if cloud != LinkConnecting && cloud != LinkConnected {
+		return "", fmt.Errorf("invalid cloud state: %v", cloud)
+	}
+	if nats != LinkConnecting && nats != LinkConnected {
+		return "", fmt.Errorf("invalid nats state: %v", nats)
+	}
+	if protocol != ProtocolUnknown && protocol != ProtocolVerifying && protocol != ProtocolAccepted && protocol != ProtocolRejected {
+		return "", fmt.Errorf("invalid protocol state: %v", protocol)
+	}
+
 	if cloud == LinkConnecting && (protocol == ProtocolAccepted || protocol == ProtocolRejected) {
 		return "", fmt.Errorf("impossible state: cloud is %v, protocol is %v", cloud, protocol)
 	}

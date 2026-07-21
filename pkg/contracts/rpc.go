@@ -1,6 +1,10 @@
 package contracts
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+)
 
 // Standard JSON-RPC 2.0 Error Codes
 const (
@@ -39,6 +43,16 @@ type JSONRPCError struct {
 	Code    int             `json:"code"`
 	Message string          `json:"message"`
 	Data    json.RawMessage `json:"data,omitempty"`
+}
+
+// NewJSONRPCError creates a JSONRPCError struct matching the given internal application code.
+func NewJSONRPCError(appCode int, message string) *JSONRPCError {
+	dataBytes, _ := json.Marshal(map[string]int{"application_code": appCode})
+	return &JSONRPCError{
+		Code:    ErrInternal,
+		Message: message,
+		Data:    dataBytes,
+	}
 }
 
 type CloudCompressedConfigureRequest struct {
@@ -92,6 +106,20 @@ type CloudFactoryRequest struct {
 	Serial         string `json:"serial"`
 	KeepRedirector *int   `json:"keep_redirector"`
 	When           int64  `json:"when,omitempty"`
+}
+
+// Validate enforces the factory request constraints.
+func (r *CloudFactoryRequest) Validate() error {
+	if r.KeepRedirector == nil {
+		return errors.New("missing keep_redirector")
+	}
+	if *r.KeepRedirector != 0 && *r.KeepRedirector != 1 {
+		return fmt.Errorf("invalid keep_redirector: %d", *r.KeepRedirector)
+	}
+	if r.When != 0 {
+		return errors.New("when must be zero for factory")
+	}
+	return nil
 }
 
 type CloudFactoryStatus struct {
@@ -190,6 +218,17 @@ type CloudTelemetryRequest struct {
 	Serial   string   `json:"serial"`
 	Interval *int     `json:"interval,omitempty"`
 	Types    []string `json:"types,omitempty"`
+}
+
+// Validate enforces telemetry constraints.
+func (r *CloudTelemetryRequest) Validate() error {
+	if r.Interval == nil || *r.Interval < 0 || *r.Interval > 60 {
+		return fmt.Errorf("invalid interval")
+	}
+	if len(r.Types) != 1 || r.Types[0] != "dhcp" {
+		return fmt.Errorf("invalid types")
+	}
+	return nil
 }
 
 type CloudTelemetryStatus struct {

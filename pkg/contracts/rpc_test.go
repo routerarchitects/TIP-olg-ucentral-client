@@ -6,13 +6,7 @@ import (
 )
 
 func TestTC_CON_002_ErrorMappings(t *testing.T) {
-	errDataBytes := json.RawMessage(`{"application_code":3}`)
-
-	rpcErr := JSONRPCError{
-		Code:    ErrInternal, // -32603
-		Message: "Internal Error",
-		Data:    errDataBytes,
-	}
+	rpcErr := NewJSONRPCError(ErrServiceUnavailable, "Internal Error")
 
 	b, err := json.Marshal(rpcErr)
 	if err != nil {
@@ -20,7 +14,9 @@ func TestTC_CON_002_ErrorMappings(t *testing.T) {
 	}
 
 	var parsed map[string]interface{}
-	json.Unmarshal(b, &parsed)
+	if err := json.Unmarshal(b, &parsed); err != nil {
+		t.Fatalf("failed to unmarshal serialized value: %v", err)
+	}
 
 	if parsed["code"].(float64) != -32603 {
 		t.Errorf("Expected code -32603, got %v", parsed["code"])
@@ -33,51 +29,93 @@ func TestTC_CON_002_ErrorMappings(t *testing.T) {
 }
 
 func TestTC_ACT_002_FactoryRequest(t *testing.T) {
-	t.Run("Factory Keep Redirector Optionality", func(t *testing.T) {
-		// keep_redirector pointer logic
+	t.Run("Factory Validations", func(t *testing.T) {
 		keepRedir := 1
 		req := CloudFactoryRequest{
 			Serial:         "12345",
 			KeepRedirector: &keepRedir,
 		}
-
-		b, _ := json.Marshal(req)
-		var parsed map[string]interface{}
-		json.Unmarshal(b, &parsed)
-
-		if parsed["keep_redirector"].(float64) != 1 {
-			t.Errorf("keep_redirector was not correctly marshalled")
+		if err := req.Validate(); err != nil {
+			t.Errorf("expected valid request to pass, got: %v", err)
 		}
 
-		reqNil := CloudFactoryRequest{
-			Serial: "12345",
+		keepRedirZero := 0
+		reqZero := CloudFactoryRequest{
+			Serial:         "12345",
+			KeepRedirector: &keepRedirZero,
+		}
+		if err := reqZero.Validate(); err != nil {
+			t.Errorf("expected keep_redirector=0 to pass, got: %v", err)
 		}
 
-		bNil, _ := json.Marshal(reqNil)
-		var parsedNil map[string]interface{}
-		json.Unmarshal(bNil, &parsedNil)
+		reqMissing := CloudFactoryRequest{Serial: "12345"}
+		if err := reqMissing.Validate(); err == nil {
+			t.Errorf("expected missing keep_redirector to fail")
+		}
 
-		if parsedNil["keep_redirector"] != nil {
-			t.Errorf("keep_redirector should be null when nil pointer. Got: %v", string(bNil))
+		keepRedirInvalid := 2
+		reqInvalidVal := CloudFactoryRequest{
+			Serial:         "12345",
+			KeepRedirector: &keepRedirInvalid,
+		}
+		if err := reqInvalidVal.Validate(); err == nil {
+			t.Errorf("expected invalid keep_redirector to fail")
+		}
+
+		reqNonZeroWhen := CloudFactoryRequest{
+			Serial:         "12345",
+			KeepRedirector: &keepRedir,
+			When:           100,
+		}
+		if err := reqNonZeroWhen.Validate(); err == nil {
+			t.Errorf("expected non-zero when to fail")
 		}
 	})
 }
 
 func TestTC_ACT_008_TelemetryRequest(t *testing.T) {
-	t.Run("Telemetry Interval Optionality", func(t *testing.T) {
+	t.Run("Telemetry Validations", func(t *testing.T) {
 		interval := 60
-		req := CloudTelemetryRequest{
+		reqValid := CloudTelemetryRequest{
 			Serial:   "12345",
 			Interval: &interval,
 			Types:    []string{"dhcp"},
 		}
+		if err := reqValid.Validate(); err != nil {
+			t.Errorf("expected valid request to pass, got: %v", err)
+		}
 
-		b, _ := json.Marshal(req)
-		var parsed map[string]interface{}
-		json.Unmarshal(b, &parsed)
+		intervalZero := 0
+		reqZero := CloudTelemetryRequest{Serial: "12345", Interval: &intervalZero, Types: []string{"dhcp"}}
+		if err := reqZero.Validate(); err != nil {
+			t.Errorf("expected interval=0 to pass, got: %v", err)
+		}
 
-		if parsed["interval"].(float64) != 60 {
-			t.Errorf("interval was not serialized correctly")
+		reqEmptyTypes := CloudTelemetryRequest{Serial: "12345", Interval: &interval}
+		if err := reqEmptyTypes.Validate(); err == nil {
+			t.Errorf("expected empty types to fail")
+		}
+
+		invalidInterval1 := 61
+		reqInvalid1 := CloudTelemetryRequest{Serial: "12345", Interval: &invalidInterval1, Types: []string{"dhcp"}}
+		if err := reqInvalid1.Validate(); err == nil {
+			t.Errorf("expected interval > 60 to fail")
+		}
+
+		invalidInterval2 := -1
+		reqInvalid2 := CloudTelemetryRequest{Serial: "12345", Interval: &invalidInterval2, Types: []string{"dhcp"}}
+		if err := reqInvalid2.Validate(); err == nil {
+			t.Errorf("expected interval < 0 to fail")
+		}
+
+		reqInvalidTypes1 := CloudTelemetryRequest{Serial: "12345", Interval: &interval, Types: []string{"dhcp", "dhcp"}}
+		if err := reqInvalidTypes1.Validate(); err == nil {
+			t.Errorf("expected multiple types to fail")
+		}
+
+		reqInvalidTypes2 := CloudTelemetryRequest{Serial: "12345", Interval: &interval, Types: []string{"other"}}
+		if err := reqInvalidTypes2.Validate(); err == nil {
+			t.Errorf("expected non-dhcp type to fail")
 		}
 	})
 }
@@ -106,8 +144,7 @@ func TestTC_CON_006_ConfigureRequest(t *testing.T) {
 	}`)
 	var invalidReq CloudConfigureRequest
 	if err := json.Unmarshal(invalidReqJson, &invalidReq); err == nil {
-		// Strict JSON unmarshalling for int64 will fail if it's a string
-		// Since we didn't use json.Number, this should fail
+		t.Fatal("expected string UUID to be rejected")
 	}
 }
 

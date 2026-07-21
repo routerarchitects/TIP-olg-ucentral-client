@@ -25,6 +25,27 @@ func TestTC_CON_003_VersionVerificationFallbackAndProtocolState(t *testing.T) {
 		{"Connecting with Protocol Rejected", LinkConnecting, LinkConnecting, ProtocolRejected, "", true},
 		{"Connected with Protocol Verifying", LinkConnected, LinkConnected, ProtocolVerifying, "", true},
 		{"Connected with Protocol Unknown", LinkConnected, LinkConnecting, ProtocolUnknown, "", true},
+		{
+			name:     "Invalid cloud enum",
+			cloud:    LinkState("invalid"),
+			nats:     LinkConnected,
+			protocol: ProtocolAccepted,
+			wantErr:  true,
+		},
+		{
+			name:     "Invalid NATS enum",
+			cloud:    LinkConnected,
+			nats:     LinkState("invalid"),
+			protocol: ProtocolAccepted,
+			wantErr:  true,
+		},
+		{
+			name:     "Invalid protocol enum",
+			cloud:    LinkConnected,
+			nats:     LinkConnected,
+			protocol: ProtocolState("invalid"),
+			wantErr:  true,
+		},
 	}
 
 	for _, tt := range tests {

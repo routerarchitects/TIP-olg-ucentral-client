@@ -21,8 +21,32 @@ func TestTC_RM_005_OperationSpecificCacheTTLs(t *testing.T) {
 	if cfg.Configure != 300 { // 5 minutes in seconds
 		t.Errorf("Expected Configure TTL 300, got %d", cfg.Configure)
 	}
-	if cfg.RemoteAccess != 600 { // 10 minutes in seconds
+	if cfg.LEDs != 300 {
+		t.Errorf("Expected LEDs TTL 300, got %d", cfg.LEDs)
+	}
+	if cfg.Reboot != 600 { // 10 minutes in seconds
+		t.Errorf("Expected Reboot TTL 600, got %d", cfg.Reboot)
+	}
+	if cfg.RemoteAccess != 600 {
 		t.Errorf("Expected RemoteAccess TTL 600, got %d", cfg.RemoteAccess)
+	}
+	if cfg.Factory != 1800 { // 30 minutes in seconds
+		t.Errorf("Expected Factory TTL 1800, got %d", cfg.Factory)
+	}
+	if cfg.Certupdate != 1800 {
+		t.Errorf("Expected Certupdate TTL 1800, got %d", cfg.Certupdate)
+	}
+	if cfg.Reenroll != 1800 {
+		t.Errorf("Expected Reenroll TTL 1800, got %d", cfg.Reenroll)
+	}
+	if cfg.Script != 1800 {
+		t.Errorf("Expected Script TTL 1800, got %d", cfg.Script)
+	}
+	if cfg.Upgrade != 3600 { // 60 minutes in seconds
+		t.Errorf("Expected Upgrade TTL 3600, got %d", cfg.Upgrade)
+	}
+	if cfg.Default != 120 { // 2 minutes in seconds
+		t.Errorf("Expected Default TTL 120, got %d", cfg.Default)
 	}
 
 	// Test Overrides

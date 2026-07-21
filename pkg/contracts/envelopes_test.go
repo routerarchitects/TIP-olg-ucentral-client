@@ -253,6 +253,19 @@ func TestTC_CON_001_EnvelopeValidationBoundaries(t *testing.T) {
 		t.Error("Expected error for invalid JSON payload in ResultEnvelope")
 	}
 
+	missingOpIdUpgradeRes := ResultEnvelope{
+		Version:       "1.0",
+		CorrelationID: "1",
+		Target:        "ap",
+		CommandType:   CommandAction,
+		Action:        ActionUpgrade,
+		Result:        ResultSuccess,
+		Timestamp:     "time",
+	}
+	if err := missingOpIdUpgradeRes.Validate(); err == nil {
+		t.Error("Expected error for upgrade ResultEnvelope missing operation_id")
+	}
+
 	// ConfigureCommand Validation
 	zeroUUIDCmd := ConfigureCommand{
 		Version:       "1.0",

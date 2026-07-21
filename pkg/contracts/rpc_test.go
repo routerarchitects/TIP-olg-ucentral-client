@@ -1,6 +1,8 @@
 package contracts
 
 import (
+	"bytes"
+	"compress/zlib"
 	"encoding/base64"
 	"encoding/json"
 	"testing"
@@ -155,6 +157,79 @@ func TestTC_CON_006_ConfigureRequest(t *testing.T) {
 	if err := json.Unmarshal(invalidReqJson, &invalidReq); err == nil {
 		t.Fatal("expected string UUID to be rejected")
 	}
+}
+
+func TestTC_CON_007_CompressedConfigureRequest(t *testing.T) {
+	// Generate valid compressed data
+	var b bytes.Buffer
+	zw := zlib.NewWriter(&b)
+	validJSON := `{"serial":"123","uuid":1,"config":{}}`
+	zw.Write([]byte(validJSON))
+	zw.Close()
+	
+	validB64 := base64.StdEncoding.EncodeToString(b.Bytes())
+	
+	t.Run("Valid compressed config", func(t *testing.T) {
+		req := CloudCompressedConfigureRequest{
+			Compress64: validB64,
+			CompressSz: uint32(len(validJSON)),
+		}
+		decoded, err := req.DecodeAndValidate()
+		if err != nil {
+			t.Fatalf("expected valid decode, got: %v", err)
+		}
+		if decoded.Serial != "123" {
+			t.Errorf("expected serial 123, got %s", decoded.Serial)
+		}
+	})
+
+	t.Run("Invalid base64", func(t *testing.T) {
+		req := CloudCompressedConfigureRequest{Compress64: "invalid base64!", CompressSz: 10}
+		_, err := req.DecodeAndValidate()
+		if err == nil {
+			t.Error("expected error for invalid base64")
+		}
+	})
+
+	t.Run("Invalid zlib", func(t *testing.T) {
+		invalidZlib := base64.StdEncoding.EncodeToString([]byte("not zlib data"))
+		req := CloudCompressedConfigureRequest{Compress64: invalidZlib, CompressSz: 10}
+		_, err := req.DecodeAndValidate()
+		if err == nil {
+			t.Error("expected error for invalid zlib")
+		}
+	})
+
+	t.Run("Incorrect compress_sz", func(t *testing.T) {
+		req := CloudCompressedConfigureRequest{Compress64: validB64, CompressSz: 999}
+		_, err := req.DecodeAndValidate()
+		if err == nil {
+			t.Error("expected error for incorrect compress_sz")
+		}
+	})
+
+	t.Run("Exceeds 10MB limit", func(t *testing.T) {
+		req := CloudCompressedConfigureRequest{Compress64: validB64, CompressSz: 11 * 1024 * 1024}
+		_, err := req.DecodeAndValidate()
+		if err == nil {
+			t.Error("expected error for size exceeding 10MB limit")
+		}
+	})
+
+	t.Run("Invalid inner JSON", func(t *testing.T) {
+		var bad bytes.Buffer
+		zwBad := zlib.NewWriter(&bad)
+		invalidJSON := `{broken json`
+		zwBad.Write([]byte(invalidJSON))
+		zwBad.Close()
+		
+		badB64 := base64.StdEncoding.EncodeToString(bad.Bytes())
+		req := CloudCompressedConfigureRequest{Compress64: badB64, CompressSz: uint32(len(invalidJSON))}
+		_, err := req.DecodeAndValidate()
+		if err == nil {
+			t.Error("expected error for invalid inner JSON")
+		}
+	})
 }
 
 func TestTC_ACT_001_RebootRequest(t *testing.T) {

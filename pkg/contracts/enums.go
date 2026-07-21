@@ -60,6 +60,24 @@ const (
 	RemoteAccessRTTY RemoteAccessMethod = "rtty"
 )
 
+func (c CommandType) Valid() bool {
+	switch c {
+	case CommandAction, CommandConfigure, CommandExecute, CommandUpgrade, CommandScript, CommandReboot:
+		return true
+	default:
+		return false
+	}
+}
+
+func (a ActionType) Valid() bool {
+	switch a {
+	case ActionUpgrade, ActionReboot, ActionExecute:
+		return true
+	default:
+		return false
+	}
+}
+
 // RequireOperationID enforces that an operation ID is present for operations that require it (e.g., upgrade).
 func RequireOperationID(operation string, operationID string) error {
 	if operation == string(ActionUpgrade) && operationID == "" {

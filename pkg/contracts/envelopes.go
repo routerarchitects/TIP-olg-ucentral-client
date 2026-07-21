@@ -43,8 +43,19 @@ type ActionCommand struct {
 // Validate enforces required envelope fields and requires operation_id
 // when Action == "upgrade".
 func (c *ActionCommand) Validate() error {
-	if c.Version == "" || c.CorrelationID == "" || c.Target == "" || c.CommandType == "" || c.Action == "" || c.Timestamp == "" {
+	if c.Version == "" || c.CorrelationID == "" || c.Target == "" || c.Timestamp == "" {
 		return errors.New("missing required fields in ActionCommand")
+	}
+	if !c.CommandType.Valid() {
+		return fmt.Errorf("invalid command_type: %q", c.CommandType)
+	}
+	if !c.Action.Valid() {
+		return fmt.Errorf("invalid action: %q", c.Action)
+	}
+	if c.CommandType != CommandAction && c.CommandType != CommandExecute {
+		if string(c.CommandType) != string(c.Action) {
+			return fmt.Errorf("inconsistent action %q for command_type %q", c.Action, c.CommandType)
+		}
 	}
 	if err := RequireOperationID(string(c.Action), c.OperationID); err != nil {
 		return err
@@ -94,6 +105,7 @@ type ResultEnvelope struct {
 	CorrelationID string          `json:"correlation_id"`
 	Target        string          `json:"target"`
 	CommandType   CommandType     `json:"command_type"`
+	Action        ActionType      `json:"action,omitempty"`
 	OperationID   string          `json:"operation_id,omitempty"` // Mandatory for upgrade results
 	UUID          int64           `json:"uuid,omitempty"`         // Omitted for Action
 	Result        ResultType      `json:"result"`
@@ -103,13 +115,22 @@ type ResultEnvelope struct {
 }
 
 func (r *ResultEnvelope) Validate() error {
-	if r.Version == "" || r.CorrelationID == "" || r.Target == "" || r.CommandType == "" || r.Result == "" || r.Timestamp == "" {
+	if r.Version == "" || r.CorrelationID == "" || r.Target == "" || r.Result == "" || r.Timestamp == "" {
 		return errors.New("missing required fields in ResultEnvelope")
+	}
+	if !r.CommandType.Valid() {
+		return fmt.Errorf("invalid command_type: %q", r.CommandType)
+	}
+	if r.Action != "" && !r.Action.Valid() {
+		return fmt.Errorf("invalid action: %q", r.Action)
 	}
 	if !r.Result.Valid() {
 		return fmt.Errorf("invalid result: %q", r.Result)
 	}
 	if err := RequireOperationID(string(r.CommandType), r.OperationID); err != nil {
+		return err
+	}
+	if err := RequireOperationID(string(r.Action), r.OperationID); err != nil {
 		return err
 	}
 	if len(r.Payload) > 0 && !json.Valid(r.Payload) {
@@ -128,8 +149,14 @@ type CloudCapabilitiesQuery struct {
 }
 
 func (q *CloudCapabilitiesQuery) Validate() error {
-	if q.Version == "" || q.CorrelationID == "" || q.Target == "" || q.CommandType == "" || q.Action == "" || q.Timestamp == "" {
+	if q.Version == "" || q.CorrelationID == "" || q.Target == "" || q.Timestamp == "" {
 		return errors.New("missing required fields in CloudCapabilitiesQuery")
+	}
+	if !q.CommandType.Valid() {
+		return fmt.Errorf("invalid command_type: %q", q.CommandType)
+	}
+	if !q.Action.Valid() {
+		return fmt.Errorf("invalid action: %q", q.Action)
 	}
 	return nil
 }
@@ -145,8 +172,14 @@ type CloudDeviceStatusQuery struct {
 }
 
 func (q *CloudDeviceStatusQuery) Validate() error {
-	if q.Version == "" || q.CorrelationID == "" || q.Target == "" || q.CommandType == "" || q.Action == "" || q.Timestamp == "" {
+	if q.Version == "" || q.CorrelationID == "" || q.Target == "" || q.Timestamp == "" {
 		return errors.New("missing required fields in CloudDeviceStatusQuery")
+	}
+	if !q.CommandType.Valid() {
+		return fmt.Errorf("invalid command_type: %q", q.CommandType)
+	}
+	if !q.Action.Valid() {
+		return fmt.Errorf("invalid action: %q", q.Action)
 	}
 	return nil
 }

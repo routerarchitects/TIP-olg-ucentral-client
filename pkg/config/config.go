@@ -68,8 +68,8 @@ func parseEnvDuration(envKey string, defaultDuration time.Duration) (int, error)
 	if err != nil {
 		return 0, fmt.Errorf("failed to parse %s: %w", envKey, err)
 	}
-	if d <= 0 {
-		return 0, fmt.Errorf("%s must be > 0, got %v", envKey, d)
+	if d < time.Second {
+		return 0, fmt.Errorf("%s must be at least 1s, got %v", envKey, d)
 	}
 	return int(d.Seconds()), nil
 }

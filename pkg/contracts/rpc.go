@@ -1,9 +1,14 @@
 package contracts
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/url"
+	"strings"
 )
 
 // Standard JSON-RPC 2.0 Error Codes
@@ -45,14 +50,29 @@ type JSONRPCError struct {
 	Data    json.RawMessage `json:"data,omitempty"`
 }
 
-// NewJSONRPCError creates a JSONRPCError struct matching the given internal application code.
-func NewJSONRPCError(appCode int, message string) *JSONRPCError {
-	dataBytes, _ := json.Marshal(map[string]int{"application_code": appCode})
+// NewInternalJSONRPCError creates a JSONRPCError struct matching the given internal application code.
+func NewInternalJSONRPCError(appCode int, message string) (*JSONRPCError, error) {
+	switch appCode {
+	case ErrAppFailure,
+		ErrTimeout,
+		ErrServiceUnavailable,
+		ErrValidationFailed,
+		ErrRollbackSuccess,
+		ErrRollbackFailed:
+	default:
+		return nil, fmt.Errorf("unsupported application code: %d", appCode)
+	}
+
+	dataBytes, err := json.Marshal(map[string]int{"application_code": appCode})
+	if err != nil {
+		return nil, fmt.Errorf("marshal JSON-RPC error data: %w", err)
+	}
+
 	return &JSONRPCError{
 		Code:    ErrInternal,
 		Message: message,
 		Data:    dataBytes,
-	}
+	}, nil
 }
 
 type CloudCompressedConfigureRequest struct {
@@ -65,6 +85,22 @@ type CloudConfigureRequest struct {
 	UUID   int64           `json:"uuid"`
 	When   int64           `json:"when,omitempty"`
 	Config json.RawMessage `json:"config"`
+}
+
+func (r *CloudConfigureRequest) Validate() error {
+	if r.Serial == "" {
+		return errors.New("serial is required")
+	}
+	if r.UUID <= 0 {
+		return errors.New("uuid must be greater than zero")
+	}
+	if r.When != 0 {
+		return errors.New("when must be zero for configure")
+	}
+	if len(r.Config) == 0 || !json.Valid(r.Config) {
+		return errors.New("config must contain valid JSON")
+	}
+	return nil
 }
 
 type ConfigureRejectedParameter struct {
@@ -91,6 +127,16 @@ type CloudRebootRequest struct {
 	When   int64  `json:"when,omitempty"`
 }
 
+func (r *CloudRebootRequest) Validate() error {
+	if r.Serial == "" {
+		return errors.New("serial is required")
+	}
+	if r.When != 0 {
+		return errors.New("when must be zero for reboot")
+	}
+	return nil
+}
+
 type CloudRebootStatus struct {
 	Error int    `json:"error"`
 	Text  string `json:"text"`
@@ -110,6 +156,9 @@ type CloudFactoryRequest struct {
 
 // Validate enforces the factory request constraints.
 func (r *CloudFactoryRequest) Validate() error {
+	if r.Serial == "" {
+		return errors.New("serial is required")
+	}
 	if r.KeepRedirector == nil {
 		return errors.New("missing keep_redirector")
 	}
@@ -222,6 +271,9 @@ type CloudTelemetryRequest struct {
 
 // Validate enforces telemetry constraints.
 func (r *CloudTelemetryRequest) Validate() error {
+	if r.Serial == "" {
+		return errors.New("serial is required")
+	}
 	if r.Interval == nil || *r.Interval < 0 || *r.Interval > 60 {
 		return fmt.Errorf("invalid interval")
 	}
@@ -261,6 +313,28 @@ type CloudRemoteAccessRequest struct {
 	Timeout *int   `json:"timeout,omitempty"`
 }
 
+func (r *CloudRemoteAccessRequest) Validate() error {
+	if r.Method != "rtty" {
+		return fmt.Errorf("invalid method for remote access: %q", r.Method)
+	}
+	if r.Serial == "" {
+		return errors.New("serial is required")
+	}
+	if r.Token == "" {
+		return errors.New("token is required")
+	}
+	if r.ID == "" {
+		return errors.New("id is required")
+	}
+	if r.Server == "" {
+		return errors.New("server is required")
+	}
+	if r.Port < 1 || r.Port > 65535 {
+		return fmt.Errorf("port must be between 1 and 65535")
+	}
+	return nil
+}
+
 type CloudRemoteAccessStatus struct {
 	Error int             `json:"error"`
 	Text  string          `json:"text"`
@@ -277,6 +351,27 @@ type CloudCertupdateRequest struct {
 	Certificates string `json:"certificates"`
 }
 
+func (r *CloudCertupdateRequest) Validate() error {
+	if r.Serial == "" {
+		return errors.New("serial is required")
+	}
+	if r.Certificates == "" {
+		return errors.New("certificates payload is required")
+	}
+
+	decoder := base64.NewDecoder(base64.StdEncoding, strings.NewReader(r.Certificates))
+	limitReader := io.LimitReader(decoder, 2*1024*1024+1)
+	
+	bytesRead, err := io.ReadAll(limitReader)
+	if err != nil {
+		return errors.New("certificates must be valid base64")
+	}
+	if len(bytesRead) > 2*1024*1024 {
+		return errors.New("certificates exceed 2 MB decoded limit")
+	}
+	return nil
+}
+
 type CloudCertupdateStatus struct {
 	Error int    `json:"error"`
 	Txt   string `json:"txt"`
@@ -290,6 +385,16 @@ type CloudCertupdateResponse struct {
 type CloudReenrollRequest struct {
 	Serial string `json:"serial"`
 	When   int64  `json:"when,omitempty"`
+}
+
+func (r *CloudReenrollRequest) Validate() error {
+	if r.Serial == "" {
+		return errors.New("serial is required")
+	}
+	if r.When != 0 {
+		return errors.New("when must be zero for reenroll")
+	}
+	return nil
 }
 
 type CloudReenrollStatus struct {
@@ -310,6 +415,51 @@ type CloudScriptRequest struct {
 	URI       string `json:"uri,omitempty"`
 	Signature string `json:"signature,omitempty"`
 	When      int64  `json:"when,omitempty"`
+}
+
+func (r *CloudScriptRequest) UnmarshalJSON(b []byte) error {
+	type Alias CloudScriptRequest
+	aux := (*Alias)(r)
+	decoder := json.NewDecoder(bytes.NewReader(b))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(&aux)
+}
+
+func (r *CloudScriptRequest) Validate() error {
+	if r.Serial == "" {
+		return errors.New("serial is required")
+	}
+	if r.Type != "shell" {
+		return fmt.Errorf("invalid script type: %q", r.Type)
+	}
+	if r.When != 0 {
+		return errors.New("when must be zero for script")
+	}
+	if (r.Script == "") == (r.URI == "") {
+		return errors.New("exactly one of script or uri must be provided")
+	}
+
+	if r.Script != "" {
+		decoder := base64.NewDecoder(base64.StdEncoding, strings.NewReader(r.Script))
+		limitReader := io.LimitReader(decoder, 1024*1024+1)
+		
+		bytesRead, err := io.ReadAll(limitReader)
+		if err != nil {
+			return errors.New("script must be valid base64")
+		}
+		if len(bytesRead) > 1024*1024 {
+			return errors.New("script exceeds 1 MB decoded limit")
+		}
+	}
+
+	if r.URI != "" {
+		u, err := url.ParseRequestURI(r.URI)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			return errors.New("invalid script URI")
+		}
+	}
+
+	return nil
 }
 
 type CloudScriptStatus struct {

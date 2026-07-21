@@ -3,6 +3,7 @@ package contracts
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 )
 
 type ConfigureCommand struct {
@@ -22,6 +23,9 @@ func (c *ConfigureCommand) Validate() error {
 	if c.KVRevision == 0 {
 		return errors.New("KVRevision must be > 0")
 	}
+	if c.UUID <= 0 {
+		return errors.New("UUID must be > 0")
+	}
 	return nil
 }
 
@@ -36,15 +40,16 @@ type ActionCommand struct {
 	Timestamp     string          `json:"timestamp"`
 }
 
-// Validate enforces that all required fields are present. If Action == "upgrade", OperationID must be non-empty.
+// Validate enforces required envelope fields and requires operation_id
+// when Action == "upgrade".
 func (c *ActionCommand) Validate() error {
 	if c.Version == "" || c.CorrelationID == "" || c.Target == "" || c.CommandType == "" || c.Action == "" || c.Timestamp == "" {
 		return errors.New("missing required fields in ActionCommand")
 	}
-	if c.CommandType == "upgrade" && c.OperationID == "" {
+	if c.Action == "upgrade" && c.OperationID == "" {
 		return errors.New("operation_id is mandatory for upgrade action")
 	}
-	if c.Payload != nil && !json.Valid(c.Payload) {
+	if len(c.Payload) > 0 && !json.Valid(c.Payload) {
 		return errors.New("payload contains invalid JSON")
 	}
 	return nil
@@ -68,6 +73,22 @@ type DeviceStatus struct {
 	Timestamp     string `json:"timestamp"`
 }
 
+func (s *DeviceStatus) Validate() error {
+	if s.Version == "" || s.Target == "" || s.Status == "" || s.Timestamp == "" {
+		return errors.New("missing required fields in DeviceStatus")
+	}
+
+	if s.Active && s.OperationID == "" {
+		return errors.New("operation_id is required for active operation status")
+	}
+
+	if s.Operation == "upgrade" && s.OperationID == "" {
+		return errors.New("operation_id is required for upgrade status")
+	}
+
+	return nil
+}
+
 type ResultEnvelope struct {
 	Version       string          `json:"version"`
 	CorrelationID string          `json:"correlation_id"`
@@ -85,8 +106,14 @@ func (r *ResultEnvelope) Validate() error {
 	if r.Version == "" || r.CorrelationID == "" || r.Target == "" || r.CommandType == "" || r.Result == "" || r.Timestamp == "" {
 		return errors.New("missing required fields in ResultEnvelope")
 	}
+	if !r.Result.Valid() {
+		return fmt.Errorf("invalid result: %q", r.Result)
+	}
 	if r.CommandType == "upgrade" && r.OperationID == "" {
 		return errors.New("operation_id is mandatory for upgrade results")
+	}
+	if len(r.Payload) > 0 && !json.Valid(r.Payload) {
+		return errors.New("payload contains invalid JSON")
 	}
 	return nil
 }

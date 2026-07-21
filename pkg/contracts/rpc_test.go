@@ -1,12 +1,21 @@
 package contracts
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"testing"
 )
 
 func TestTC_CON_002_ErrorMappings(t *testing.T) {
-	rpcErr := NewJSONRPCError(ErrServiceUnavailable, "Internal Error")
+	rpcErr, err := NewInternalJSONRPCError(ErrServiceUnavailable, "Internal Error")
+	if err != nil {
+		t.Fatalf("Failed to create error: %v", err)
+	}
+
+	_, err = NewInternalJSONRPCError(999999, "Invalid")
+	if err == nil {
+		t.Error("Expected error for invalid application code, got nil")
+	}
 
 	b, err := json.Marshal(rpcErr)
 	if err != nil {
@@ -176,5 +185,151 @@ func TestTC_ACT_009_RemoteAccessRequest(t *testing.T) {
 	}
 	if req.Port != 5912 {
 		t.Errorf("Expected port 5912")
+	}
+}
+
+func TestValidation_EdgeCases(t *testing.T) {
+	// Configure
+	cfgReq := CloudConfigureRequest{Serial: "123", UUID: 1, Config: []byte(`{}`), When: 1}
+	if err := cfgReq.Validate(); err == nil {
+		t.Error("Expected error for non-zero when in Configure")
+	}
+	cfgReqEmpty := CloudConfigureRequest{}
+	if err := cfgReqEmpty.Validate(); err == nil {
+		t.Error("Expected error for empty Configure")
+	}
+
+	// Reboot
+	rebReq := CloudRebootRequest{Serial: "123", When: 1}
+	if err := rebReq.Validate(); err == nil {
+		t.Error("Expected error for non-zero when in Reboot")
+	}
+	rebReqEmpty := CloudRebootRequest{}
+	if err := rebReqEmpty.Validate(); err == nil {
+		t.Error("Expected error for empty Reboot")
+	}
+
+	// Remote Access
+	raReq := CloudRemoteAccessRequest{Method: "ssh"}
+	if err := raReq.Validate(); err == nil {
+		t.Error("Expected error for non-rtty method in Remote Access")
+	}
+	raReqEmpty := CloudRemoteAccessRequest{Method: "rtty"}
+	if err := raReqEmpty.Validate(); err == nil {
+		t.Error("Expected error for empty Remote Access fields")
+	}
+
+	// Certupdate
+	certReq := CloudCertupdateRequest{Serial: "1", Certificates: "invalid_base64"}
+	if err := certReq.Validate(); err == nil {
+		t.Error("Expected error for invalid base64 in Certupdate")
+	}
+	largeDecoded := make([]byte, 2*1024*1024+1)
+	largeEncoded := base64.StdEncoding.EncodeToString(largeDecoded)
+	certReqLarge := CloudCertupdateRequest{Serial: "1", Certificates: largeEncoded}
+	if err := certReqLarge.Validate(); err == nil {
+		t.Error("expected decoded certificate bundle over 2 MiB to fail")
+	}
+	certReqEmpty := CloudCertupdateRequest{}
+	if err := certReqEmpty.Validate(); err == nil {
+		t.Error("Expected error for empty Certupdate")
+	}
+
+	// Reenroll
+	renReq := CloudReenrollRequest{Serial: "123", When: 1}
+	if err := renReq.Validate(); err == nil {
+		t.Error("Expected error for non-zero when in Reenroll")
+	}
+	renReqEmpty := CloudReenrollRequest{}
+	if err := renReqEmpty.Validate(); err == nil {
+		t.Error("Expected error for empty Reenroll")
+	}
+
+	// Script
+	scriptReqType := CloudScriptRequest{Serial: "1", Type: "python"}
+	if err := scriptReqType.Validate(); err == nil {
+		t.Error("Expected error for invalid script type")
+	}
+	scriptReqMissing := CloudScriptRequest{Serial: "1", Type: "shell"}
+	if err := scriptReqMissing.Validate(); err == nil {
+		t.Error("Expected error for missing script and uri")
+	}
+	scriptReqBoth := CloudScriptRequest{Serial: "1", Type: "shell", Script: "YQ==", URI: "http://example.com"}
+	if err := scriptReqBoth.Validate(); err == nil {
+		t.Error("Expected error for both script and uri")
+	}
+	scriptReqInvalidB64 := CloudScriptRequest{Serial: "1", Type: "shell", Script: "invalid_base64!"}
+	if err := scriptReqInvalidB64.Validate(); err == nil {
+		t.Error("Expected error for invalid base64 script")
+	}
+	scriptReqEmpty := CloudScriptRequest{}
+	if err := scriptReqEmpty.Validate(); err == nil {
+		t.Error("Expected error for empty Script")
+	}
+
+	// Unknown scriptId rejection test
+	scriptJsonWithUnknown := []byte(`{
+		"serial": "123",
+		"type": "shell",
+		"script": "YQ==",
+		"scriptId": "unexpected"
+	}`)
+	var sReq CloudScriptRequest
+	if err := json.Unmarshal(scriptJsonWithUnknown, &sReq); err == nil {
+		t.Error("Expected error for unknown field scriptId during JSON parsing")
+	}
+}
+
+func TestValidation_PositiveCases(t *testing.T) {
+	// Configure
+	cfgReq := CloudConfigureRequest{Serial: "123", UUID: 1, Config: []byte(`{"foo":"bar"}`)}
+	if err := cfgReq.Validate(); err != nil {
+		t.Errorf("Expected Configure to be valid, got: %v", err)
+	}
+
+	// Reboot
+	rebReq := CloudRebootRequest{Serial: "123"}
+	if err := rebReq.Validate(); err != nil {
+		t.Errorf("Expected Reboot to be valid, got: %v", err)
+	}
+
+	// Remote Access
+	raReq := CloudRemoteAccessRequest{
+		Method: "rtty",
+		Serial: "123",
+		Token:  "tok",
+		ID:     "id1",
+		Server: "srv",
+		Port:   1234,
+	}
+	if err := raReq.Validate(); err != nil {
+		t.Errorf("Expected Remote Access to be valid, got: %v", err)
+	}
+
+	// Certupdate
+	validBase64 := base64.StdEncoding.EncodeToString([]byte("testcert"))
+	certReq := CloudCertupdateRequest{Serial: "1", Certificates: validBase64}
+	if err := certReq.Validate(); err != nil {
+		t.Errorf("Expected Certupdate to be valid, got: %v", err)
+	}
+
+	// Reenroll
+	renReq := CloudReenrollRequest{Serial: "123"}
+	if err := renReq.Validate(); err != nil {
+		t.Errorf("Expected Reenroll to be valid, got: %v", err)
+	}
+
+	// Script (inline)
+	exact1MB := make([]byte, 1024*1024)
+	scriptEncoded := base64.StdEncoding.EncodeToString(exact1MB)
+	scriptReq := CloudScriptRequest{Serial: "1", Type: "shell", Script: scriptEncoded}
+	if err := scriptReq.Validate(); err != nil {
+		t.Errorf("Expected exactly 1MB Script to be valid, got: %v", err)
+	}
+
+	// Script (URI)
+	scriptURIReq := CloudScriptRequest{Serial: "1", Type: "shell", URI: "https://example.com/script.sh"}
+	if err := scriptURIReq.Validate(); err != nil {
+		t.Errorf("Expected Script URI to be valid, got: %v", err)
 	}
 }

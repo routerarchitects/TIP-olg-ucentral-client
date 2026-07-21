@@ -16,6 +16,23 @@ const (
 	ResultUnsupported    ResultType = "unsupported"
 )
 
+func (r ResultType) Valid() bool {
+	switch r {
+	case ResultSuccess,
+		ResultRejected,
+		ResultFailed,
+		ResultTimeout,
+		ResultRolledBack,
+		ResultRollbackFailed,
+		ResultStale,
+		ResultBusy,
+		ResultUnsupported:
+		return true
+	default:
+		return false
+	}
+}
+
 type ConnectionState string
 
 const (

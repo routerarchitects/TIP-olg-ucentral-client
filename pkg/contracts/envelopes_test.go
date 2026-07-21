@@ -198,3 +198,72 @@ func TestTC_CON_001_EnvelopeSerialization(t *testing.T) {
 		}
 	})
 }
+
+func TestTC_CON_001_EnvelopeValidationBoundaries(t *testing.T) {
+	// ActionCommand Validation
+	invalidPayloadCmd := ActionCommand{
+		Version:       "1.0",
+		CorrelationID: "1",
+		Target:        "ap",
+		CommandType:   "reboot",
+		Action:        "execute",
+		Timestamp:     "time",
+		Payload:       json.RawMessage(`{broken`),
+	}
+	if err := invalidPayloadCmd.Validate(); err == nil {
+		t.Error("Expected error for invalid JSON payload in ActionCommand")
+	}
+
+	splitUpgradeCmd := ActionCommand{
+		Version:       "1.0",
+		CorrelationID: "1",
+		Target:        "ap",
+		CommandType:   "execute",
+		Action:        "upgrade",
+		Timestamp:     "time",
+		Payload:       json.RawMessage(`{}`),
+	}
+	if err := splitUpgradeCmd.Validate(); err == nil {
+		t.Error("Expected error for missing operation_id when action is upgrade")
+	}
+
+	// ResultEnvelope Validation
+	invalidResultRes := ResultEnvelope{
+		Version:       "1.0",
+		CorrelationID: "1",
+		Target:        "ap",
+		CommandType:   "reboot",
+		Result:        ResultType("unknown_typo"),
+		Timestamp:     "time",
+	}
+	if err := invalidResultRes.Validate(); err == nil {
+		t.Error("Expected error for invalid ResultType")
+	}
+
+	invalidPayloadRes := ResultEnvelope{
+		Version:       "1.0",
+		CorrelationID: "1",
+		Target:        "ap",
+		CommandType:   "reboot",
+		Result:        ResultSuccess,
+		Payload:       json.RawMessage(`{broken`),
+		Timestamp:     "time",
+	}
+	if err := invalidPayloadRes.Validate(); err == nil {
+		t.Error("Expected error for invalid JSON payload in ResultEnvelope")
+	}
+
+	// ConfigureCommand Validation
+	zeroUUIDCmd := ConfigureCommand{
+		Version:       "1.0",
+		CorrelationID: "1",
+		Target:        "ap",
+		UUID:          0,
+		KVKey:         "cfg",
+		KVRevision:    1,
+		Timestamp:     "time",
+	}
+	if err := zeroUUIDCmd.Validate(); err == nil {
+		t.Error("Expected error for UUID <= 0")
+	}
+}

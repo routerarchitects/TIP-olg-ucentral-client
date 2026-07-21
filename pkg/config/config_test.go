@@ -66,9 +66,27 @@ func TestTC_RM_005_OperationSpecificCacheTTLs(t *testing.T) {
 
 	// Test Invalid Override
 	os.Setenv("OLG_CACHE_TTL_CONFIGURE", "-5m")
-	_, err = LoadCacheTTLConfigFromEnv()
-	if err == nil {
+	if _, err = LoadCacheTTLConfigFromEnv(); err == nil {
 		t.Error("Expected error for negative duration, got nil")
+	}
+
+	// Test Sub-Second Rejections
+	subSecondTests := []string{"500ms", "1ns", "999ms"}
+	for _, val := range subSecondTests {
+		os.Setenv("OLG_CACHE_TTL_CONFIGURE", val)
+		if _, err = LoadCacheTTLConfigFromEnv(); err == nil {
+			t.Errorf("Expected error for sub-second duration %q, got nil", val)
+		}
+	}
+
+	// Test exactly 1s
+	os.Setenv("OLG_CACHE_TTL_CONFIGURE", "1s")
+	cfg3, err := LoadCacheTTLConfigFromEnv()
+	if err != nil {
+		t.Fatalf("LoadCacheTTLConfigFromEnv failed for 1s: %v", err)
+	}
+	if cfg3.Configure != 1 {
+		t.Errorf("Expected Configure TTL 1, got %d", cfg3.Configure)
 	}
 }
 
@@ -82,13 +100,25 @@ func TestTTLForMethod(t *testing.T) {
 	if ttl := cfg.TTLForMethod("configure"); ttl != 10 {
 		t.Errorf("Expected 10 for configure, got %d", ttl)
 	}
+
 	if ttl := cfg.TTLForMethod("remote_access"); ttl != 20 {
 		t.Errorf("Expected 20 for remote_access, got %d", ttl)
 	}
+
 	if ttl := cfg.TTLForMethod("remoteaccess"); ttl != 20 {
 		t.Errorf("Expected 20 for remoteaccess, got %d", ttl)
 	}
-	if ttl := cfg.TTLForMethod("unknown_method"); ttl != 30 {
-		t.Errorf("Expected 30 for unknown, got %d", ttl)
+
+	for _, method := range []string{
+		"ping",
+		"trace",
+		"telemetry",
+		"capabilities.get",
+		"status.get",
+		"unknown_method",
+	} {
+		if ttl := cfg.TTLForMethod(method); ttl != cfg.Default {
+			t.Errorf("TTLForMethod(%q) = %d, want %d", method, ttl, cfg.Default)
+		}
 	}
 }

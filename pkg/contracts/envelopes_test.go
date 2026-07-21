@@ -279,4 +279,43 @@ func TestTC_CON_001_EnvelopeValidationBoundaries(t *testing.T) {
 	if err := zeroUUIDCmd.Validate(); err == nil {
 		t.Error("Expected error for UUID <= 0")
 	}
+
+	// Payload Validation tests
+	emptyPayloadAction := ActionCommand{
+		Version:       "1.0",
+		CorrelationID: "1",
+		Target:        "ap",
+		CommandType:   CommandAction,
+		Action:        ActionRTTY,
+		Payload:       json.RawMessage(""),
+		Timestamp:     "time",
+	}
+	if err := emptyPayloadAction.Validate(); err == nil {
+		t.Error("Expected error for missing payload when one is required")
+	}
+	nullPayloadAction := emptyPayloadAction
+	nullPayloadAction.Payload = json.RawMessage("null")
+	if err := nullPayloadAction.Validate(); err == nil {
+		t.Error("Expected error for null payload when one is required")
+	}
+	malformedPayloadAction := emptyPayloadAction
+	malformedPayloadAction.Payload = json.RawMessage(`{"serial":"123", "method":"rtty"`) // missing brace
+	if err := malformedPayloadAction.Validate(); err == nil {
+		t.Error("Expected error for invalid json payload")
+	}
+	trailingPayloadAction := emptyPayloadAction
+	trailingPayloadAction.Payload = json.RawMessage(`{"serial":"123", "method":"rtty"} {"extra":"trailing"}`)
+	if err := trailingPayloadAction.Validate(); err == nil {
+		t.Error("Expected error for trailing json payload")
+	}
+	invalidRequestAction := emptyPayloadAction
+	invalidRequestAction.Payload = json.RawMessage(`{"serial":"123", "method":"ssh"}`) // invalid method
+	if err := invalidRequestAction.Validate(); err == nil {
+		t.Error("Expected error from inner request Validate()")
+	}
+	validPayloadAction := emptyPayloadAction
+	validPayloadAction.Payload = json.RawMessage(`{"serial":"123", "method":"rtty", "token":"123", "id":"123", "server":"srv", "port":123}`)
+	if err := validPayloadAction.Validate(); err != nil {
+		t.Errorf("Expected valid payload to pass, got: %v", err)
+	}
 }

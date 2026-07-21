@@ -1,6 +1,7 @@
 package contracts
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -52,12 +53,66 @@ func (c *ActionCommand) Validate() error {
 	if !ValidCommandAction(c.CommandType, c.Action) {
 		return fmt.Errorf("inconsistent action %q for command_type %q", c.Action, c.CommandType)
 	}
-	if err := RequireOperationID(string(c.Action), c.OperationID); err != nil {
+	if RequiresOperationID(c.CommandType, c.Action) && c.OperationID == "" {
+		return errors.New("operation_id is required for upgrade")
+	}
+	if err := ValidateActionPayload(c.Action, c.Payload); err != nil {
 		return err
 	}
-	if len(c.Payload) > 0 && !json.Valid(c.Payload) {
-		return errors.New("payload contains invalid JSON")
+	return nil
+}
+
+// ValidateActionPayload decodes and strictly validates action-specific payloads.
+func ValidateActionPayload(action ActionType, payload json.RawMessage) error {
+	var req interface{ Validate() error }
+
+	switch action {
+	case ActionFactory:
+		req = &CloudFactoryRequest{}
+	case ActionCertupdate:
+		req = &CloudCertupdateRequest{}
+	case ActionReenroll:
+		req = &CloudReenrollRequest{}
+	case ActionRTTY:
+		req = &CloudRemoteAccessRequest{}
+	case ActionLeds:
+		req = &CloudLedsRequest{}
+	case ActionTrace:
+		req = &CloudTraceRequest{}
+	case ActionPing:
+		req = &CloudPingRequest{}
+	case ActionTelemetry:
+		req = &CloudTelemetryRequest{}
+	case ActionReboot:
+		req = &CloudRebootRequest{}
+	case ActionUpgrade:
+		req = &CloudUpgradeRequest{}
+	case ActionExecute:
+		req = &CloudScriptRequest{}
+	default:
+		// Unknown or no-payload action
+		if len(payload) > 0 && !json.Valid(payload) {
+			return errors.New("payload contains invalid JSON")
+		}
+		return nil
 	}
+
+	if len(payload) == 0 || string(payload) == "null" {
+		return fmt.Errorf("payload is required for action %q", action)
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	if err := decoder.Decode(req); err != nil {
+		return fmt.Errorf("malformed payload for action %q: %w", action, err)
+	}
+	if decoder.More() {
+		return fmt.Errorf("trailing JSON in payload for action %q", action)
+	}
+
+	if err := req.Validate(); err != nil {
+		return fmt.Errorf("invalid payload for action %q: %w", action, err)
+	}
+
 	return nil
 }
 
@@ -88,8 +143,8 @@ func (s *DeviceStatus) Validate() error {
 		return errors.New("operation_id is required for active operation status")
 	}
 
-	if err := RequireOperationID(s.Operation, s.OperationID); err != nil {
-		return err
+	if RequiresOperationID(CommandType(s.Operation), ActionType(s.Operation)) && s.OperationID == "" {
+		return errors.New("operation_id is required for upgrade")
 	}
 
 	return nil
@@ -119,11 +174,8 @@ func (r *ResultEnvelope) Validate() error {
 	if !r.Result.Valid() {
 		return fmt.Errorf("invalid result: %q", r.Result)
 	}
-	if err := RequireOperationID(string(r.CommandType), r.OperationID); err != nil {
-		return err
-	}
-	if err := RequireOperationID(string(r.Action), r.OperationID); err != nil {
-		return err
+	if RequiresOperationID(r.CommandType, r.Action) && r.OperationID == "" {
+		return errors.New("operation_id is required for upgrade")
 	}
 	if len(r.Payload) > 0 && !json.Valid(r.Payload) {
 		return errors.New("payload contains invalid JSON")

@@ -243,6 +243,13 @@ func (r *CloudUpgradeRequest) Validate() error {
 	if r.URI == "" {
 		return errors.New("uri is required")
 	}
+	u, err := url.ParseRequestURI(r.URI)
+	if err != nil || u.Host == "" {
+		return errors.New("invalid upgrade URI")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("upgrade uri scheme must be http or https, got %q", u.Scheme)
+	}
 	if r.When != 0 {
 		return errors.New("when must be zero for upgrade")
 	}
@@ -546,6 +553,9 @@ func (r *CloudScriptRequest) Validate() error {
 		u, err := url.ParseRequestURI(r.URI)
 		if err != nil || u.Scheme == "" || u.Host == "" {
 			return errors.New("invalid script URI")
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return fmt.Errorf("script uri scheme must be http or https, got %q", u.Scheme)
 		}
 	}
 

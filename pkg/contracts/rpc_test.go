@@ -284,6 +284,24 @@ func TestValidation_EdgeCases(t *testing.T) {
 		t.Error("Expected error for empty Reboot")
 	}
 
+	// Upgrade
+	upgReqNoUri := CloudUpgradeRequest{Serial: "123"}
+	if err := upgReqNoUri.Validate(); err == nil {
+		t.Error("Expected error for empty URI in Upgrade")
+	}
+	upgReqBadUri := CloudUpgradeRequest{Serial: "123", URI: "not-a-url"}
+	if err := upgReqBadUri.Validate(); err == nil {
+		t.Error("Expected error for malformed URI in Upgrade")
+	}
+	upgReqBadScheme := CloudUpgradeRequest{Serial: "123", URI: "ftp://example.com/fw.bin"}
+	if err := upgReqBadScheme.Validate(); err == nil {
+		t.Error("Expected error for non-http/https URI in Upgrade")
+	}
+	upgReqNonZeroWhen := CloudUpgradeRequest{Serial: "123", URI: "https://example.com/fw.bin", When: 1}
+	if err := upgReqNonZeroWhen.Validate(); err == nil {
+		t.Error("Expected error for non-zero when in Upgrade")
+	}
+
 	// Remote Access
 	raReq := CloudRemoteAccessRequest{Method: "ssh"}
 	if err := raReq.Validate(); err == nil {
@@ -341,6 +359,10 @@ func TestValidation_EdgeCases(t *testing.T) {
 	if err := scriptReqEmpty.Validate(); err == nil {
 		t.Error("Expected error for empty Script")
 	}
+	scriptReqBadScheme := CloudScriptRequest{Serial: "1", Type: "shell", URI: "ftp://example.com/script.sh"}
+	if err := scriptReqBadScheme.Validate(); err == nil {
+		t.Error("Expected error for non-http/https URI in Script")
+	}
 
 	// Unknown scriptId rejection test
 	scriptJsonWithUnknown := []byte(`{
@@ -366,6 +388,12 @@ func TestValidation_PositiveCases(t *testing.T) {
 	rebReq := CloudRebootRequest{Serial: "123"}
 	if err := rebReq.Validate(); err != nil {
 		t.Errorf("Expected Reboot to be valid, got: %v", err)
+	}
+
+	// Upgrade
+	upgReq := CloudUpgradeRequest{Serial: "123", URI: "https://example.com/fw.bin"}
+	if err := upgReq.Validate(); err != nil {
+		t.Errorf("Expected Upgrade to be valid, got: %v", err)
 	}
 
 	// Remote Access

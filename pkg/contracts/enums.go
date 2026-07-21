@@ -1,7 +1,6 @@
 package contracts
 
 import (
-	"errors"
 	"fmt"
 )
 
@@ -86,12 +85,9 @@ func (a ActionType) Valid() bool {
 	}
 }
 
-// RequireOperationID enforces that an operation ID is present for operations that require it (e.g., upgrade).
-func RequireOperationID(operation string, operationID string) error {
-	if operation == string(ActionUpgrade) && operationID == "" {
-		return errors.New("operation_id is required for upgrade")
-	}
-	return nil
+// RequiresOperationID returns true if the command or action requires an operation ID.
+func RequiresOperationID(command CommandType, action ActionType) bool {
+	return command == CommandUpgrade || action == ActionUpgrade
 }
 
 // ValidCommandAction explicitly defines the allowed matrix of CommandType and ActionType combinations.

@@ -41,3 +41,5 @@ jobs:
 
       - name: Compile Code
         run: go build -v ./...
+
+      # End of CI workflow

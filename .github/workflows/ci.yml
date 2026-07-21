@@ -2,9 +2,9 @@ name: Go Continuous Integration
 
 on:
   push:
-    branches: [ "RA-dev-main" ]
+    branches: [ RA-dev-main ]
   pull_request:
-    branches: [ "RA-dev-main" ]
+    branches: [ RA-dev-main ]
 
 jobs:
   build-and-test:

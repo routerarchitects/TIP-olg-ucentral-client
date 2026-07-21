@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -20,7 +21,7 @@ type CloudConfig struct {
 	PingIntervalSeconds           int            `json:"ping_interval_seconds"`
 	PongTimeoutSeconds            int            `json:"pong_timeout_seconds"`
 	StableSessionThresholdSeconds int            `json:"stable_session_threshold_seconds"`
-	CompressionThresholdBytes     int            `json:"compression_threshold_bytes"`
+	CompressionThresholdBytes     int            `json:"compression_threshold_bytes"` // Defines compression threshold mapped to permessage-deflate behavior
 	TLS                           CloudTLSConfig `json:"tls"`
 }
 
@@ -73,21 +74,22 @@ func parseEnvDuration(envKey string, defaultDuration time.Duration) (int, error)
 	return int(d.Seconds()), nil
 }
 
-// LoadCacheTTLConfigFromEnv parses TTL configs from environment variables or falls back to documented defaults.
+// LoadCacheTTLConfigFromEnv parses the OLG_CACHE_TTL_* environment variables as Go durations,
+// applies the documented defaults if unset, and rejects malformed or negative durations.
 func LoadCacheTTLConfigFromEnv() (CacheTTLConfig, error) {
 	cfg := CacheTTLConfig{}
 	var err error
 
-	if cfg.Configure, err = parseEnvDuration("OLG_CACHE_TTL_CONFIGURE", 2*time.Minute); err != nil {
+	if cfg.Configure, err = parseEnvDuration("OLG_CACHE_TTL_CONFIGURE", 5*time.Minute); err != nil {
 		return cfg, err
 	}
-	if cfg.LEDs, err = parseEnvDuration("OLG_CACHE_TTL_LEDS", 2*time.Minute); err != nil {
+	if cfg.LEDs, err = parseEnvDuration("OLG_CACHE_TTL_LEDS", 5*time.Minute); err != nil {
 		return cfg, err
 	}
 	if cfg.Reboot, err = parseEnvDuration("OLG_CACHE_TTL_REBOOT", 10*time.Minute); err != nil {
 		return cfg, err
 	}
-	if cfg.RemoteAccess, err = parseEnvDuration("OLG_CACHE_TTL_REMOTEACCESS", 2*time.Minute); err != nil {
+	if cfg.RemoteAccess, err = parseEnvDuration("OLG_CACHE_TTL_REMOTE_ACCESS", 10*time.Minute); err != nil {
 		return cfg, err
 	}
 	if cfg.Factory, err = parseEnvDuration("OLG_CACHE_TTL_FACTORY", 30*time.Minute); err != nil {
@@ -96,13 +98,13 @@ func LoadCacheTTLConfigFromEnv() (CacheTTLConfig, error) {
 	if cfg.Upgrade, err = parseEnvDuration("OLG_CACHE_TTL_UPGRADE", 60*time.Minute); err != nil {
 		return cfg, err
 	}
-	if cfg.Certupdate, err = parseEnvDuration("OLG_CACHE_TTL_CERTUPDATE", 2*time.Minute); err != nil {
+	if cfg.Certupdate, err = parseEnvDuration("OLG_CACHE_TTL_CERTUPDATE", 30*time.Minute); err != nil {
 		return cfg, err
 	}
-	if cfg.Reenroll, err = parseEnvDuration("OLG_CACHE_TTL_REENROLL", 2*time.Minute); err != nil {
+	if cfg.Reenroll, err = parseEnvDuration("OLG_CACHE_TTL_REENROLL", 30*time.Minute); err != nil {
 		return cfg, err
 	}
-	if cfg.Script, err = parseEnvDuration("OLG_CACHE_TTL_SCRIPT", 2*time.Minute); err != nil {
+	if cfg.Script, err = parseEnvDuration("OLG_CACHE_TTL_SCRIPT", 30*time.Minute); err != nil {
 		return cfg, err
 	}
 	if cfg.Default, err = parseEnvDuration("OLG_CACHE_TTL_DEFAULT", 2*time.Minute); err != nil {
@@ -110,4 +112,30 @@ func LoadCacheTTLConfigFromEnv() (CacheTTLConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+// TTLForMethod returns the configured TTL in seconds for a specific JSON-RPC method.
+func (c CacheTTLConfig) TTLForMethod(method string) int {
+	switch strings.ToLower(method) {
+	case "configure":
+		return c.Configure
+	case "leds":
+		return c.LEDs
+	case "reboot":
+		return c.Reboot
+	case "remoteaccess", "remote_access":
+		return c.RemoteAccess
+	case "factory":
+		return c.Factory
+	case "upgrade":
+		return c.Upgrade
+	case "certupdate":
+		return c.Certupdate
+	case "reenroll":
+		return c.Reenroll
+	case "script":
+		return c.Script
+	default:
+		return c.Default
+	}
 }

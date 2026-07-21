@@ -2,9 +2,9 @@ name: Go Continuous Integration
 
 on:
   push:
-    branches: [ "RA-dev-main" ]
+    branches: [ "RA-dev-main", "ucentral-client-epic1" ]
   pull_request:
-    branches: [ "RA-dev-main" ]
+    branches: [ "RA-dev-main", "ucentral-client-epic1" ]
 
 jobs:
   build-and-test:

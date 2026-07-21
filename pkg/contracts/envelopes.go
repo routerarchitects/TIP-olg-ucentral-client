@@ -49,13 +49,8 @@ func (c *ActionCommand) Validate() error {
 	if !c.CommandType.Valid() {
 		return fmt.Errorf("invalid command_type: %q", c.CommandType)
 	}
-	if !c.Action.Valid() {
-		return fmt.Errorf("invalid action: %q", c.Action)
-	}
-	if c.CommandType != CommandAction && c.CommandType != CommandExecute {
-		if string(c.CommandType) != string(c.Action) {
-			return fmt.Errorf("inconsistent action %q for command_type %q", c.Action, c.CommandType)
-		}
+	if !ValidCommandAction(c.CommandType, c.Action) {
+		return fmt.Errorf("inconsistent action %q for command_type %q", c.Action, c.CommandType)
 	}
 	if err := RequireOperationID(string(c.Action), c.OperationID); err != nil {
 		return err
@@ -118,11 +113,8 @@ func (r *ResultEnvelope) Validate() error {
 	if r.Version == "" || r.CorrelationID == "" || r.Target == "" || r.Result == "" || r.Timestamp == "" {
 		return errors.New("missing required fields in ResultEnvelope")
 	}
-	if !r.CommandType.Valid() {
-		return fmt.Errorf("invalid command_type: %q", r.CommandType)
-	}
-	if r.Action != "" && !r.Action.Valid() {
-		return fmt.Errorf("invalid action: %q", r.Action)
+	if !ValidCommandAction(r.CommandType, r.Action) {
+		return fmt.Errorf("inconsistent action %q for command_type %q", r.Action, r.CommandType)
 	}
 	if !r.Result.Valid() {
 		return fmt.Errorf("invalid result: %q", r.Result)
@@ -140,7 +132,7 @@ func (r *ResultEnvelope) Validate() error {
 }
 
 type CloudCapabilitiesQuery struct {
-	Version       string `json:"version"`
+	Version       string      `json:"version"`
 	CorrelationID string      `json:"correlation_id"`
 	Target        string      `json:"target"`
 	CommandType   CommandType `json:"command_type"`
@@ -152,18 +144,15 @@ func (q *CloudCapabilitiesQuery) Validate() error {
 	if q.Version == "" || q.CorrelationID == "" || q.Target == "" || q.Timestamp == "" {
 		return errors.New("missing required fields in CloudCapabilitiesQuery")
 	}
-	if !q.CommandType.Valid() {
-		return fmt.Errorf("invalid command_type: %q", q.CommandType)
-	}
-	if !q.Action.Valid() {
-		return fmt.Errorf("invalid action: %q", q.Action)
+	if !ValidCommandAction(q.CommandType, q.Action) {
+		return fmt.Errorf("inconsistent action %q for command_type %q", q.Action, q.CommandType)
 	}
 	return nil
 }
 
 type CloudDeviceStatusQuery struct {
-	Version       string `json:"version"`
-	CorrelationID string `json:"correlation_id"`
+	Version       string      `json:"version"`
+	CorrelationID string      `json:"correlation_id"`
 	OperationID   string      `json:"operation_id,omitempty"`
 	Target        string      `json:"target"`
 	CommandType   CommandType `json:"command_type"`
@@ -175,11 +164,8 @@ func (q *CloudDeviceStatusQuery) Validate() error {
 	if q.Version == "" || q.CorrelationID == "" || q.Target == "" || q.Timestamp == "" {
 		return errors.New("missing required fields in CloudDeviceStatusQuery")
 	}
-	if !q.CommandType.Valid() {
-		return fmt.Errorf("invalid command_type: %q", q.CommandType)
-	}
-	if !q.Action.Valid() {
-		return fmt.Errorf("invalid action: %q", q.Action)
+	if !ValidCommandAction(q.CommandType, q.Action) {
+		return fmt.Errorf("inconsistent action %q for command_type %q", q.Action, q.CommandType)
 	}
 	return nil
 }

@@ -166,9 +166,9 @@ func TestTC_CON_007_CompressedConfigureRequest(t *testing.T) {
 	validJSON := `{"serial":"123","uuid":1,"config":{}}`
 	zw.Write([]byte(validJSON))
 	zw.Close()
-	
+
 	validB64 := base64.StdEncoding.EncodeToString(b.Bytes())
-	
+
 	t.Run("Valid compressed config", func(t *testing.T) {
 		req := CloudCompressedConfigureRequest{
 			Compress64: validB64,
@@ -222,7 +222,7 @@ func TestTC_CON_007_CompressedConfigureRequest(t *testing.T) {
 		invalidJSON := `{broken json`
 		zwBad.Write([]byte(invalidJSON))
 		zwBad.Close()
-		
+
 		badB64 := base64.StdEncoding.EncodeToString(bad.Bytes())
 		req := CloudCompressedConfigureRequest{Compress64: badB64, CompressSz: uint32(len(invalidJSON))}
 		_, err := req.DecodeAndValidate()

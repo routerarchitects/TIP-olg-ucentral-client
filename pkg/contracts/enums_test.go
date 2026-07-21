@@ -61,3 +61,48 @@ func TestTC_CON_003_VersionVerificationFallbackAndProtocolState(t *testing.T) {
 		})
 	}
 }
+
+func TestValidCommandAction(t *testing.T) {
+	tests := []struct {
+		name    string
+		command CommandType
+		action  ActionType
+		valid   bool
+	}{
+		// Generic transport commands
+		{"Action with Upgrade", CommandAction, ActionUpgrade, true},
+		{"Action with Reboot", CommandAction, ActionReboot, true},
+		{"Action with Execute", CommandAction, ActionExecute, true},
+		{"Execute with Upgrade", CommandExecute, ActionUpgrade, true},
+		{"Execute with Reboot", CommandExecute, ActionReboot, true},
+		{"Execute with Execute", CommandExecute, ActionExecute, true},
+
+		// Direct commands
+		{"Upgrade with Upgrade", CommandUpgrade, ActionUpgrade, true},
+		{"Upgrade with empty", CommandUpgrade, "", true},
+		{"Reboot with Reboot", CommandReboot, ActionReboot, true},
+		{"Reboot with empty", CommandReboot, "", true},
+		{"Configure with empty", CommandConfigure, "", true},
+		{"Script with empty", CommandScript, "", true},
+
+		// Invalid combinations
+		{"Reboot with Upgrade", CommandReboot, ActionUpgrade, false},
+		{"Upgrade with Reboot", CommandUpgrade, ActionReboot, false},
+		{"Configure with Action", CommandConfigure, ActionReboot, false},
+		{"Script with Execute", CommandScript, ActionExecute, false},
+		{"Action with empty", CommandAction, "", false},
+
+		// Invalid enums
+		{"Invalid command", CommandType("unknown"), ActionUpgrade, false},
+		{"Invalid action", CommandAction, ActionType("unknown"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ValidCommandAction(tt.command, tt.action)
+			if got != tt.valid {
+				t.Errorf("ValidCommandAction(%q, %q) = %v, want %v", tt.command, tt.action, got, tt.valid)
+			}
+		})
+	}
+}

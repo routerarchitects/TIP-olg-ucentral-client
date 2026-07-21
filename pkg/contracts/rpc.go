@@ -2,6 +2,7 @@ package contracts
 
 import (
 	"bytes"
+	"compress/zlib"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -9,7 +10,6 @@ import (
 	"io"
 	"net/url"
 	"strings"
-	"compress/zlib"
 )
 
 type Validatable interface {
@@ -97,7 +97,7 @@ func (r *CloudCompressedConfigureRequest) DecodeAndValidate() (*CloudConfigureRe
 	}
 
 	decoder := base64.NewDecoder(base64.StdEncoding, strings.NewReader(r.Compress64))
-	
+
 	zlibReader, err := zlib.NewReader(decoder)
 	if err != nil {
 		return nil, fmt.Errorf("invalid zlib data: %w", err)
@@ -105,7 +105,7 @@ func (r *CloudCompressedConfigureRequest) DecodeAndValidate() (*CloudConfigureRe
 	defer zlibReader.Close()
 
 	limitReader := io.LimitReader(zlibReader, int64(r.CompressSz)+1)
-	
+
 	bytesRead, err := io.ReadAll(limitReader)
 	if err != nil {
 		return nil, fmt.Errorf("decompression error: %w", err)
@@ -396,11 +396,11 @@ type CloudRemoteAccessRequest struct {
 	Method  RemoteAccessMethod `json:"method,omitempty"`
 	Serial  string             `json:"serial"`
 	Token   string             `json:"token"`
-	ID      string `json:"id"`
-	Server  string `json:"server"`
-	Port    int    `json:"port"`
-	User    string `json:"user,omitempty"`
-	Timeout *int   `json:"timeout,omitempty"`
+	ID      string             `json:"id"`
+	Server  string             `json:"server"`
+	Port    int                `json:"port"`
+	User    string             `json:"user,omitempty"`
+	Timeout *int               `json:"timeout,omitempty"`
 }
 
 func (r *CloudRemoteAccessRequest) Validate() error {
@@ -451,7 +451,7 @@ func (r *CloudCertupdateRequest) Validate() error {
 
 	decoder := base64.NewDecoder(base64.StdEncoding, strings.NewReader(r.Certificates))
 	limitReader := io.LimitReader(decoder, 2*1024*1024+1)
-	
+
 	bytesRead, err := io.ReadAll(limitReader)
 	if err != nil {
 		return errors.New("certificates must be valid base64")
@@ -501,10 +501,10 @@ type CloudScriptRequest struct {
 	Serial    string     `json:"serial"`
 	Type      ScriptType `json:"type"`
 	Script    string     `json:"script,omitempty"`
-	Timeout   *int   `json:"timeout,omitempty"`
-	URI       string `json:"uri,omitempty"`
-	Signature string `json:"signature,omitempty"`
-	When      int64  `json:"when,omitempty"`
+	Timeout   *int       `json:"timeout,omitempty"`
+	URI       string     `json:"uri,omitempty"`
+	Signature string     `json:"signature,omitempty"`
+	When      int64      `json:"when,omitempty"`
 }
 
 func (r *CloudScriptRequest) UnmarshalJSON(b []byte) error {
@@ -532,7 +532,7 @@ func (r *CloudScriptRequest) Validate() error {
 	if r.Script != "" {
 		decoder := base64.NewDecoder(base64.StdEncoding, strings.NewReader(r.Script))
 		limitReader := io.LimitReader(decoder, 1024*1024+1)
-		
+
 		bytesRead, err := io.ReadAll(limitReader)
 		if err != nil {
 			return errors.New("script must be valid base64")

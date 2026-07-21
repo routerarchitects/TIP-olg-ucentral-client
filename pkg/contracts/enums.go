@@ -86,6 +86,31 @@ func RequireOperationID(operation string, operationID string) error {
 	return nil
 }
 
+// ValidCommandAction explicitly defines the allowed matrix of CommandType and ActionType combinations.
+func ValidCommandAction(command CommandType, action ActionType) bool {
+	// If the envelope requires an action, it must be a valid ActionType.
+	if action != "" && !action.Valid() {
+		return false
+	}
+	if !command.Valid() {
+		return false
+	}
+
+	switch command {
+	case CommandAction, CommandExecute:
+		// Generic transport commands can carry any valid operational action
+		return action == ActionUpgrade || action == ActionReboot || action == ActionExecute
+	case CommandUpgrade:
+		return action == ActionUpgrade || action == ""
+	case CommandReboot:
+		return action == ActionReboot || action == ""
+	case CommandConfigure, CommandScript:
+		return action == ""
+	default:
+		return false
+	}
+}
+
 type ConnectionState string
 
 const (

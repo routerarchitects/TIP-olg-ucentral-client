@@ -88,10 +88,7 @@ func (a ActionType) Valid() bool {
 	}
 }
 
-// RequiresOperationID returns true if the command or action requires an operation ID.
-func RequiresOperationID(command CommandType, action ActionType) bool {
-	return command == CommandUpgrade || action == ActionUpgrade
-}
+
 
 // ValidCommandAction explicitly defines the allowed matrix of CommandType and ActionType combinations.
 func ValidCommandAction(command CommandType, action ActionType) bool {

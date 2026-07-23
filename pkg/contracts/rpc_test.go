@@ -364,7 +364,7 @@ func TestValidation_EdgeCases(t *testing.T) {
 		t.Error("Expected error for non-http/https URI in Script")
 	}
 
-	// Unknown scriptId preservation test
+	// Unknown scriptId rejection test
 	scriptJsonWithUnknown := []byte(`{
 		"serial": "123",
 		"type": "shell",
@@ -372,11 +372,8 @@ func TestValidation_EdgeCases(t *testing.T) {
 		"scriptId": "unexpected"
 	}`)
 	var sReq CloudScriptRequest
-	if err := json.Unmarshal(scriptJsonWithUnknown, &sReq); err != nil {
-		t.Errorf("Expected NO error for unknown field scriptId, got: %v", err)
-	}
-	if err := sReq.Validate(); err != nil {
-		t.Errorf("Expected script request with unknown field to validate, got: %v", err)
+	if err := json.Unmarshal(scriptJsonWithUnknown, &sReq); err == nil {
+		t.Error("Expected error for unknown field scriptId during JSON parsing")
 	}
 
 	// Leds

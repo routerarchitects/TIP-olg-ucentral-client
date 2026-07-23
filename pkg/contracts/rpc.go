@@ -1,6 +1,7 @@
 package contracts
 
 import (
+	"bytes"
 	"compress/zlib"
 	"encoding/base64"
 	"encoding/json"
@@ -523,6 +524,14 @@ type CloudScriptRequest struct {
 	URI       string     `json:"uri,omitempty"`
 	Signature string     `json:"signature,omitempty"`
 	When      int64      `json:"when,omitempty"`
+}
+
+func (r *CloudScriptRequest) UnmarshalJSON(b []byte) error {
+	type Alias CloudScriptRequest
+	aux := (*Alias)(r)
+	decoder := json.NewDecoder(bytes.NewReader(b))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(&aux)
 }
 
 func (r *CloudScriptRequest) Validate() error {

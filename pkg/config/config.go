@@ -166,22 +166,22 @@ func (c *Config) Validate() error {
 }
 
 type CacheTTLConfig struct {
-	Configure    time.Duration
-	LEDs         time.Duration
-	Reboot       time.Duration
-	RemoteAccess time.Duration
-	Factory      time.Duration
-	Upgrade      time.Duration
-	Certupdate   time.Duration
-	Reenroll     time.Duration
-	Script       time.Duration
-	Default      time.Duration
+	Configure    int
+	LEDs         int
+	Reboot       int
+	RemoteAccess int
+	Factory      int
+	Upgrade      int
+	Certupdate   int
+	Reenroll     int
+	Script       int
+	Default      int
 }
 
-func parseEnvDuration(envKey string, defaultDuration time.Duration) (time.Duration, error) {
+func parseEnvDuration(envKey string, defaultDuration time.Duration) (int, error) {
 	val := os.Getenv(envKey)
 	if val == "" {
-		return defaultDuration, nil
+		return int(defaultDuration.Seconds()), nil
 	}
 	d, err := time.ParseDuration(val)
 	if err != nil {
@@ -190,7 +190,7 @@ func parseEnvDuration(envKey string, defaultDuration time.Duration) (time.Durati
 	if d < time.Second {
 		return 0, fmt.Errorf("%s must be at least 1s, got %v", envKey, d)
 	}
-	return d, nil
+	return int(d.Seconds()), nil
 }
 
 // LoadCacheTTLConfigFromEnv parses the OLG_CACHE_TTL_* environment variables as Go durations,
@@ -233,8 +233,8 @@ func LoadCacheTTLConfigFromEnv() (CacheTTLConfig, error) {
 	return cfg, nil
 }
 
-// TTLForMethod returns the configured TTL for a specific JSON-RPC method.
-func (c CacheTTLConfig) TTLForMethod(method string) time.Duration {
+// TTLForMethod returns the configured TTL for a specific JSON-RPC method in seconds.
+func (c CacheTTLConfig) TTLForMethod(method string) int {
 	switch strings.ToLower(method) {
 	case "configure":
 		return c.Configure

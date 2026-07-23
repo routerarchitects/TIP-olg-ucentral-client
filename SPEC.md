@@ -380,7 +380,7 @@ TIP-olg-ucentral-client/
         Version     string          `json:"version"`
         RPCID string          `json:"rpc_id"`
         Target      string          `json:"target"`
-        UUID        int64          `json:"uuid"`
+        UUID        string          `json:"uuid"`
         KVKey       string          `json:"kv_key"`
         Timestamp   string          `json:"timestamp"`
     }
@@ -427,7 +427,7 @@ TIP-olg-ucentral-client/
     	RPCID string          `json:"rpc_id"`
     	Target      string          `json:"target"`
     	CommandType string          `json:"command_type"`
-    	UUID        int64          `json:"uuid,omitempty"` // Omitted for Action
+    	UUID        string          `json:"uuid,omitempty"` // Omitted for Action
     	Result      ResultType      `json:"result"`
     	Message     string          `json:"message,omitempty"` // Optional. If omitted, implies no additional context beyond the result state.
     	Payload     json.RawMessage `json:"payload,omitempty"` // Command-specific data (e.g. latency, result_64)

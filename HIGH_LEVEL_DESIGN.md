@@ -63,7 +63,7 @@ To ensure interoperability, the uCentral client standardizes on standard envelop
   "version": "1.0",
   "rpc_id": "8bc92d11-536c-4860-9d8a-6809694b78ba",
   "target": "00:11:22:33:44:55",
-  "uuid": 1687588800,
+  "uuid": "1687588800",
   "kv_key": "desired.00:11:22:33:44:55",
   "timestamp": "2026-06-25T12:00:00Z"
 }

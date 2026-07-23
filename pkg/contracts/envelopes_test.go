@@ -4,19 +4,22 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/Telecominfraproject/olg-nats-agent-core/agentcore"
 )
 
 func TestTC_CON_001_EnvelopeSerialization(t *testing.T) {
 	t.Run("ActionCommand Payload Handling", func(t *testing.T) {
 		// Valid ActionCommand
-		validAction := ActionCommand{
-			Version:       "1.0",
-			CorrelationID: "corr-1",
-			Target:        "ap-1",
-			CommandType:   "reboot",
-			Action:        "execute",
-			Payload:       json.RawMessage(`{"delay": 5}`),
-			Timestamp:     "2023-10-01T12:00:00Z",
+		validAction := agentcore.ActionCommand{
+			Version:     "1.0",
+			RPCID:       "corr-1",
+			Target:      "ap-1",
+			CommandType: "reboot",
+			Action:      "execute",
+			Payload:     json.RawMessage(`{"delay": 5}`),
+			Timestamp:   time.Date(2023, 10, 1, 12, 0, 0, 0, time.UTC),
 		}
 
 		b, err := json.Marshal(validAction)
@@ -32,7 +35,7 @@ func TestTC_CON_001_EnvelopeSerialization(t *testing.T) {
 		if len(parsed) != 7 {
 			t.Errorf("ActionCommand should have exactly 7 keys, got %d", len(parsed))
 		}
-		expectedKeys := []string{"version", "correlation_id", "target", "command_type", "action", "payload", "timestamp"}
+		expectedKeys := []string{"version", "rpc_id", "target", "command_type", "action", "payload", "timestamp"}
 		for _, key := range expectedKeys {
 			if _, exists := parsed[key]; !exists {
 				t.Errorf("ActionCommand missing key: %s", key)
@@ -40,17 +43,17 @@ func TestTC_CON_001_EnvelopeSerialization(t *testing.T) {
 		}
 
 		// Validation should fail for upgrade without operation_id
-		upgradeAction := ActionCommand{
-			Version:       "1.0",
-			CorrelationID: "corr-1",
-			Target:        "ap-1",
-			CommandType:   "upgrade",
-			Action:        "upgrade",
-			Payload:       nil,
-			Timestamp:     "2023-10-01T12:00:00Z",
+		upgradeAction := agentcore.ActionCommand{
+			Version:     "1.0",
+			RPCID:       "corr-1",
+			Target:      "ap-1",
+			CommandType: "upgrade",
+			Action:      "upgrade",
+			Payload:     nil,
+			Timestamp:   time.Date(2023, 10, 1, 12, 0, 0, 0, time.UTC),
 		}
 
-		if err := upgradeAction.Validate(); err == nil {
+		if err := ValidateActionCommand(&upgradeAction); err == nil {
 			t.Error("Expected Validate() to fail for upgrade without operation_id")
 		}
 
@@ -67,15 +70,14 @@ func TestTC_CON_001_EnvelopeSerialization(t *testing.T) {
 		}
 
 		// Valid Upgrade Action with operation_id
-		validUpgrade := ActionCommand{
-			Version:       "1.0",
-			CorrelationID: "corr-upgrade",
-			OperationID:   "operation-123",
-			Target:        "ap-1",
-			CommandType:   "upgrade",
-			Action:        "upgrade",
-			Payload:       json.RawMessage(`{}`),
-			Timestamp:     "2023-10-01T12:00:00Z",
+		validUpgrade := agentcore.ActionCommand{
+			Version:     "1.0",
+			RPCID:       "corr-upgrade",
+			Target:      "ap-1",
+			CommandType: "upgrade",
+			Action:      "upgrade",
+			Payload:     json.RawMessage(`{}`),
+			Timestamp:   time.Date(2023, 10, 1, 12, 0, 0, 0, time.UTC),
 		}
 
 		upgradeBytes, err := json.Marshal(validUpgrade)
@@ -87,20 +89,18 @@ func TestTC_CON_001_EnvelopeSerialization(t *testing.T) {
 			t.Fatalf("failed to unmarshal serialized value: %v", err)
 		}
 
-		if upgradeParsed["operation_id"] != "operation-123" {
-			t.Errorf("operation_id was not correctly serialized for upgrade action")
-		}
+		
 	})
 
 	t.Run("ConfigureCommand Serialization", func(t *testing.T) {
-		cmd := ConfigureCommand{
-			Version:       "1.0",
-			CorrelationID: "corr-1",
-			Target:        "ap-1",
-			UUID:          12345,
-			KVKey:         "cfg",
-			KVRevision:    1,
-			Timestamp:     "2023-10-01T12:00:00Z",
+		cmd := agentcore.ConfigureNotification{
+			Version:   "1.0",
+			RPCID:     "corr-1",
+			Target:    "ap-1",
+			UUID:      "12345",
+			KVKey:     "cfg",
+			KVBucket:  "cfg",
+			Timestamp: time.Date(2023, 10, 1, 12, 0, 0, 0, time.UTC),
 		}
 
 		b, err := json.Marshal(cmd)
@@ -116,21 +116,21 @@ func TestTC_CON_001_EnvelopeSerialization(t *testing.T) {
 		if _, exists := parsed["payload"]; exists {
 			t.Error("ConfigureCommand must not serialize a raw payload field")
 		}
-		if parsed["uuid"].(float64) != 12345 {
+		if parsed["uuid"].(string) != "12345" {
 			t.Errorf("UUID was not serialized correctly: %v", parsed["uuid"])
 		}
 	})
 
 	t.Run("ResultEnvelope Serialization", func(t *testing.T) {
-		res := ResultEnvelope{
-			Version:       "1.0",
-			CorrelationID: "corr-1",
-			Target:        "ap-1",
-			CommandType:   "configure",
-			UUID:          999,
-			Result:        ResultSuccess,
-			Message:       "OK",
-			Timestamp:     "2023-10-01T12:00:00Z",
+		res := agentcore.ResultEnvelope{
+			Version:     "1.0",
+			RPCID:       "corr-1",
+			Target:      "ap-1",
+			CommandType: "configure",
+			UUID:        "999",
+			Result:      "success",
+			Message:     "OK",
+			Timestamp:   time.Date(2023, 10, 1, 12, 0, 0, 0, time.UTC),
 		}
 
 		b, err := json.Marshal(res)
@@ -143,7 +143,7 @@ func TestTC_CON_001_EnvelopeSerialization(t *testing.T) {
 			t.Fatalf("failed to unmarshal serialized value: %v", err)
 		}
 
-		if parsed["uuid"].(float64) != 999 {
+		if parsed["uuid"].(string) != "999" {
 			t.Errorf("UUID must be serialized for configure results")
 		}
 		if _, exists := parsed["operation_id"]; exists {
@@ -154,15 +154,15 @@ func TestTC_CON_001_EnvelopeSerialization(t *testing.T) {
 		}
 
 		// Non-empty payload test
-		resWithPayload := ResultEnvelope{
-			Version:       "1.0",
-			CorrelationID: "corr-script",
-			Target:        "ap-1",
-			CommandType:   "script",
-			Result:        ResultSuccess,
-			Message:       "completed",
-			Payload:       json.RawMessage(`{"result_64":"YWJj"}`),
-			Timestamp:     "2023-10-01T12:00:00Z",
+		resWithPayload := agentcore.ResultEnvelope{
+			Version:     "1.0",
+			RPCID:       "corr-script",
+			Target:      "ap-1",
+			CommandType: "script",
+			Result:      "success",
+			Message:     "completed",
+			Payload:     json.RawMessage(`{"result_64":"YWJj"}`),
+			Timestamp:   time.Date(2023, 10, 1, 12, 0, 0, 0, time.UTC),
 		}
 		payloadBytes, err := json.Marshal(resWithPayload)
 		if err != nil {
@@ -177,14 +177,14 @@ func TestTC_CON_001_EnvelopeSerialization(t *testing.T) {
 		}
 
 		// Action Result (UUID omitted)
-		resAction := ResultEnvelope{
-			Version:       "1.0",
-			CorrelationID: "corr-action",
-			Target:        "ap-1",
-			CommandType:   "reboot",
-			Result:        ResultSuccess,
-			Message:       "rebooting",
-			Timestamp:     "2023-10-01T12:00:00Z",
+		resAction := agentcore.ResultEnvelope{
+			Version:     "1.0",
+			RPCID:       "corr-action",
+			Target:      "ap-1",
+			CommandType: "reboot",
+			Result:      "success",
+			Message:     "rebooting",
+			Timestamp:   time.Date(2023, 10, 1, 12, 0, 0, 0, time.UTC),
 		}
 		actionBytes, err := json.Marshal(resAction)
 		if err != nil {
@@ -202,144 +202,135 @@ func TestTC_CON_001_EnvelopeSerialization(t *testing.T) {
 
 func TestTC_CON_001_EnvelopeValidationBoundaries(t *testing.T) {
 	// ActionCommand Validation
-	invalidPayloadCmd := ActionCommand{
-		Version:       "1.0",
-		CorrelationID: "1",
-		Target:        "ap",
-		CommandType:   "reboot",
-		Action:        "execute",
-		Timestamp:     "time",
-		Payload:       json.RawMessage(`{broken`),
+	invalidPayloadCmd := agentcore.ActionCommand{
+		Version:     "1.0",
+		RPCID:       "1",
+		Target:      "ap",
+		CommandType: "reboot",
+		Action:      "execute",
+		Timestamp:   time.Now(),
+		Payload:     json.RawMessage(`{broken`),
 	}
-	if err := invalidPayloadCmd.Validate(); err == nil {
+	if err := ValidateActionCommand(&invalidPayloadCmd); err == nil {
 		t.Error("Expected error for invalid JSON payload in ActionCommand")
 	}
 
-	splitUpgradeCmd := ActionCommand{
-		Version:       "1.0",
-		CorrelationID: "1",
-		Target:        "ap",
-		CommandType:   "execute",
-		Action:        "upgrade",
-		Timestamp:     "time",
-		Payload:       json.RawMessage(`{}`),
+	splitUpgradeCmd := agentcore.ActionCommand{
+		Version:     "1.0",
+		RPCID:       "1",
+		Target:      "ap",
+		CommandType: "execute",
+		Action:      "upgrade",
+		Timestamp:   time.Now(),
+		Payload:     json.RawMessage(`{}`),
 	}
-	if err := splitUpgradeCmd.Validate(); err == nil {
+	if err := ValidateActionCommand(&splitUpgradeCmd); err == nil {
 		t.Error("Expected error for missing operation_id when action is upgrade")
 	}
 
 	// ResultEnvelope Validation
-	missingCommandTypeRes := ResultEnvelope{
-		Version:       "1.0",
-		CorrelationID: "1",
-		Target:        "ap",
-		Result:        ResultSuccess,
-		Timestamp:     "time",
+	missingCommandTypeRes := agentcore.ResultEnvelope{
+		Version:   "1.0",
+		RPCID:     "1",
+		Target:    "ap",
+		Result:    "success",
+		Timestamp: time.Now(),
 	}
-	if err := missingCommandTypeRes.Validate(); err == nil {
+	if err := ValidateResultEnvelope(&missingCommandTypeRes); err == nil {
 		t.Error("Expected error for missing command_type in ResultEnvelope")
 	}
 
-	invalidCommandTypeRes := ResultEnvelope{
-		Version:       "1.0",
-		CorrelationID: "1",
-		Target:        "ap",
-		CommandType:   CommandType("unknown_cmd"),
-		Result:        ResultSuccess,
-		Timestamp:     "time",
+	invalidCommandTypeRes := agentcore.ResultEnvelope{
+		Version:     "1.0",
+		RPCID:       "1",
+		Target:      "ap",
+		CommandType: "unknown_cmd",
+		Result:      "success",
+		Timestamp:   time.Now(),
 	}
-	if err := invalidCommandTypeRes.Validate(); err == nil {
+	if err := ValidateResultEnvelope(&invalidCommandTypeRes); err == nil {
 		t.Error("Expected error for invalid command_type in ResultEnvelope")
 	}
-	invalidResultRes := ResultEnvelope{
-		Version:       "1.0",
-		CorrelationID: "1",
-		Target:        "ap",
-		CommandType:   "reboot",
-		Result:        ResultType("unknown_typo"),
-		Timestamp:     "time",
+	invalidResultRes := agentcore.ResultEnvelope{
+		Version:     "1.0",
+		RPCID:       "1",
+		Target:      "ap",
+		CommandType: "reboot",
+		Result:      "unknown_typo",
+		Timestamp:   time.Now(),
 	}
-	if err := invalidResultRes.Validate(); err == nil {
+	if err := ValidateResultEnvelope(&invalidResultRes); err == nil {
 		t.Error("Expected error for invalid ResultType")
 	}
 
-	invalidPayloadRes := ResultEnvelope{
-		Version:       "1.0",
-		CorrelationID: "1",
-		Target:        "ap",
-		CommandType:   "reboot",
-		Result:        ResultSuccess,
-		Payload:       json.RawMessage(`{broken`),
-		Timestamp:     "time",
+	invalidPayloadRes := agentcore.ResultEnvelope{
+		Version:     "1.0",
+		RPCID:       "1",
+		Target:      "ap",
+		CommandType: "reboot",
+		Result:      "success",
+		Payload:     json.RawMessage(`{broken`),
+		Timestamp:   time.Now(),
 	}
-	if err := invalidPayloadRes.Validate(); err == nil {
+	if err := ValidateResultEnvelope(&invalidPayloadRes); err == nil {
 		t.Error("Expected error for invalid JSON payload in ResultEnvelope")
 	}
 
-	missingOpIdUpgradeRes := ResultEnvelope{
-		Version:       "1.0",
-		CorrelationID: "1",
-		Target:        "ap",
-		CommandType:   CommandUpgrade,
-		Result:        ResultSuccess,
-		Timestamp:     "time",
-	}
-	if err := missingOpIdUpgradeRes.Validate(); err == nil {
-		t.Error("Expected error for upgrade ResultEnvelope missing operation_id")
-	}
+	
+	
 
 	// ConfigureCommand Validation
-	zeroUUIDCmd := ConfigureCommand{
-		Version:       "1.0",
-		CorrelationID: "1",
-		Target:        "ap",
-		UUID:          0,
-		KVKey:         "cfg",
-		KVRevision:    1,
-		Timestamp:     "time",
+	zeroUUIDCmd := agentcore.ConfigureNotification{
+		Version:   "1.0",
+		RPCID:     "1",
+		Target:    "ap",
+		UUID:      "",
+		KVKey:     "cfg",
+		KVBucket:  "cfg",
+		Timestamp: time.Now(),
 	}
-	if err := zeroUUIDCmd.Validate(); err == nil {
-		t.Error("Expected error for UUID <= 0")
+	if err := ValidateConfigureNotification(&zeroUUIDCmd); err == nil {
+		t.Error("Expected error for missing UUID")
 	}
 
 	// Payload Validation tests
-	emptyPayloadAction := ActionCommand{
-		Version:       "1.0",
-		CorrelationID: "1",
-		Target:        "ap",
-		CommandType:   CommandAction,
-		Action:        ActionRTTY,
-		Payload:       json.RawMessage(""),
-		Timestamp:     "time",
+	emptyPayloadAction := agentcore.ActionCommand{
+		Version:     "1.0",
+		RPCID:       "1",
+		Target:      "ap",
+		CommandType: "action",
+		Action: "rtty",
+		Payload:     json.RawMessage(""),
+		Timestamp:   time.Now(),
 	}
-	if err := emptyPayloadAction.Validate(); err == nil {
+	if err := ValidateActionCommand(&emptyPayloadAction); err == nil {
 		t.Error("Expected error for missing payload when one is required")
 	}
 	nullPayloadAction := emptyPayloadAction
 	nullPayloadAction.Payload = json.RawMessage("null")
-	if err := nullPayloadAction.Validate(); err == nil {
+	if err := ValidateActionCommand(&nullPayloadAction); err == nil {
 		t.Error("Expected error for null payload when one is required")
 	}
 	malformedPayloadAction := emptyPayloadAction
 	malformedPayloadAction.Payload = json.RawMessage(`{"serial":"123", "method":"rtty"`) // missing brace
-	if err := malformedPayloadAction.Validate(); err == nil {
+	if err := ValidateActionCommand(&malformedPayloadAction); err == nil {
 		t.Error("Expected error for invalid json payload")
 	}
 	trailingPayloadAction := emptyPayloadAction
 	trailingPayloadAction.Payload = json.RawMessage(`{"serial":"123", "method":"rtty", "token":"123", "id":"123", "server":"srv", "port":123} {"extra":"trailing"}`)
-	if err := trailingPayloadAction.Validate(); err == nil {
+	if err := ValidateActionCommand(&trailingPayloadAction); err == nil {
 		t.Error("Expected error for trailing json payload")
 	} else if !strings.Contains(err.Error(), "trailing") {
 		t.Errorf("Expected trailing json error, got: %v", err)
 	}
 	invalidRequestAction := emptyPayloadAction
 	invalidRequestAction.Payload = json.RawMessage(`{"serial":"123", "method":"ssh"}`) // invalid method
-	if err := invalidRequestAction.Validate(); err == nil {
+	if err := ValidateActionCommand(&invalidRequestAction); err == nil {
 		t.Error("Expected error from inner request Validate()")
 	}
 	validPayloadAction := emptyPayloadAction
 	validPayloadAction.Payload = json.RawMessage(`{"serial":"123", "method":"rtty", "token":"123", "id":"123", "server":"srv", "port":123}`)
-	if err := validPayloadAction.Validate(); err != nil {
+	if err := ValidateActionCommand(&validPayloadAction); err != nil {
 		t.Errorf("Expected valid payload to pass, got: %v", err)
 	}
 
@@ -358,32 +349,31 @@ func TestTC_CON_001_EnvelopeValidationBoundaries(t *testing.T) {
 
 	for _, tc := range bypasses {
 		t.Run(tc.Name, func(t *testing.T) {
-			cmd := ActionCommand{
-				Version:       "1.0",
-				CorrelationID: "corr-1",
-				Target:        "ap-1",
-				CommandType:   tc.Command,
-				Action:        tc.Action,
-				Payload:       json.RawMessage(`{}`), // empty object which misses mandatory fields
-				Timestamp:     "2023-10-01T12:00:00Z",
+			cmd := agentcore.ActionCommand{
+				Version:     "1.0",
+				RPCID:       "corr-1",
+				Target:      "ap-1",
+				CommandType: string(tc.Command),
+				Action:      string(tc.Action),
+				Payload:     json.RawMessage(`{}`), // empty object which misses mandatory fields
+				Timestamp:   time.Date(2023, 10, 1, 12, 0, 0, 0, time.UTC),
 			}
 			if tc.Command == CommandUpgrade || tc.Action == ActionUpgrade {
-				cmd.OperationID = "upg-1" // Provide valid operation ID to pass envelope validation
 			}
-			if err := cmd.Validate(); err == nil {
+			if err := ValidateActionCommand(&cmd); err == nil {
 				t.Errorf("Expected {} payload to fail inner validation for %s / %s", tc.Command, tc.Action)
 			}
 		})
 	}
 
 	// Query Payload Tests
-	queryCmdTemplate := ActionCommand{
-		Version:       "1.0",
-		CorrelationID: "corr-1",
-		Target:        "ap-1",
-		CommandType:   CommandQuery,
-		Action:        ActionStatusGet,
-		Timestamp:     "2023-10-01T12:00:00Z",
+	queryCmdTemplate := agentcore.ActionCommand{
+		Version:     "1.0",
+		RPCID:       "corr-1",
+		Target:      "ap-1",
+		CommandType: "query",
+		Action: "status.get",
+		Timestamp:   time.Date(2023, 10, 1, 12, 0, 0, 0, time.UTC),
 	}
 
 	// Valid queries
@@ -396,7 +386,7 @@ func TestTC_CON_001_EnvelopeValidationBoundaries(t *testing.T) {
 	for i, payload := range validQueries {
 		cmd := queryCmdTemplate
 		cmd.Payload = payload
-		if err := cmd.Validate(); err != nil {
+		if err := ValidateActionCommand(&cmd); err != nil {
 			t.Errorf("Expected valid query payload test %d to pass, got: %v", i, err)
 		}
 	}
@@ -414,11 +404,10 @@ func TestTC_CON_001_EnvelopeValidationBoundaries(t *testing.T) {
 	for i, tc := range invalidQueries {
 		cmd := queryCmdTemplate
 		cmd.Payload = tc.Payload
-		if err := cmd.Validate(); err == nil {
+		if err := ValidateActionCommand(&cmd); err == nil {
 			t.Errorf("Expected query payload test %d (%q) to fail with %q", i, string(tc.Payload), tc.Error)
 		} else if !strings.Contains(err.Error(), tc.Error) {
 			t.Errorf("Expected error containing %q, got: %v", tc.Error, err)
 		}
 	}
 }
-

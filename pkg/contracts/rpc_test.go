@@ -639,14 +639,15 @@ func TestValidation_PositiveCases(t *testing.T) {
 	// Trace boundary tests
 	validDurMin := 1
 	validDurMax := 86400
+	traceValidDurMax := 300
 	validPacketsMin := 1
-	validPacketsMax := 1000000
+	traceValidPacketsMax := 10000
 
 	traceReqMin := CloudTraceRequest{Serial: "1", Duration: &validDurMin, Packets: &validPacketsMin}
 	if err := traceReqMin.Validate(); err != nil {
 		t.Errorf("Expected trace min duration and packets to be valid, got: %v", err)
 	}
-	traceReqMax := CloudTraceRequest{Serial: "1", Duration: &validDurMax, Packets: &validPacketsMax}
+	traceReqMax := CloudTraceRequest{Serial: "1", Duration: &traceValidDurMax, Packets: &traceValidPacketsMax}
 	if err := traceReqMax.Validate(); err != nil {
 		t.Errorf("Expected trace max duration and packets to be valid, got: %v", err)
 	}

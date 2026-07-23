@@ -336,11 +336,11 @@ func (r *CloudTraceRequest) Validate() error {
 	if r.When != 0 {
 		return errors.New("when must be zero for trace")
 	}
-	if r.Duration != nil && (*r.Duration <= 0 || *r.Duration > 86400) {
-		return errors.New("duration must be between 1 and 86400")
+	if r.Duration != nil && (*r.Duration <= 0 || *r.Duration > 300) {
+		return errors.New("duration must be between 1 and 300")
 	}
-	if r.Packets != nil && (*r.Packets <= 0 || *r.Packets > 1000000) {
-		return errors.New("packets must be between 1 and 1000000")
+	if r.Packets != nil && (*r.Packets <= 0 || *r.Packets > 10000) {
+		return errors.New("packets must be between 1 and 10000")
 	}
 
 	if r.URI != "" {
@@ -402,8 +402,8 @@ func (r *CloudLedsRequest) Validate() error {
 	if r.When != 0 {
 		return errors.New("when must be zero for leds")
 	}
-	if r.Duration != nil && (*r.Duration < 1 || *r.Duration > 86400) {
-		return errors.New("duration must be between 1 and 86400")
+	if r.Duration != nil && (*r.Duration < 1 || *r.Duration >  86400) {
+		return errors.New("duration must be between 1 and  86400")
 	}
 	return nil
 }
@@ -488,7 +488,7 @@ func (r *CloudRemoteAccessRequest) Validate() error {
 		return fmt.Errorf("port must be between 1 and 65535")
 	}
 	if r.Timeout != nil && (*r.Timeout <= 0 || *r.Timeout > 86400) {
-		return errors.New("timeout must be between 1 and 86400")
+		return errors.New("timeout must be between 1 and 300")
 	}
 	return nil
 }
@@ -621,7 +621,7 @@ func (r *CloudScriptRequest) Validate() error {
 	}
 
 	if r.Timeout != nil && (*r.Timeout <= 0 || *r.Timeout > 86400) {
-		return errors.New("timeout must be between 1 and 86400")
+		return errors.New("timeout must be between 1 and 300")
 	}
 
 	return nil

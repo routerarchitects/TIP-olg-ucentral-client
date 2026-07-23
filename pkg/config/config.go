@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net/url"
 	"os"
@@ -76,6 +78,21 @@ func (c *CloudTLSConfig) Validate() error {
 	if err := checkFile(c.ClientKeyFile, "tls client_key_file"); err != nil {
 		return err
 	}
+
+	// Deep validation of TLS configuration
+	if _, err := tls.LoadX509KeyPair(c.ClientCertFile, c.ClientKeyFile); err != nil {
+		return fmt.Errorf("invalid tls client certificate or key: %w", err)
+	}
+
+	caCert, err := os.ReadFile(c.CAFile)
+	if err != nil {
+		return fmt.Errorf("failed to read tls ca_file: %w", err)
+	}
+	caCertPool := x509.NewCertPool()
+	if ok := caCertPool.AppendCertsFromPEM(caCert); !ok {
+		return fmt.Errorf("failed to parse tls ca_file as a valid PEM CA bundle")
+	}
+
 	return nil
 }
 
@@ -127,6 +144,24 @@ func (n *NATSConfig) Validate() error {
 	if err := checkFile(n.CAFile, "nats ca_file"); err != nil {
 		return err
 	}
+	
+	natsCaCert, err := os.ReadFile(n.CAFile)
+	if err != nil {
+		return fmt.Errorf("failed to read nats ca_file: %w", err)
+	}
+	natsCaCertPool := x509.NewCertPool()
+	if ok := natsCaCertPool.AppendCertsFromPEM(natsCaCert); !ok {
+		return fmt.Errorf("failed to parse nats ca_file as a valid PEM CA bundle")
+	}
+	
+	natsCreds, err := os.ReadFile(n.CredentialsFile)
+	if err != nil {
+		return fmt.Errorf("failed to read nats credentials_file: %w", err)
+	}
+	if len(natsCreds) == 0 {
+		return fmt.Errorf("nats credentials_file is empty")
+	}
+	
 	return nil
 }
 

@@ -18,9 +18,6 @@ func ValidateConfigureNotification(c *agentcore.ConfigureNotification) error {
 	if c.UUID == "" {
 		return errors.New("UUID must be provided")
 	}
-	if c.KVRevision == 0 {
-		return errors.New("KVRevision must be greater than zero")
-	}
 	return nil
 }
 
@@ -148,40 +145,4 @@ func ValidateResultEnvelope(r *agentcore.ResultEnvelope) error {
 	return nil
 }
 
-type CloudCapabilitiesQuery struct {
-	Version       string      `json:"version"`
-	RPCID         string      `json:"rpc_id"`
-	Target        string      `json:"target"`
-	CommandType   CommandType `json:"command_type"`
-	Action        ActionType  `json:"action"`
-	Timestamp     string      `json:"timestamp"`
-}
 
-func (q *CloudCapabilitiesQuery) Validate() error {
-	if q.Version == "" || q.RPCID == "" || q.Target == "" || q.Timestamp == "" {
-		return errors.New("missing required fields in CloudCapabilitiesQuery")
-	}
-	if !ValidCommandAction(q.CommandType, q.Action) {
-		return fmt.Errorf("inconsistent action %q for command_type %q", q.Action, q.CommandType)
-	}
-	return nil
-}
-
-type CloudDeviceStatusQuery struct {
-	Version       string      `json:"version"`
-	RPCID         string      `json:"rpc_id"`
-	Target        string      `json:"target"`
-	CommandType   CommandType `json:"command_type"`
-	Action        ActionType  `json:"action"`
-	Timestamp     string      `json:"timestamp"`
-}
-
-func (q *CloudDeviceStatusQuery) Validate() error {
-	if q.Version == "" || q.RPCID == "" || q.Target == "" || q.Timestamp == "" {
-		return errors.New("missing required fields in CloudDeviceStatusQuery")
-	}
-	if !ValidCommandAction(q.CommandType, q.Action) {
-		return fmt.Errorf("inconsistent action %q for command_type %q", q.Action, q.CommandType)
-	}
-	return nil
-}

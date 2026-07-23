@@ -1,8 +1,16 @@
 package config
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"os"
 	"testing"
+	"time"
 )
 
 func TestTC_RM_005_OperationSpecificCacheTTLs(t *testing.T) {
@@ -125,15 +133,31 @@ func TestTTLForMethod(t *testing.T) {
 
 func TestConfig_Validation(t *testing.T) {
 	tmpDir := t.TempDir()
-	createTempFile := func(name string) string {
+	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{Organization: []string{"Test"}},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+	}
+	derBytes, _ := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
+	
+	keyBytes, _ := x509.MarshalECPrivateKey(priv)
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyBytes})
+
+	createTempFile := func(name string, content []byte) string {
 		path := tmpDir + "/" + name
-		os.WriteFile(path, []byte("test"), 0644)
+		os.WriteFile(path, content, 0644)
 		return path
 	}
-	caFile := createTempFile("ca.pem")
-	certFile := createTempFile("cert.pem")
-	keyFile := createTempFile("key.pem")
-	credsFile := createTempFile("creds.creds")
+	caFile := createTempFile("ca.pem", certPEM)
+	certFile := createTempFile("cert.pem", certPEM)
+	keyFile := createTempFile("key.pem", keyPEM)
+	credsFile := createTempFile("creds.creds", []byte("dummy-jwt-or-creds"))
 
 	validTLS := CloudTLSConfig{
 		CAFile:         caFile,

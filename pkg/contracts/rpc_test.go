@@ -5,6 +5,8 @@ import (
 	"compress/zlib"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -132,30 +134,69 @@ func TestTC_ACT_008_TelemetryRequest(t *testing.T) {
 }
 
 func TestTC_CON_006_ConfigureRequest(t *testing.T) {
-	// TC-CON-006: OWGW Configure Request parsing
-	reqJson := []byte(`{
-		"serial": "12345",
-		"uuid": 100,
-		"config": {"foo": "bar"}
-	}`)
+	// Generate a valid compressed payload to use in tests
+	var b bytes.Buffer
+	zw := zlib.NewWriter(&b)
+	validInnerJSON := `{"serial":"123","uuid":1,"config":{}}`
+	zw.Write([]byte(validInnerJSON))
+	zw.Close()
+	validB64 := base64.StdEncoding.EncodeToString(b.Bytes())
+	validSz := uint32(len(validInnerJSON))
 
-	var req CloudConfigureRequest
-	if err := json.Unmarshal(reqJson, &req); err != nil {
-		t.Fatalf("Failed to parse CloudConfigureRequest: %v", err)
+	tests := []struct {
+		name      string
+		req       CloudConfigureRequest
+		wantError bool
+	}{
+		{
+			name:      "Valid uncompressed",
+			req:       CloudConfigureRequest{Serial: "123", UUID: 1, Config: []byte(`{"foo": "bar"}`)},
+			wantError: false,
+		},
+		{
+			name:      "Valid compressed outer params",
+			req:       CloudConfigureRequest{Serial: "123", UUID: 1, Compress64: validB64, CompressSz: validSz},
+			wantError: false,
+		},
+		{
+			name:      "Both config and compress_64 present",
+			req:       CloudConfigureRequest{Serial: "123", UUID: 1, Config: []byte(`{}`), Compress64: validB64, CompressSz: validSz},
+			wantError: true,
+		},
+		{
+			name:      "Neither field present",
+			req:       CloudConfigureRequest{Serial: "123", UUID: 1},
+			wantError: true,
+		},
+		{
+			name:      "Missing compress_sz",
+			req:       CloudConfigureRequest{Serial: "123", UUID: 1, Compress64: validB64},
+			wantError: true,
+		},
+		{
+			name:      "Missing compress_64",
+			req:       CloudConfigureRequest{Serial: "123", UUID: 1, CompressSz: validSz},
+			wantError: true,
+		},
+		{
+			name:      "Invalid config JSON",
+			req:       CloudConfigureRequest{Serial: "123", UUID: 1, Config: []byte(`{broken`)},
+			wantError: true,
+		},
+		{
+			name:      "Nonzero when",
+			req:       CloudConfigureRequest{Serial: "123", UUID: 1, When: 12345, Config: []byte(`{}`)},
+			wantError: true,
+		},
 	}
 
-	if req.UUID != 100 {
-		t.Errorf("UUID should be parsed as int64")
-	}
-
-	// UUID as string should fail or behave differently based on unmarshal
-	invalidReqJson := []byte(`{
-		"serial": "12345",
-		"uuid": "100"
-	}`)
-	var invalidReq CloudConfigureRequest
-	if err := json.Unmarshal(invalidReqJson, &invalidReq); err == nil {
-		t.Fatal("expected string UUID to be rejected")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.req.Validate()
+			if (err != nil) != tt.wantError {
+				t.Errorf("Validate() error = %v, wantError %v", err, tt.wantError)
+			}
+		})
 	}
 }
 
@@ -228,6 +269,23 @@ func TestTC_CON_007_CompressedConfigureRequest(t *testing.T) {
 		_, err := req.DecodeAndValidate()
 		if err == nil {
 			t.Error("expected error for invalid inner JSON")
+		}
+	})
+
+	t.Run("Nested compressed config", func(t *testing.T) {
+		var nested bytes.Buffer
+		zwNested := zlib.NewWriter(&nested)
+		nestedJSON := fmt.Sprintf(`{"serial":"123","uuid":1,"compress_64":"%s","compress_sz":%d}`, validB64, len(validJSON))
+		zwNested.Write([]byte(nestedJSON))
+		zwNested.Close()
+
+		nestedB64 := base64.StdEncoding.EncodeToString(nested.Bytes())
+		req := CloudCompressedConfigureRequest{Compress64: nestedB64, CompressSz: uint32(len(nestedJSON))}
+		_, err := req.DecodeAndValidate()
+		if err == nil {
+			t.Error("expected error for nested compression")
+		} else if !strings.Contains(err.Error(), "nested compression") {
+			t.Errorf("expected nested compression error, got: %v", err)
 		}
 	})
 }

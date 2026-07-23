@@ -120,6 +120,13 @@ func (r *CloudCompressedConfigureRequest) DecodeAndValidate() (*CloudConfigureRe
 		return nil, fmt.Errorf("invalid JSON in decompressed data: %w", err)
 	}
 
+	if req.Compress64 != "" || req.CompressSz > 0 {
+		return nil, errors.New("nested compression is not allowed")
+	}
+	if len(req.Config) == 0 || string(req.Config) == "null" {
+		return nil, errors.New("decompressed payload must contain config")
+	}
+
 	if err := req.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid decompressed configure request: %w", err)
 	}

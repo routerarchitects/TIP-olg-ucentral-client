@@ -504,7 +504,7 @@ func TestValidation_EdgeCases(t *testing.T) {
 		t.Error("Expected error for file URI in Trace")
 	}
 
-	tooHighDur := 86401
+	tooHighDur := 301
 	ledsTooHighDur := CloudLedsRequest{Serial: "1", Pattern: "blink", Duration: &tooHighDur}
 	if err := ledsTooHighDur.Validate(); err == nil {
 		t.Error("Expected error for >300 duration in Leds")

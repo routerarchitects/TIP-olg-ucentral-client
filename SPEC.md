@@ -253,7 +253,7 @@ TIP-olg-ucentral-client/
     }
     type CloudPingResponse struct {
     	Serial        string `json:"serial"`
-    	UUID          string  `json:"uuid"`
+    	UUID          int64  `json:"uuid"`
     	DeviceUTCTime int64  `json:"deviceUTCTime"`
     }
 

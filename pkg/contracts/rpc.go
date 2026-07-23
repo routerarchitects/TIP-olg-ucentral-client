@@ -402,8 +402,8 @@ func (r *CloudLedsRequest) Validate() error {
 	if r.When != 0 {
 		return errors.New("when must be zero for leds")
 	}
-	if r.Duration != nil && (*r.Duration < 1 || *r.Duration >  86400) {
-		return errors.New("duration must be between 1 and  86400")
+	if r.Duration != nil && (*r.Duration < 1 || *r.Duration > 300) {
+		return errors.New("duration must be between 1 and 300")
 	}
 	return nil
 }

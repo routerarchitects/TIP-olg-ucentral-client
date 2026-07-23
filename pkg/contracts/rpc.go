@@ -165,8 +165,13 @@ func (r *CloudConfigureRequest) Validate() error {
 	}
 
 	if hasConfig {
-		if !json.Valid(r.Config) {
-			return errors.New("config must contain valid JSON")
+		trimmed := bytes.TrimSpace(r.Config)
+		if len(trimmed) == 0 || trimmed[0] != '{' {
+			return errors.New("config must be a JSON object")
+		}
+		var config map[string]json.RawMessage
+		if err := json.Unmarshal(trimmed, &config); err != nil {
+			return errors.New("config must contain a valid JSON object")
 		}
 	} else {
 		if r.Compress64 == "" {
@@ -336,6 +341,18 @@ func (r *CloudTraceRequest) Validate() error {
 	}
 	if r.Packets != nil && (*r.Packets <= 0 || *r.Packets > 1000000) {
 		return errors.New("packets must be between 1 and 1000000")
+	}
+
+	if r.URI != "" {
+		u, err := url.ParseRequestURI(r.URI)
+		if err != nil || u.Host == "" {
+			return errors.New("invalid trace URI")
+		}
+		switch strings.ToLower(u.Scheme) {
+		case "http", "https":
+		default:
+			return fmt.Errorf("trace URI scheme must be http or https, got %q", u.Scheme)
+		}
 	}
 	return nil
 }

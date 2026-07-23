@@ -184,6 +184,16 @@ func TestTC_CON_006_ConfigureRequest(t *testing.T) {
 			wantError: true,
 		},
 		{
+			name:      "Invalid config array",
+			req:       CloudConfigureRequest{Serial: "123", UUID: 1, Config: []byte(`[]`)},
+			wantError: true,
+		},
+		{
+			name:      "Invalid config scalar",
+			req:       CloudConfigureRequest{Serial: "123", UUID: 1, Config: []byte(`"hello"`)},
+			wantError: true,
+		},
+		{
 			name:      "Nonzero when",
 			req:       CloudConfigureRequest{Serial: "123", UUID: 1, When: 12345, Config: []byte(`{}`)},
 			wantError: true,
@@ -481,6 +491,19 @@ func TestValidation_EdgeCases(t *testing.T) {
 	if err := ledsZeroDur.Validate(); err == nil {
 		t.Error("Expected error for zero duration in Leds")
 	}
+	traceBadUri := CloudTraceRequest{Serial: "1", URI: "not-a-uri"}
+	if err := traceBadUri.Validate(); err == nil {
+		t.Error("Expected error for malformed URI in Trace")
+	}
+	traceBadScheme := CloudTraceRequest{Serial: "1", URI: "ftp://example.com/output"}
+	if err := traceBadScheme.Validate(); err == nil {
+		t.Error("Expected error for non-http/https URI in Trace")
+	}
+	traceFileScheme := CloudTraceRequest{Serial: "1", URI: "file:///etc/passwd"}
+	if err := traceFileScheme.Validate(); err == nil {
+		t.Error("Expected error for file URI in Trace")
+	}
+
 	tooHighDur := 86401
 	ledsTooHighDur := CloudLedsRequest{Serial: "1", Pattern: "blink", Duration: &tooHighDur}
 	if err := ledsTooHighDur.Validate(); err == nil {

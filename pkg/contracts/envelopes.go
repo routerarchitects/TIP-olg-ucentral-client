@@ -167,7 +167,6 @@ func (q *CloudCapabilitiesQuery) Validate() error {
 type CloudDeviceStatusQuery struct {
 	Version       string      `json:"version"`
 	RPCID         string      `json:"rpc_id"`
-	OperationID   string      `json:"operation_id,omitempty"`
 	Target        string      `json:"target"`
 	CommandType   CommandType `json:"command_type"`
 	Action        ActionType  `json:"action"`

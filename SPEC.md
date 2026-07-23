@@ -391,7 +391,6 @@ TIP-olg-ucentral-client/
     type ActionCommand struct {
     	Version     string          `json:"version"`
     	RPCID string          `json:"rpc_id"`
-    	OperationID string          `json:"operation_id,omitempty"`
     	Target      string          `json:"target"`
     	CommandType string          `json:"command_type"`
     	Action      string          `json:"action"`
@@ -399,7 +398,10 @@ TIP-olg-ucentral-client/
     	Timestamp   string          `json:"timestamp"`
     }
 
-    // Validate enforces that all required fields are present. If Action == "upgrade", OperationID must be non-empty.
+    // Validate enforces that all required fields are present.
+    // The shared agentcore NATS envelopes do not carry operation_id.
+    // Upgrade operation identity is maintained locally in OperationStore.
+    // Generic downstream upgrade status is correlated with the single locally active upgrade record.
     func (c *ActionCommand) Validate() error
 
 
@@ -412,7 +414,6 @@ TIP-olg-ucentral-client/
     type DeviceStatus struct {
     	Version     string          `json:"version"`
     	RPCID string          `json:"rpc_id,omitempty"`
-    	OperationID string          `json:"operation_id,omitempty"` // Identifies the long-running async operation
     	Target      string          `json:"target"`
     	Operation string          `json:"operation,omitempty"`
     	Active    bool            `json:"active,omitempty"`
@@ -421,14 +422,12 @@ TIP-olg-ucentral-client/
     	Message   string          `json:"message,omitempty"`
     	Timestamp   string          `json:"timestamp"`
     }
-    // Note: If a response relates to a specific upgrade operation, OperationID must be non-empty, even if it is a terminal state (Active=false). A response with Active=true and an empty OperationID is invalid and must trigger the indeterminate recovery behavior defined by REQ-011.
 
     type ResultEnvelope struct {
     	Version     string          `json:"version"`
     	RPCID string          `json:"rpc_id"`
     	Target      string          `json:"target"`
     	CommandType string          `json:"command_type"`
-    	OperationID string          `json:"operation_id,omitempty"` // Mandatory for upgrade results
     	UUID        int64          `json:"uuid,omitempty"` // Omitted for Action
     	Result      ResultType      `json:"result"`
     	Message     string          `json:"message"`
@@ -450,13 +449,11 @@ TIP-olg-ucentral-client/
     type CloudDeviceStatusQuery struct {
     	Version       string `json:"version"`
     	RPCID string `json:"rpc_id"`
-    	OperationID   string `json:"operation_id,omitempty"`
     	Target        string `json:"target"`
     	CommandType   string `json:"command_type"`
     	Action        string `json:"action"`
     	Timestamp     string `json:"timestamp"`
     }
-    // Note: For upgrade results, operation_id is mandatory. For non-upgrade commands, operation_id may be omitted.
     ```
 
 *   **Enums (`pkg/contracts/enums.go`):**
@@ -848,7 +845,7 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     	pendingReplies              map[string][]byte       // Key: RPCID
     }
 
-    // CanonicalRequestKey formats the session ID, method, and raw JSON-RPC ID into a strongly-typed string (e.g., "session-uuid:configure:number:42")
+    // CanonicalRequestKey formats the session ID, method, and raw JSON-RPC ID into a strongly-typed string (e.g., "session-uuid:configure:number:42", or "session-uuid:notification:<generated-uuid>" for notifications)
     // to strictly prevent collisions across methods, numeric/string IDs, and different Cloud sessions. This key MUST be used by
     // activeCloudRequests, TransactionCache, duplicate-active detection, and completed-response replay.
     func CanonicalRequestKey(sessionID string, method string, id json.RawMessage) (string, error)

@@ -139,12 +139,15 @@ func ValidateResultEnvelope(r *agentcore.ResultEnvelope) error {
 	if len(r.Payload) > 0 && !json.Valid(r.Payload) {
 		return errors.New("payload contains invalid JSON")
 	}
+	if r.CommandType == string(CommandConfigure) && r.UUID == "" {
+		return errors.New("uuid is required for configure results")
+	}
 	return nil
 }
 
 type CloudCapabilitiesQuery struct {
 	Version       string      `json:"version"`
-	CorrelationID string      `json:"correlation_id"`
+	RPCID         string      `json:"rpc_id"`
 	Target        string      `json:"target"`
 	CommandType   CommandType `json:"command_type"`
 	Action        ActionType  `json:"action"`
@@ -152,7 +155,7 @@ type CloudCapabilitiesQuery struct {
 }
 
 func (q *CloudCapabilitiesQuery) Validate() error {
-	if q.Version == "" || q.CorrelationID == "" || q.Target == "" || q.Timestamp == "" {
+	if q.Version == "" || q.RPCID == "" || q.Target == "" || q.Timestamp == "" {
 		return errors.New("missing required fields in CloudCapabilitiesQuery")
 	}
 	if !ValidCommandAction(q.CommandType, q.Action) {
@@ -163,7 +166,7 @@ func (q *CloudCapabilitiesQuery) Validate() error {
 
 type CloudDeviceStatusQuery struct {
 	Version       string      `json:"version"`
-	CorrelationID string      `json:"correlation_id"`
+	RPCID         string      `json:"rpc_id"`
 	OperationID   string      `json:"operation_id,omitempty"`
 	Target        string      `json:"target"`
 	CommandType   CommandType `json:"command_type"`
@@ -172,7 +175,7 @@ type CloudDeviceStatusQuery struct {
 }
 
 func (q *CloudDeviceStatusQuery) Validate() error {
-	if q.Version == "" || q.CorrelationID == "" || q.Target == "" || q.Timestamp == "" {
+	if q.Version == "" || q.RPCID == "" || q.Target == "" || q.Timestamp == "" {
 		return errors.New("missing required fields in CloudDeviceStatusQuery")
 	}
 	if !ValidCommandAction(q.CommandType, q.Action) {

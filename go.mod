@@ -2,8 +2,6 @@ module github.com/routerarchitects/TIP-olg-ucentral-client
 
 go 1.25.0
 
-replace github.com/Telecominfraproject/olg-nats-agent-core => ../TIP-olg-nats-agent-core
-
 require github.com/Telecominfraproject/olg-nats-agent-core v0.1.0
 
 require (

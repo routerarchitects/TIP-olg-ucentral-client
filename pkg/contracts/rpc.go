@@ -487,7 +487,7 @@ func (r *CloudRemoteAccessRequest) Validate() error {
 	if r.Port < 1 || r.Port > 65535 {
 		return fmt.Errorf("port must be between 1 and 65535")
 	}
-	if r.Timeout != nil && (*r.Timeout <= 0 || *r.Timeout > 86400) {
+	if r.Timeout != nil && (*r.Timeout <= 0 || *r.Timeout > 300) {
 		return errors.New("timeout must be between 1 and 300")
 	}
 	return nil
@@ -620,7 +620,7 @@ func (r *CloudScriptRequest) Validate() error {
 		}
 	}
 
-	if r.Timeout != nil && (*r.Timeout <= 0 || *r.Timeout > 86400) {
+	if r.Timeout != nil && (*r.Timeout <= 0 || *r.Timeout > 300) {
 		return errors.New("timeout must be between 1 and 300")
 	}
 

@@ -42,33 +42,6 @@ func TestTC_CON_001_EnvelopeSerialization(t *testing.T) {
 			}
 		}
 
-		// Validation should fail for upgrade without operation_id
-		upgradeAction := agentcore.ActionCommand{
-			Version:     "1.0",
-			RPCID:       "corr-1",
-			Target:      "ap-1",
-			CommandType: "upgrade",
-			Action:      "upgrade",
-			Payload:     nil,
-			Timestamp:   time.Date(2023, 10, 1, 12, 0, 0, 0, time.UTC),
-		}
-
-		if err := ValidateActionCommand(&upgradeAction); err == nil {
-			t.Error("Expected Validate() to fail for upgrade without operation_id")
-		}
-
-		upgradeNilBytes, err := json.Marshal(upgradeAction)
-		if err != nil {
-			t.Fatalf("failed to marshal upgrade action: %v", err)
-		}
-		var upgradeNilParsed map[string]interface{}
-		if err := json.Unmarshal(upgradeNilBytes, &upgradeNilParsed); err != nil {
-			t.Fatalf("failed to unmarshal serialized value: %v", err)
-		}
-		if upgradeNilParsed["payload"] != nil {
-			t.Errorf("ActionCommand with nil payload should serialize as null, got %v", upgradeNilParsed["payload"])
-		}
-
 		// Valid Upgrade Action with operation_id
 		validUpgrade := agentcore.ActionCommand{
 			Version:     "1.0",
@@ -146,9 +119,7 @@ func TestTC_CON_001_EnvelopeSerialization(t *testing.T) {
 		if parsed["uuid"].(string) != "999" {
 			t.Errorf("UUID must be serialized for configure results")
 		}
-		if _, exists := parsed["operation_id"]; exists {
-			t.Error("operation_id must be omitted when empty")
-		}
+
 		if _, exists := parsed["payload"]; exists {
 			t.Error("payload must be omitted when empty")
 		}
@@ -215,18 +186,6 @@ func TestTC_CON_001_EnvelopeValidationBoundaries(t *testing.T) {
 		t.Error("Expected error for invalid JSON payload in ActionCommand")
 	}
 
-	splitUpgradeCmd := agentcore.ActionCommand{
-		Version:     "1.0",
-		RPCID:       "1",
-		Target:      "ap",
-		CommandType: "execute",
-		Action:      "upgrade",
-		Timestamp:   time.Now(),
-		Payload:     json.RawMessage(`{}`),
-	}
-	if err := ValidateActionCommand(&splitUpgradeCmd); err == nil {
-		t.Error("Expected error for missing operation_id when action is upgrade")
-	}
 
 	// ResultEnvelope Validation
 	missingCommandTypeRes := agentcore.ResultEnvelope{

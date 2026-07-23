@@ -471,10 +471,10 @@ func TestValidation_EdgeCases(t *testing.T) {
 		t.Errorf("Expected Leds to be valid with duration 1, got: %v", err)
 	}
 
-	validDurMax := 86400
+	validDurMax := 300
 	ledsReqMax := CloudLedsRequest{Serial: "1", Pattern: "blink", Duration: &validDurMax}
 	if err := ledsReqMax.Validate(); err != nil {
-		t.Errorf("Expected Leds to be valid with duration 86400, got: %v", err)
+		t.Errorf("Expected Leds to be valid with duration 300, got: %v", err)
 	}
 
 	ledsReqNil := CloudLedsRequest{Serial: "1", Pattern: "blink", Duration: nil}
@@ -507,7 +507,7 @@ func TestValidation_EdgeCases(t *testing.T) {
 	tooHighDur := 86401
 	ledsTooHighDur := CloudLedsRequest{Serial: "1", Pattern: "blink", Duration: &tooHighDur}
 	if err := ledsTooHighDur.Validate(); err == nil {
-		t.Error("Expected error for >86400 duration in Leds")
+		t.Error("Expected error for >300 duration in Leds")
 	}
 
 	// Trace duration and packets
@@ -517,7 +517,7 @@ func TestValidation_EdgeCases(t *testing.T) {
 	}
 	traceTooHighDur := CloudTraceRequest{Serial: "1", Duration: &tooHighDur}
 	if err := traceTooHighDur.Validate(); err == nil {
-		t.Error("Expected error for >86400 duration in Trace")
+		t.Error("Expected error for >300 duration in Trace")
 	}
 	traceZeroDur := CloudTraceRequest{Serial: "1", Duration: &zeroDur}
 	if err := traceZeroDur.Validate(); err == nil {
@@ -548,7 +548,7 @@ func TestValidation_EdgeCases(t *testing.T) {
 	}
 	raTooHighTimeout := CloudRemoteAccessRequest{Method: RemoteAccessRTTY, Serial: "1", Token: "1", ID: "1", Server: "1", Port: 22, Timeout: &tooHighDur}
 	if err := raTooHighTimeout.Validate(); err == nil {
-		t.Error("Expected error for >86400 timeout in RemoteAccess")
+		t.Error("Expected error for >300 timeout in RemoteAccess")
 	}
 
 	// Script Timeout
@@ -562,7 +562,7 @@ func TestValidation_EdgeCases(t *testing.T) {
 	}
 	scriptTooHighTimeout := CloudScriptRequest{Serial: "1", Type: "shell", Script: "YQ==", Timeout: &tooHighDur}
 	if err := scriptTooHighTimeout.Validate(); err == nil {
-		t.Error("Expected error for >86400 timeout in Script")
+		t.Error("Expected error for >300 timeout in Script")
 	}
 }
 
@@ -638,7 +638,7 @@ func TestValidation_PositiveCases(t *testing.T) {
 	}
 	// Trace boundary tests
 	validDurMin := 1
-	validDurMax := 86400
+	validDurMax := 300
 	traceValidDurMax := 300
 	validPacketsMin := 1
 	traceValidPacketsMax := 10000

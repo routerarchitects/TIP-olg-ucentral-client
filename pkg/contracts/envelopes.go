@@ -168,8 +168,11 @@ type ResultEnvelope struct {
 }
 
 func (r *ResultEnvelope) Validate() error {
-	if r.Version == "" || r.CorrelationID == "" || r.Target == "" || r.Result == "" || r.Timestamp == "" {
+	if r.Version == "" || r.CorrelationID == "" || r.Target == "" || r.CommandType == "" || r.Result == "" || r.Timestamp == "" {
 		return errors.New("missing required fields in ResultEnvelope")
+	}
+	if !r.CommandType.Valid() {
+		return fmt.Errorf("invalid command_type: %q", r.CommandType)
 	}
 	if !r.Result.Valid() {
 		return fmt.Errorf("invalid result: %q", r.Result)

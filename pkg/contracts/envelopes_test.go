@@ -229,6 +229,28 @@ func TestTC_CON_001_EnvelopeValidationBoundaries(t *testing.T) {
 	}
 
 	// ResultEnvelope Validation
+	missingCommandTypeRes := ResultEnvelope{
+		Version:       "1.0",
+		CorrelationID: "1",
+		Target:        "ap",
+		Result:        ResultSuccess,
+		Timestamp:     "time",
+	}
+	if err := missingCommandTypeRes.Validate(); err == nil {
+		t.Error("Expected error for missing command_type in ResultEnvelope")
+	}
+
+	invalidCommandTypeRes := ResultEnvelope{
+		Version:       "1.0",
+		CorrelationID: "1",
+		Target:        "ap",
+		CommandType:   CommandType("unknown_cmd"),
+		Result:        ResultSuccess,
+		Timestamp:     "time",
+	}
+	if err := invalidCommandTypeRes.Validate(); err == nil {
+		t.Error("Expected error for invalid command_type in ResultEnvelope")
+	}
 	invalidResultRes := ResultEnvelope{
 		Version:       "1.0",
 		CorrelationID: "1",

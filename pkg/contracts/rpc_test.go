@@ -375,6 +375,49 @@ func TestValidation_EdgeCases(t *testing.T) {
 	if err := json.Unmarshal(scriptJsonWithUnknown, &sReq); err == nil {
 		t.Error("Expected error for unknown field scriptId during JSON parsing")
 	}
+
+	// Leds
+	ledsBadPattern := CloudLedsRequest{Serial: "1", Pattern: "invalid"}
+	if err := ledsBadPattern.Validate(); err == nil {
+		t.Error("Expected error for invalid pattern in Leds")
+	}
+	validDur := 60
+	ledsReq := CloudLedsRequest{Serial: "1", Pattern: "blink", Duration: &validDur}
+	if err := ledsReq.Validate(); err != nil {
+		t.Errorf("Expected Leds to be valid, got: %v", err)
+	}
+
+	validDurMin := 1
+	ledsReqMin := CloudLedsRequest{Serial: "1", Pattern: "blink", Duration: &validDurMin}
+	if err := ledsReqMin.Validate(); err != nil {
+		t.Errorf("Expected Leds to be valid with duration 1, got: %v", err)
+	}
+
+	validDurMax := 86400
+	ledsReqMax := CloudLedsRequest{Serial: "1", Pattern: "blink", Duration: &validDurMax}
+	if err := ledsReqMax.Validate(); err != nil {
+		t.Errorf("Expected Leds to be valid with duration 86400, got: %v", err)
+	}
+
+	ledsReqNil := CloudLedsRequest{Serial: "1", Pattern: "blink", Duration: nil}
+	if err := ledsReqNil.Validate(); err != nil {
+		t.Errorf("Expected Leds to be valid with nil duration, got: %v", err)
+	}
+	negDur := -1
+	ledsBadDur := CloudLedsRequest{Serial: "1", Pattern: "blink", Duration: &negDur}
+	if err := ledsBadDur.Validate(); err == nil {
+		t.Error("Expected error for negative duration in Leds")
+	}
+	zeroDur := 0
+	ledsZeroDur := CloudLedsRequest{Serial: "1", Pattern: "blink", Duration: &zeroDur}
+	if err := ledsZeroDur.Validate(); err == nil {
+		t.Error("Expected error for zero duration in Leds")
+	}
+	tooHighDur := 86401
+	ledsTooHighDur := CloudLedsRequest{Serial: "1", Pattern: "blink", Duration: &tooHighDur}
+	if err := ledsTooHighDur.Validate(); err == nil {
+		t.Error("Expected error for >86400 duration in Leds")
+	}
 }
 
 func TestValidation_PositiveCases(t *testing.T) {

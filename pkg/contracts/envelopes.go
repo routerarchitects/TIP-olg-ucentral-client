@@ -91,7 +91,23 @@ func ValidateCommandPayload(command CommandType, action ActionType, payload json
 	case action == ActionExecute || command == CommandScript:
 		req = &CloudScriptRequest{}
 	case action == ActionCapabilitiesGet || action == ActionStatusGet || command == CommandQuery:
-		// Queries don't require nested payloads for validation here
+		if len(payload) == 0 || bytes.Equal(bytes.TrimSpace(payload), []byte("null")) {
+			return nil
+		}
+
+		if !json.Valid(payload) {
+			return errors.New("query payload contains invalid JSON")
+		}
+
+		var queryPayload map[string]json.RawMessage
+		if err := json.Unmarshal(payload, &queryPayload); err != nil {
+			return errors.New("query payload must be a JSON object")
+		}
+
+		if len(queryPayload) != 0 {
+			return errors.New("query payload must be empty")
+		}
+
 		return nil
 	default:
 		// Unknown or no-payload action

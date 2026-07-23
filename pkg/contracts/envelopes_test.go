@@ -375,4 +375,49 @@ func TestTC_CON_001_EnvelopeValidationBoundaries(t *testing.T) {
 			}
 		})
 	}
+
+	// Query Payload Tests
+	queryCmdTemplate := ActionCommand{
+		Version:       "1.0",
+		CorrelationID: "corr-1",
+		Target:        "ap-1",
+		CommandType:   CommandQuery,
+		Action:        ActionStatusGet,
+		Timestamp:     "2023-10-01T12:00:00Z",
+	}
+
+	// Valid queries
+	validQueries := []json.RawMessage{
+		json.RawMessage(``),
+		json.RawMessage(`null`),
+		json.RawMessage(`{}`),
+		json.RawMessage(`   {}   `),
+	}
+	for i, payload := range validQueries {
+		cmd := queryCmdTemplate
+		cmd.Payload = payload
+		if err := cmd.Validate(); err != nil {
+			t.Errorf("Expected valid query payload test %d to pass, got: %v", i, err)
+		}
+	}
+
+	// Invalid queries
+	invalidQueries := []struct {
+		Payload json.RawMessage
+		Error   string
+	}{
+		{json.RawMessage(`{broken`), "invalid JSON"},
+		{json.RawMessage(`"string"`), "JSON object"},
+		{json.RawMessage(`[]`), "JSON object"},
+		{json.RawMessage(`{"unexpected":true}`), "must be empty"},
+	}
+	for i, tc := range invalidQueries {
+		cmd := queryCmdTemplate
+		cmd.Payload = tc.Payload
+		if err := cmd.Validate(); err == nil {
+			t.Errorf("Expected query payload test %d (%q) to fail with %q", i, string(tc.Payload), tc.Error)
+		} else if !strings.Contains(err.Error(), tc.Error) {
+			t.Errorf("Expected error containing %q, got: %v", tc.Error, err)
+		}
+	}
 }

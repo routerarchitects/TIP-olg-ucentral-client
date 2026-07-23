@@ -869,9 +869,9 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     // atomically verify the transaction identity and transition it to Failed if it expires before MarkInFlight is called.
     func (m *DefaultRequestManager) CreateTransaction(sessionID string, cloudRPCID json.RawMessage, respondToCloud bool, method string, timeout time.Duration, isStateChanging bool) (*Transaction, error)
     // MarkPreparingDispatch transitions the transaction from TxCreated to TxPreparingDispatch.
-    func (m *DefaultRequestManager) MarkPreparingDispatch(correlationID string) error
+    func (m *DefaultRequestManager) MarkPreparingDispatch(rpcID string) error
     // MarkPendingPublish transitions the transaction from TxPreparingDispatch to TxPendingPublish.
-    func (m *DefaultRequestManager) MarkPendingPublish(correlationID string) error
+    func (m *DefaultRequestManager) MarkPendingPublish(rpcID string) error
     // MarkInFlight is the final step of action dispatch. The dispatch sequence MUST be:
     // (1) Create/register transaction, (2) Install/register NATS reply inbox subscription,
     // (3) Prepare NATS command, (4) Publish to NATS successfully, (5) Call MarkInFlight.
@@ -880,27 +880,27 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     // Timeout is invalid in TxCreated, TxPreparingDispatch, and TxPendingPublish.
     // If a fast reply was buffered in pendingReplies during TxPendingPublish, MarkInFlight MUST immediately submit it to 
     // the terminal processing sequence after safely entering TxInFlight.
-    func (m *DefaultRequestManager) MarkInFlight(correlationID string) error
+    func (m *DefaultRequestManager) MarkInFlight(rpcID string) error
     // Terminal methods (Complete, Fail, Timeout) perform terminal processing as an atomic logical sequence:
     // (1) Acquire the Request Manager mutex. Evaluate transition legality. If already terminal, return ErrAlreadyTerminal (an expected race).
     // (1b) If the transaction is in TxPendingPublish, store the response in pendingReplies, return nil, and DO NOT proceed.
     // (2) Immediately mark the transaction state as terminal to win the race.
     // (3) Translate the downstream result and build the exact final Cloud response.
     // (4) Store the response in TransactionCache (only if RespondToCloud=true and RequestKey is valid), determining the correct TTL by calling `m.cacheTTLConfig.TTLForMethod(transaction.Method)`.
-    // (5) Remove active indexes (activeCloudRequests, transactionsByRPCID) and release the activeStateTx lock if held by this correlationID.
+    // (5) Remove active indexes (activeCloudRequests, transactionsByRPCID) and release the activeStateTx lock if held by this rpcID.
     // (6) Release the Request Manager mutex.
     // (7) Reserve/enqueue Priority-0 delivery of the cached response. If reservation fails, DO NOT alter the transaction state. The true device outcome must be preserved. Simply trigger path recovery.
     // These methods are concurrency-safe and may be invoked by the dedicated result-processing loop,
     // by a NATS subscriber, or by the timeout timer.
-    func (m *DefaultRequestManager) Complete(correlationID string, response []byte) error
+    func (m *DefaultRequestManager) Complete(rpcID string, response []byte) error
     // RespondAndRetain separates the synchronous JSON-RPC transaction from a persistent background operation (e.g. upgrade).
     // It MUST follow this sequence under the Request Manager mutex: (1) Validate the transaction is valid for retention (e.g. upgrade).
     // (2) Persist the OperationStore record. (3) Transfer state-changing reservation ownership from RPCID to OperationID.
     // (4) Cancel the ordinary response timer. (5) Cache the initial "started" response. (6) Remove the JSON-RPC transaction from active maps and mark it completed. (7) Release mutex and enqueue response.
-    func (m *DefaultRequestManager) RespondAndRetain(correlationID string, response []byte) error
+    func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) error
 
-    func (m *DefaultRequestManager) Fail(correlationID string, errResponse []byte) error
-    func (m *DefaultRequestManager) Timeout(correlationID string) error
+    func (m *DefaultRequestManager) Fail(rpcID string, errResponse []byte) error
+    func (m *DefaultRequestManager) Timeout(rpcID string) error
 
 #### PR 3.2: Duplicate Attachment & Cache TTL
 *   **Target File:** `pkg/reqmgr/cache.go`, `pkg/reqmgr/store.go`, `pkg/reqmgr/manager.go` (extensions)

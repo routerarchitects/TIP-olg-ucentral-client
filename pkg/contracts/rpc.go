@@ -80,59 +80,7 @@ func NewInternalJSONRPCError(appCode int, message string) (*JSONRPCError, error)
 	}, nil
 }
 
-type CloudCompressedConfigureRequest struct {
-	Compress64 string `json:"compress_64"`
-	CompressSz uint32 `json:"compress_sz"`
-}
 
-func (r *CloudCompressedConfigureRequest) DecodeAndValidate() (*CloudConfigureRequest, error) {
-	if r.Compress64 == "" {
-		return nil, errors.New("compress_64 is required")
-	}
-	if r.CompressSz == 0 {
-		return nil, errors.New("compress_sz must be greater than zero")
-	}
-	if r.CompressSz > 10*1024*1024 {
-		return nil, errors.New("compress_sz exceeds 10 MB limit")
-	}
-
-	decoder := base64.NewDecoder(base64.StdEncoding, strings.NewReader(r.Compress64))
-
-	zlibReader, err := zlib.NewReader(decoder)
-	if err != nil {
-		return nil, fmt.Errorf("invalid zlib data: %w", err)
-	}
-	defer zlibReader.Close()
-
-	limitReader := io.LimitReader(zlibReader, int64(r.CompressSz)+1)
-
-	bytesRead, err := io.ReadAll(limitReader)
-	if err != nil {
-		return nil, fmt.Errorf("decompression error: %w", err)
-	}
-
-	if uint32(len(bytesRead)) != r.CompressSz {
-		return nil, errors.New("decompressed size does not match compress_sz")
-	}
-
-	var req CloudConfigureRequest
-	if err := json.Unmarshal(bytesRead, &req); err != nil {
-		return nil, fmt.Errorf("invalid JSON in decompressed data: %w", err)
-	}
-
-	if req.Compress64 != "" || req.CompressSz > 0 {
-		return nil, errors.New("nested compression is not allowed")
-	}
-	if len(req.Config) == 0 || string(req.Config) == "null" {
-		return nil, errors.New("decompressed payload must contain config")
-	}
-
-	if err := req.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid decompressed configure request: %w", err)
-	}
-
-	return &req, nil
-}
 
 type CloudConfigureRequest struct {
 	Serial     string          `json:"serial"`
@@ -182,6 +130,40 @@ func (r *CloudConfigureRequest) Validate() error {
 		}
 		if r.CompressSz > 10*1024*1024 {
 			return errors.New("compress_sz exceeds 10 MB limit")
+		}
+
+		// Perform deep validation of the compressed payload
+		decoder := base64.NewDecoder(base64.StdEncoding, strings.NewReader(r.Compress64))
+		zlibReader, err := zlib.NewReader(decoder)
+		if err != nil {
+			return fmt.Errorf("invalid zlib data: %w", err)
+		}
+		defer zlibReader.Close()
+		
+		limitReader := io.LimitReader(zlibReader, int64(r.CompressSz)+1)
+		bytesRead, err := io.ReadAll(limitReader)
+		if err != nil {
+			return fmt.Errorf("decompression error: %w", err)
+		}
+		
+		if uint32(len(bytesRead)) != r.CompressSz {
+			return errors.New("decompressed size does not match compress_sz")
+		}
+		
+		var innerReq CloudConfigureRequest
+		if err := json.Unmarshal(bytesRead, &innerReq); err != nil {
+			return fmt.Errorf("invalid JSON in decompressed data: %w", err)
+		}
+		
+		if innerReq.Compress64 != "" || innerReq.CompressSz > 0 {
+			return errors.New("nested compression is not allowed")
+		}
+		if len(innerReq.Config) == 0 || string(innerReq.Config) == "null" {
+			return errors.New("decompressed payload must contain config")
+		}
+		
+		if err := innerReq.Validate(); err != nil {
+			return fmt.Errorf("invalid decompressed configure request: %w", err)
 		}
 	}
 	return nil

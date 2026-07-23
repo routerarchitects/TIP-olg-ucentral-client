@@ -18,6 +18,9 @@ func ValidateConfigureNotification(c *agentcore.ConfigureNotification) error {
 	if c.UUID == "" {
 		return errors.New("UUID must be provided")
 	}
+	if c.KVRevision == 0 {
+		return errors.New("KVRevision must be greater than zero")
+	}
 	return nil
 }
 

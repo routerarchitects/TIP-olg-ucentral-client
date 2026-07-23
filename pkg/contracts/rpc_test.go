@@ -221,22 +221,21 @@ func TestTC_CON_007_CompressedConfigureRequest(t *testing.T) {
 	validB64 := base64.StdEncoding.EncodeToString(b.Bytes())
 
 	t.Run("Valid compressed config", func(t *testing.T) {
-		req := CloudCompressedConfigureRequest{
+		req := CloudConfigureRequest{
+			Serial: "123",
+			UUID: 1,
 			Compress64: validB64,
 			CompressSz: uint32(len(validJSON)),
 		}
-		decoded, err := req.DecodeAndValidate()
+		err := req.Validate()
 		if err != nil {
 			t.Fatalf("expected valid decode, got: %v", err)
-		}
-		if decoded.Serial != "123" {
-			t.Errorf("expected serial 123, got %s", decoded.Serial)
 		}
 	})
 
 	t.Run("Invalid base64", func(t *testing.T) {
-		req := CloudCompressedConfigureRequest{Compress64: "invalid base64!", CompressSz: 10}
-		_, err := req.DecodeAndValidate()
+		req := CloudConfigureRequest{Serial: "123", UUID: 1, Compress64: "invalid base64!", CompressSz: 10}
+		err := req.Validate()
 		if err == nil {
 			t.Error("expected error for invalid base64")
 		}
@@ -244,24 +243,24 @@ func TestTC_CON_007_CompressedConfigureRequest(t *testing.T) {
 
 	t.Run("Invalid zlib", func(t *testing.T) {
 		invalidZlib := base64.StdEncoding.EncodeToString([]byte("not zlib data"))
-		req := CloudCompressedConfigureRequest{Compress64: invalidZlib, CompressSz: 10}
-		_, err := req.DecodeAndValidate()
+		req := CloudConfigureRequest{Serial: "123", UUID: 1, Compress64: invalidZlib, CompressSz: 10}
+		err := req.Validate()
 		if err == nil {
 			t.Error("expected error for invalid zlib")
 		}
 	})
 
 	t.Run("Incorrect compress_sz", func(t *testing.T) {
-		req := CloudCompressedConfigureRequest{Compress64: validB64, CompressSz: 999}
-		_, err := req.DecodeAndValidate()
+		req := CloudConfigureRequest{Serial: "123", UUID: 1, Compress64: validB64, CompressSz: 999}
+		err := req.Validate()
 		if err == nil {
 			t.Error("expected error for incorrect compress_sz")
 		}
 	})
 
 	t.Run("Exceeds 10MB limit", func(t *testing.T) {
-		req := CloudCompressedConfigureRequest{Compress64: validB64, CompressSz: 11 * 1024 * 1024}
-		_, err := req.DecodeAndValidate()
+		req := CloudConfigureRequest{Serial: "123", UUID: 1, Compress64: validB64, CompressSz: 11 * 1024 * 1024}
+		err := req.Validate()
 		if err == nil {
 			t.Error("expected error for size exceeding 10MB limit")
 		}
@@ -275,8 +274,8 @@ func TestTC_CON_007_CompressedConfigureRequest(t *testing.T) {
 		zwBad.Close()
 
 		badB64 := base64.StdEncoding.EncodeToString(bad.Bytes())
-		req := CloudCompressedConfigureRequest{Compress64: badB64, CompressSz: uint32(len(invalidJSON))}
-		_, err := req.DecodeAndValidate()
+		req := CloudConfigureRequest{Serial: "123", UUID: 1, Compress64: badB64, CompressSz: uint32(len(invalidJSON))}
+		err := req.Validate()
 		if err == nil {
 			t.Error("expected error for invalid inner JSON")
 		}
@@ -290,8 +289,8 @@ func TestTC_CON_007_CompressedConfigureRequest(t *testing.T) {
 		zwNested.Close()
 
 		nestedB64 := base64.StdEncoding.EncodeToString(nested.Bytes())
-		req := CloudCompressedConfigureRequest{Compress64: nestedB64, CompressSz: uint32(len(nestedJSON))}
-		_, err := req.DecodeAndValidate()
+		req := CloudConfigureRequest{Serial: "123", UUID: 1, Compress64: nestedB64, CompressSz: uint32(len(nestedJSON))}
+		err := req.Validate()
 		if err == nil {
 			t.Error("expected error for nested compression")
 		} else if !strings.Contains(err.Error(), "nested compression") {
@@ -531,10 +530,10 @@ func TestValidation_EdgeCases(t *testing.T) {
 	if err := traceZeroPackets.Validate(); err == nil {
 		t.Error("Expected error for zero packets in Trace")
 	}
-	tooHighPackets := 1000001
+	tooHighPackets := 10001
 	traceTooHighPackets := CloudTraceRequest{Serial: "1", Packets: &tooHighPackets}
 	if err := traceTooHighPackets.Validate(); err == nil {
-		t.Error("Expected error for >1000000 packets in Trace")
+		t.Error("Expected error for >10000 packets in Trace")
 	}
 
 	// Remote Access Timeout

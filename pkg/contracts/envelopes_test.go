@@ -67,13 +67,14 @@ func TestTC_CON_001_EnvelopeSerialization(t *testing.T) {
 
 	t.Run("ConfigureCommand Serialization", func(t *testing.T) {
 		cmd := agentcore.ConfigureNotification{
-			Version:   "1.0",
-			RPCID:     "corr-1",
-			Target:    "ap-1",
-			UUID:      "12345",
-			KVKey:     "cfg",
-			KVBucket:  "cfg",
-			Timestamp: time.Date(2023, 10, 1, 12, 0, 0, 0, time.UTC),
+			Version:    "1.0",
+			RPCID:      "corr-1",
+			Target:     "ap-1",
+			UUID:       "12345",
+			KVKey:      "cfg",
+			KVBucket:   "cfg",
+			KVRevision: 42,
+			Timestamp:  time.Date(2023, 10, 1, 12, 0, 0, 0, time.UTC),
 		}
 
 		b, err := json.Marshal(cmd)
@@ -91,6 +92,9 @@ func TestTC_CON_001_EnvelopeSerialization(t *testing.T) {
 		}
 		if parsed["uuid"].(string) != "12345" {
 			t.Errorf("UUID was not serialized correctly: %v", parsed["uuid"])
+		}
+		if parsed["kv_revision"].(float64) != 42 {
+			t.Errorf("KVRevision was not serialized correctly: %v", parsed["kv_revision"])
 		}
 	})
 
@@ -240,16 +244,31 @@ func TestTC_CON_001_EnvelopeValidationBoundaries(t *testing.T) {
 
 	// ConfigureCommand Validation
 	zeroUUIDCmd := agentcore.ConfigureNotification{
-		Version:   "1.0",
-		RPCID:     "1",
-		Target:    "ap",
-		UUID:      "",
-		KVKey:     "cfg",
-		KVBucket:  "cfg",
-		Timestamp: time.Now(),
+		Version:    "1.0",
+		RPCID:      "1",
+		Target:     "ap",
+		UUID:       "",
+		KVKey:      "cfg",
+		KVBucket:   "cfg",
+		KVRevision: 1,
+		Timestamp:  time.Now(),
 	}
 	if err := ValidateConfigureNotification(&zeroUUIDCmd); err == nil {
 		t.Error("Expected error for missing UUID")
+	}
+
+	zeroRevCmd := agentcore.ConfigureNotification{
+		Version:    "1.0",
+		RPCID:      "1",
+		Target:     "ap",
+		UUID:       "123",
+		KVKey:      "cfg",
+		KVBucket:   "cfg",
+		KVRevision: 0,
+		Timestamp:  time.Now(),
+	}
+	if err := ValidateConfigureNotification(&zeroRevCmd); err == nil {
+		t.Error("Expected error for zero KVRevision")
 	}
 
 	// Payload Validation tests

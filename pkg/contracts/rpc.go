@@ -128,10 +128,12 @@ func (r *CloudCompressedConfigureRequest) DecodeAndValidate() (*CloudConfigureRe
 }
 
 type CloudConfigureRequest struct {
-	Serial string          `json:"serial"`
-	UUID   int64           `json:"uuid"`
-	When   int64           `json:"when,omitempty"`
-	Config json.RawMessage `json:"config"`
+	Serial     string          `json:"serial"`
+	UUID       int64           `json:"uuid"`
+	When       int64           `json:"when,omitempty"`
+	Config     json.RawMessage `json:"config,omitempty"`
+	Compress64 string          `json:"compress_64,omitempty"`
+	CompressSz uint32          `json:"compress_sz,omitempty"`
 }
 
 func (r *CloudConfigureRequest) Validate() error {
@@ -144,8 +146,31 @@ func (r *CloudConfigureRequest) Validate() error {
 	if r.When != 0 {
 		return errors.New("when must be zero for configure")
 	}
-	if len(r.Config) == 0 || !json.Valid(r.Config) {
-		return errors.New("config must contain valid JSON")
+
+	hasConfig := len(r.Config) > 0 && string(r.Config) != "null"
+	hasCompress := r.Compress64 != "" || r.CompressSz > 0
+
+	if hasConfig && hasCompress {
+		return errors.New("cannot provide both config and compress_64")
+	}
+	if !hasConfig && !hasCompress {
+		return errors.New("must provide either config or compress_64")
+	}
+
+	if hasConfig {
+		if !json.Valid(r.Config) {
+			return errors.New("config must contain valid JSON")
+		}
+	} else {
+		if r.Compress64 == "" {
+			return errors.New("compress_64 is required")
+		}
+		if r.CompressSz == 0 {
+			return errors.New("compress_sz must be greater than zero")
+		}
+		if r.CompressSz > 10*1024*1024 {
+			return errors.New("compress_sz exceeds 10 MB limit")
+		}
 	}
 	return nil
 }

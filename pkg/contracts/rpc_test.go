@@ -269,9 +269,19 @@ func TestValidation_EdgeCases(t *testing.T) {
 	if err := cfgReq.Validate(); err == nil {
 		t.Error("Expected error for non-zero when in Configure")
 	}
-	cfgReqEmpty := CloudConfigureRequest{}
+	cfgReqEmpty := CloudConfigureRequest{Serial: "123", UUID: 1}
 	if err := cfgReqEmpty.Validate(); err == nil {
-		t.Error("Expected error for empty Configure")
+		t.Error("Expected error for Configure missing both config and compress_64")
+	}
+	cfgReqSimultaneous := CloudConfigureRequest{
+		Serial:     "123",
+		UUID:       1,
+		Config:     []byte(`{}`),
+		Compress64: "base64...",
+		CompressSz: 10,
+	}
+	if err := cfgReqSimultaneous.Validate(); err == nil {
+		t.Error("Expected error for Configure with both config and compress_64")
 	}
 
 	// Reboot

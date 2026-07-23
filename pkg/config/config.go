@@ -144,7 +144,7 @@ func (n *NATSConfig) Validate() error {
 	if err := checkFile(n.CAFile, "nats ca_file"); err != nil {
 		return err
 	}
-	
+
 	natsCaCert, err := os.ReadFile(n.CAFile)
 	if err != nil {
 		return fmt.Errorf("failed to read nats ca_file: %w", err)
@@ -153,7 +153,7 @@ func (n *NATSConfig) Validate() error {
 	if ok := natsCaCertPool.AppendCertsFromPEM(natsCaCert); !ok {
 		return fmt.Errorf("failed to parse nats ca_file as a valid PEM CA bundle")
 	}
-	
+
 	natsCreds, err := os.ReadFile(n.CredentialsFile)
 	if err != nil {
 		return fmt.Errorf("failed to read nats credentials_file: %w", err)
@@ -161,7 +161,7 @@ func (n *NATSConfig) Validate() error {
 	if len(natsCreds) == 0 {
 		return fmt.Errorf("nats credentials_file is empty")
 	}
-	
+
 	return nil
 }
 

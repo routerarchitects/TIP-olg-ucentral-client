@@ -11,7 +11,6 @@ import (
 	"github.com/Telecominfraproject/olg-nats-agent-core/agentcore"
 )
 
-
 func ValidateConfigureNotification(c *agentcore.ConfigureNotification) error {
 	if c.Version == "" || c.RPCID == "" || c.Target == "" || c.KVKey == "" || c.Timestamp.IsZero() {
 		return errors.New("missing required fields in ConfigureNotification")
@@ -22,7 +21,6 @@ func ValidateConfigureNotification(c *agentcore.ConfigureNotification) error {
 	}
 	return nil
 }
-
 
 // ValidateActionCommand enforces required envelope fields.
 func ValidateActionCommand(c *agentcore.ActionCommand) error {
@@ -119,14 +117,12 @@ type DeviceCapabilities struct {
 	Firmware     string          `json:"firmware"`
 }
 
-
 func ValidateDeviceStatus(s *agentcore.StatusEnvelope) error {
 	if s.Version == "" || s.Target == "" || s.Status == "" || s.Timestamp.IsZero() {
 		return errors.New("missing required fields in StatusEnvelope")
 	}
 	return nil
 }
-
 
 func ValidateResultEnvelope(r *agentcore.ResultEnvelope) error {
 	if r.Version == "" || r.RPCID == "" || r.Target == "" || r.CommandType == "" || r.Result == "" || r.Timestamp.IsZero() {
@@ -146,5 +142,3 @@ func ValidateResultEnvelope(r *agentcore.ResultEnvelope) error {
 	}
 	return nil
 }
-
-

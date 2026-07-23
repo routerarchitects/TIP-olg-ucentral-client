@@ -221,8 +221,8 @@ func TestTC_CON_007_CompressedConfigureRequest(t *testing.T) {
 
 	t.Run("Valid compressed config", func(t *testing.T) {
 		req := CloudConfigureRequest{
-			Serial: "123",
-			UUID: 1,
+			Serial:     "123",
+			UUID:       1,
 			Compress64: validB64,
 			CompressSz: uint32(len(validJSON)),
 		}
@@ -279,7 +279,6 @@ func TestTC_CON_007_CompressedConfigureRequest(t *testing.T) {
 			t.Error("expected error for invalid inner JSON")
 		}
 	})
-
 
 }
 

@@ -62,18 +62,17 @@ func TestTC_CON_001_EnvelopeSerialization(t *testing.T) {
 			t.Fatalf("failed to unmarshal serialized value: %v", err)
 		}
 
-		
 	})
 
 	t.Run("ConfigureCommand Serialization", func(t *testing.T) {
 		cmd := agentcore.ConfigureNotification{
-			Version:    "1.0",
-			RPCID:      "corr-1",
-			Target:     "ap-1",
-			UUID:       "12345",
-			KVKey:      "cfg",
-			KVBucket:   "cfg",
-			Timestamp:  time.Date(2023, 10, 1, 12, 0, 0, 0, time.UTC),
+			Version:   "1.0",
+			RPCID:     "corr-1",
+			Target:    "ap-1",
+			UUID:      "12345",
+			KVKey:     "cfg",
+			KVBucket:  "cfg",
+			Timestamp: time.Date(2023, 10, 1, 12, 0, 0, 0, time.UTC),
 		}
 
 		b, err := json.Marshal(cmd)
@@ -186,7 +185,6 @@ func TestTC_CON_001_EnvelopeValidationBoundaries(t *testing.T) {
 		t.Error("Expected error for invalid JSON payload in ActionCommand")
 	}
 
-
 	// ResultEnvelope Validation
 	missingCommandTypeRes := agentcore.ResultEnvelope{
 		Version:   "1.0",
@@ -235,18 +233,15 @@ func TestTC_CON_001_EnvelopeValidationBoundaries(t *testing.T) {
 		t.Error("Expected error for invalid JSON payload in ResultEnvelope")
 	}
 
-	
-	
-
 	// ConfigureCommand Validation
 	zeroUUIDCmd := agentcore.ConfigureNotification{
-		Version:    "1.0",
-		RPCID:      "1",
-		Target:     "ap",
-		UUID:       "",
-		KVKey:      "cfg",
-		KVBucket:   "cfg",
-		Timestamp:  time.Now(),
+		Version:   "1.0",
+		RPCID:     "1",
+		Target:    "ap",
+		UUID:      "",
+		KVKey:     "cfg",
+		KVBucket:  "cfg",
+		Timestamp: time.Now(),
 	}
 	if err := ValidateConfigureNotification(&zeroUUIDCmd); err == nil {
 		t.Error("Expected error for missing UUID")
@@ -261,14 +256,13 @@ func TestTC_CON_001_EnvelopeValidationBoundaries(t *testing.T) {
 		}
 	}
 
-
 	// Payload Validation tests
 	emptyPayloadAction := agentcore.ActionCommand{
 		Version:     "1.0",
 		RPCID:       "1",
 		Target:      "ap",
 		CommandType: "action",
-		Action: "rtty",
+		Action:      "rtty",
 		Payload:     json.RawMessage(""),
 		Timestamp:   time.Now(),
 	}
@@ -341,7 +335,7 @@ func TestTC_CON_001_EnvelopeValidationBoundaries(t *testing.T) {
 		RPCID:       "corr-1",
 		Target:      "ap-1",
 		CommandType: "query",
-		Action: "status.get",
+		Action:      "status.get",
 		Timestamp:   time.Date(2023, 10, 1, 12, 0, 0, 0, time.UTC),
 	}
 

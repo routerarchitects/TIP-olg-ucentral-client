@@ -88,8 +88,6 @@ func (a ActionType) Valid() bool {
 	}
 }
 
-
-
 // ValidCommandAction explicitly defines the allowed matrix of CommandType and ActionType combinations.
 func ValidCommandAction(command CommandType, action ActionType) bool {
 	// If the envelope requires an action, it must be a valid ActionType.

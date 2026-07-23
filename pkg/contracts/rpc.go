@@ -80,8 +80,6 @@ func NewInternalJSONRPCError(appCode int, message string) (*JSONRPCError, error)
 	}, nil
 }
 
-
-
 type CloudConfigureRequest struct {
 	Serial     string          `json:"serial"`
 	UUID       int64           `json:"uuid"`
@@ -139,17 +137,17 @@ func (r *CloudConfigureRequest) Validate() error {
 			return fmt.Errorf("invalid zlib data: %w", err)
 		}
 		defer zlibReader.Close()
-		
+
 		limitReader := io.LimitReader(zlibReader, int64(r.CompressSz)+1)
 		bytesRead, err := io.ReadAll(limitReader)
 		if err != nil {
 			return fmt.Errorf("decompression error: %w", err)
 		}
-		
+
 		if uint32(len(bytesRead)) != r.CompressSz {
 			return errors.New("decompressed size does not match compress_sz")
 		}
-		
+
 		var config map[string]json.RawMessage
 		if err := json.Unmarshal(bytesRead, &config); err != nil {
 			return errors.New("decompressed payload must be a JSON configuration object")

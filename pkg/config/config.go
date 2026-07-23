@@ -1,7 +1,6 @@
 package config
 
 import (
-	"bytes"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
@@ -159,8 +158,8 @@ func (n *NATSConfig) Validate() error {
 	if err != nil {
 		return fmt.Errorf("failed to read nats credentials_file: %w", err)
 	}
-	if !bytes.Contains(natsCreds, []byte("-----BEGIN NATS USER JWT-----")) {
-		return fmt.Errorf("nats credentials_file does not contain a valid NATS USER JWT structure")
+	if len(natsCreds) == 0 {
+		return fmt.Errorf("nats credentials_file is empty")
 	}
 	
 	return nil

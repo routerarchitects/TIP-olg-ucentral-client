@@ -364,7 +364,7 @@ func TestValidation_EdgeCases(t *testing.T) {
 		t.Error("Expected error for non-http/https URI in Script")
 	}
 
-	// Unknown scriptId rejection test
+	// Unknown scriptId preservation test
 	scriptJsonWithUnknown := []byte(`{
 		"serial": "123",
 		"type": "shell",
@@ -372,8 +372,11 @@ func TestValidation_EdgeCases(t *testing.T) {
 		"scriptId": "unexpected"
 	}`)
 	var sReq CloudScriptRequest
-	if err := json.Unmarshal(scriptJsonWithUnknown, &sReq); err == nil {
-		t.Error("Expected error for unknown field scriptId during JSON parsing")
+	if err := json.Unmarshal(scriptJsonWithUnknown, &sReq); err != nil {
+		t.Errorf("Expected NO error for unknown field scriptId, got: %v", err)
+	}
+	if err := sReq.Validate(); err != nil {
+		t.Errorf("Expected script request with unknown field to validate, got: %v", err)
 	}
 
 	// Leds
@@ -417,6 +420,61 @@ func TestValidation_EdgeCases(t *testing.T) {
 	ledsTooHighDur := CloudLedsRequest{Serial: "1", Pattern: "blink", Duration: &tooHighDur}
 	if err := ledsTooHighDur.Validate(); err == nil {
 		t.Error("Expected error for >86400 duration in Leds")
+	}
+
+	// Trace duration and packets
+	traceNegDur := CloudTraceRequest{Serial: "1", Duration: &negDur}
+	if err := traceNegDur.Validate(); err == nil {
+		t.Error("Expected error for negative duration in Trace")
+	}
+	traceTooHighDur := CloudTraceRequest{Serial: "1", Duration: &tooHighDur}
+	if err := traceTooHighDur.Validate(); err == nil {
+		t.Error("Expected error for >86400 duration in Trace")
+	}
+	traceZeroDur := CloudTraceRequest{Serial: "1", Duration: &zeroDur}
+	if err := traceZeroDur.Validate(); err == nil {
+		t.Error("Expected error for zero duration in Trace")
+	}
+	traceNegPackets := CloudTraceRequest{Serial: "1", Packets: &negDur}
+	if err := traceNegPackets.Validate(); err == nil {
+		t.Error("Expected error for negative packets in Trace")
+	}
+	traceZeroPackets := CloudTraceRequest{Serial: "1", Packets: &zeroDur}
+	if err := traceZeroPackets.Validate(); err == nil {
+		t.Error("Expected error for zero packets in Trace")
+	}
+	tooHighPackets := 1000001
+	traceTooHighPackets := CloudTraceRequest{Serial: "1", Packets: &tooHighPackets}
+	if err := traceTooHighPackets.Validate(); err == nil {
+		t.Error("Expected error for >1000000 packets in Trace")
+	}
+
+	// Remote Access Timeout
+	raNegTimeout := CloudRemoteAccessRequest{Method: RemoteAccessRTTY, Serial: "1", Token: "1", ID: "1", Server: "1", Port: 22, Timeout: &negDur}
+	if err := raNegTimeout.Validate(); err == nil {
+		t.Error("Expected error for negative timeout in RemoteAccess")
+	}
+	raZeroTimeout := CloudRemoteAccessRequest{Method: RemoteAccessRTTY, Serial: "1", Token: "1", ID: "1", Server: "1", Port: 22, Timeout: &zeroDur}
+	if err := raZeroTimeout.Validate(); err == nil {
+		t.Error("Expected error for zero timeout in RemoteAccess")
+	}
+	raTooHighTimeout := CloudRemoteAccessRequest{Method: RemoteAccessRTTY, Serial: "1", Token: "1", ID: "1", Server: "1", Port: 22, Timeout: &tooHighDur}
+	if err := raTooHighTimeout.Validate(); err == nil {
+		t.Error("Expected error for >86400 timeout in RemoteAccess")
+	}
+
+	// Script Timeout
+	scriptNegTimeout := CloudScriptRequest{Serial: "1", Type: "shell", Script: "YQ==", Timeout: &negDur}
+	if err := scriptNegTimeout.Validate(); err == nil {
+		t.Error("Expected error for negative timeout in Script")
+	}
+	scriptZeroTimeout := CloudScriptRequest{Serial: "1", Type: "shell", Script: "YQ==", Timeout: &zeroDur}
+	if err := scriptZeroTimeout.Validate(); err == nil {
+		t.Error("Expected error for zero timeout in Script")
+	}
+	scriptTooHighTimeout := CloudScriptRequest{Serial: "1", Type: "shell", Script: "YQ==", Timeout: &tooHighDur}
+	if err := scriptTooHighTimeout.Validate(); err == nil {
+		t.Error("Expected error for >86400 timeout in Script")
 	}
 }
 
@@ -489,5 +547,39 @@ func TestValidation_PositiveCases(t *testing.T) {
 	scriptURIReq := CloudScriptRequest{Serial: "1", Type: "shell", URI: "https://example.com/script.sh"}
 	if err := scriptURIReq.Validate(); err != nil {
 		t.Errorf("Expected Script URI to be valid, got: %v", err)
+	}
+	// Trace boundary tests
+	validDurMin := 1
+	validDurMax := 86400
+	validPacketsMin := 1
+	validPacketsMax := 1000000
+
+	traceReqMin := CloudTraceRequest{Serial: "1", Duration: &validDurMin, Packets: &validPacketsMin}
+	if err := traceReqMin.Validate(); err != nil {
+		t.Errorf("Expected trace min duration and packets to be valid, got: %v", err)
+	}
+	traceReqMax := CloudTraceRequest{Serial: "1", Duration: &validDurMax, Packets: &validPacketsMax}
+	if err := traceReqMax.Validate(); err != nil {
+		t.Errorf("Expected trace max duration and packets to be valid, got: %v", err)
+	}
+
+	// Remote Access Timeout bounds
+	raReqMin := CloudRemoteAccessRequest{Method: RemoteAccessRTTY, Serial: "1", Token: "tok", ID: "id1", Server: "srv", Port: 1234, Timeout: &validDurMin}
+	if err := raReqMin.Validate(); err != nil {
+		t.Errorf("Expected remote access min timeout to be valid, got: %v", err)
+	}
+	raReqMax := CloudRemoteAccessRequest{Method: RemoteAccessRTTY, Serial: "1", Token: "tok", ID: "id1", Server: "srv", Port: 1234, Timeout: &validDurMax}
+	if err := raReqMax.Validate(); err != nil {
+		t.Errorf("Expected remote access max timeout to be valid, got: %v", err)
+	}
+
+	// Script Timeout bounds
+	scriptReqMin := CloudScriptRequest{Serial: "1", Type: "shell", Script: scriptEncoded, Timeout: &validDurMin}
+	if err := scriptReqMin.Validate(); err != nil {
+		t.Errorf("Expected script min timeout to be valid, got: %v", err)
+	}
+	scriptReqMax := CloudScriptRequest{Serial: "1", Type: "shell", Script: scriptEncoded, Timeout: &validDurMax}
+	if err := scriptReqMax.Validate(); err != nil {
+		t.Errorf("Expected script max timeout to be valid, got: %v", err)
 	}
 }

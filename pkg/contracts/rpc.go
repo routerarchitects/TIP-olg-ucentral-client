@@ -1,7 +1,6 @@
 package contracts
 
 import (
-	"bytes"
 	"compress/zlib"
 	"encoding/base64"
 	"encoding/json"
@@ -299,6 +298,12 @@ func (r *CloudTraceRequest) Validate() error {
 	if r.When != 0 {
 		return errors.New("when must be zero for trace")
 	}
+	if r.Duration != nil && (*r.Duration <= 0 || *r.Duration > 86400) {
+		return errors.New("duration must be between 1 and 86400")
+	}
+	if r.Packets != nil && (*r.Packets <= 0 || *r.Packets > 1000000) {
+		return errors.New("packets must be between 1 and 1000000")
+	}
 	return nil
 }
 
@@ -432,6 +437,9 @@ func (r *CloudRemoteAccessRequest) Validate() error {
 	if r.Port < 1 || r.Port > 65535 {
 		return fmt.Errorf("port must be between 1 and 65535")
 	}
+	if r.Timeout != nil && (*r.Timeout <= 0 || *r.Timeout > 86400) {
+		return errors.New("timeout must be between 1 and 86400")
+	}
 	return nil
 }
 
@@ -517,14 +525,6 @@ type CloudScriptRequest struct {
 	When      int64      `json:"when,omitempty"`
 }
 
-func (r *CloudScriptRequest) UnmarshalJSON(b []byte) error {
-	type Alias CloudScriptRequest
-	aux := (*Alias)(r)
-	decoder := json.NewDecoder(bytes.NewReader(b))
-	decoder.DisallowUnknownFields()
-	return decoder.Decode(&aux)
-}
-
 func (r *CloudScriptRequest) Validate() error {
 	if r.Serial == "" {
 		return errors.New("serial is required")
@@ -560,6 +560,10 @@ func (r *CloudScriptRequest) Validate() error {
 		if u.Scheme != "http" && u.Scheme != "https" {
 			return fmt.Errorf("script uri scheme must be http or https, got %q", u.Scheme)
 		}
+	}
+
+	if r.Timeout != nil && (*r.Timeout <= 0 || *r.Timeout > 86400) {
+		return errors.New("timeout must be between 1 and 86400")
 	}
 
 	return nil

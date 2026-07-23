@@ -123,3 +123,92 @@ func TestTTLForMethod(t *testing.T) {
 		}
 	}
 }
+
+func TestConfig_Validation(t *testing.T) {
+	tmpDir := t.TempDir()
+	createTempFile := func(name string) string {
+		path := tmpDir + "/" + name
+		os.WriteFile(path, []byte("test"), 0644)
+		return path
+	}
+	caFile := createTempFile("ca.pem")
+	certFile := createTempFile("cert.pem")
+	keyFile := createTempFile("key.pem")
+	credsFile := createTempFile("creds.creds")
+
+	validTLS := CloudTLSConfig{
+		CAFile:         caFile,
+		ClientCertFile: certFile,
+		ClientKeyFile:  keyFile,
+	}
+	validCloud := CloudConfig{
+		URL:                           "wss://cloud.example.com",
+		ConnectTimeoutSeconds:         10,
+		WriteTimeoutSeconds:           10,
+		PingIntervalSeconds:           10,
+		PongTimeoutSeconds:            10,
+		StableSessionThresholdSeconds: 10,
+		CompressionThresholdBytes:     1024,
+		TLS:                           validTLS,
+	}
+	validNATS := NATSConfig{
+		Servers:         []string{"tls://nats.example.com"},
+		CredentialsFile: credsFile,
+		CAFile:          caFile,
+	}
+	validQueues := QueueConfig{
+		WSWriterCapacity:      100,
+		EmergencyCapacity:     100,
+		NATSPublishCapacity:   100,
+		CommandResultCapacity: 100,
+		TelemetryCapacity:     100,
+	}
+
+	validConfig := Config{
+		Serial: "serial-123",
+		Cloud:  validCloud,
+		NATS:   validNATS,
+		Queues: validQueues,
+	}
+
+	if err := validConfig.Validate(); err != nil {
+		t.Fatalf("Expected valid config to pass, got: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		mut  func(c *Config)
+	}{
+		{"Empty serial", func(c *Config) { c.Serial = "" }},
+		{"Malformed URL", func(c *Config) { c.Cloud.URL = "wss://" }},
+		{"Missing host URL", func(c *Config) { c.Cloud.URL = "wss:// invalid" }},
+		{"Invalid URL scheme", func(c *Config) { c.Cloud.URL = "ws://insecure" }},
+		{"Negative timeout", func(c *Config) { c.Cloud.ConnectTimeoutSeconds = -1 }},
+		{"Zero ping interval", func(c *Config) { c.Cloud.PingIntervalSeconds = 0 }},
+		{"Missing TLS CA", func(c *Config) { c.Cloud.TLS.CAFile = "/missing/ca.pem" }},
+		{"Directory TLS CA", func(c *Config) { c.Cloud.TLS.CAFile = tmpDir }},
+		{"Malformed NATS URL", func(c *Config) { c.NATS.Servers = []string{"tls://"} }},
+		{"Invalid NATS scheme", func(c *Config) { c.NATS.Servers = []string{"nats://localhost"} }},
+		{"Missing NATS CA", func(c *Config) { c.NATS.CAFile = "/missing/ca.pem" }},
+		{"Directory NATS CA", func(c *Config) { c.NATS.CAFile = tmpDir }},
+		{"Negative queue capacity", func(c *Config) { c.Queues.WSWriterCapacity = -100 }},
+		{"Zero queue capacity", func(c *Config) { c.Queues.TelemetryCapacity = 0 }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig
+			// Deep copy the struct to avoid modifying validConfig for other tests
+			cfg.Cloud = validCloud
+			cfg.Cloud.TLS = validTLS
+			cfg.NATS = validNATS
+			cfg.NATS.Servers = []string{"tls://nats.example.com"}
+			cfg.Queues = validQueues
+
+			tt.mut(&cfg)
+			if err := cfg.Validate(); err == nil {
+				t.Errorf("Expected error for %s", tt.name)
+			}
+		})
+	}
+}

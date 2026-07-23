@@ -2,10 +2,30 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
 )
+
+func checkFile(path, name string) error {
+	if path == "" {
+		return fmt.Errorf("%s is required", name)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("%s is not accessible: %w", name, err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("%s is a directory", name)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("%s cannot be opened: %w", name, err)
+	}
+	f.Close()
+	return nil
+}
 
 type CloudTLSConfig struct {
 	CAFile         string `json:"ca_file"`
@@ -44,6 +64,105 @@ type Config struct {
 	Cloud  CloudConfig `json:"cloud"`
 	NATS   NATSConfig  `json:"nats"`
 	Queues QueueConfig `json:"queues"`
+}
+
+func (c *CloudTLSConfig) Validate() error {
+	if err := checkFile(c.CAFile, "tls ca_file"); err != nil {
+		return err
+	}
+	if err := checkFile(c.ClientCertFile, "tls client_cert_file"); err != nil {
+		return err
+	}
+	if err := checkFile(c.ClientKeyFile, "tls client_key_file"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *CloudConfig) Validate() error {
+	if c.URL == "" {
+		return fmt.Errorf("cloud url is required")
+	}
+	u, err := url.ParseRequestURI(c.URL)
+	if err != nil || u.Scheme != "wss" || u.Host == "" {
+		return fmt.Errorf("cloud url must be a valid wss URL")
+	}
+	if c.ConnectTimeoutSeconds <= 0 {
+		return fmt.Errorf("cloud connect_timeout_seconds must be positive")
+	}
+	if c.WriteTimeoutSeconds <= 0 {
+		return fmt.Errorf("cloud write_timeout_seconds must be positive")
+	}
+	if c.PingIntervalSeconds <= 0 {
+		return fmt.Errorf("cloud ping_interval_seconds must be positive")
+	}
+	if c.PongTimeoutSeconds <= 0 {
+		return fmt.Errorf("cloud pong_timeout_seconds must be positive")
+	}
+	if c.StableSessionThresholdSeconds <= 0 {
+		return fmt.Errorf("cloud stable_session_threshold_seconds must be positive")
+	}
+	if c.CompressionThresholdBytes < 0 {
+		return fmt.Errorf("cloud compression_threshold_bytes must be zero or positive")
+	}
+	if err := c.TLS.Validate(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (n *NATSConfig) Validate() error {
+	if len(n.Servers) == 0 {
+		return fmt.Errorf("nats servers are required")
+	}
+	for _, srv := range n.Servers {
+		u, err := url.ParseRequestURI(srv)
+		if err != nil || u.Scheme != "tls" || u.Host == "" {
+			return fmt.Errorf("nats server must be a valid tls URL")
+		}
+	}
+	if err := checkFile(n.CredentialsFile, "nats credentials_file"); err != nil {
+		return err
+	}
+	if err := checkFile(n.CAFile, "nats ca_file"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (q *QueueConfig) Validate() error {
+	if q.WSWriterCapacity <= 0 {
+		return fmt.Errorf("ws_writer_capacity must be positive")
+	}
+	if q.EmergencyCapacity <= 0 {
+		return fmt.Errorf("emergency_capacity must be positive")
+	}
+	if q.NATSPublishCapacity <= 0 {
+		return fmt.Errorf("nats_publish_capacity must be positive")
+	}
+	if q.CommandResultCapacity <= 0 {
+		return fmt.Errorf("command_result_capacity must be positive")
+	}
+	if q.TelemetryCapacity <= 0 {
+		return fmt.Errorf("telemetry_capacity must be positive")
+	}
+	return nil
+}
+
+func (c *Config) Validate() error {
+	if c.Serial == "" {
+		return fmt.Errorf("serial is required")
+	}
+	if err := c.Cloud.Validate(); err != nil {
+		return err
+	}
+	if err := c.NATS.Validate(); err != nil {
+		return err
+	}
+	if err := c.Queues.Validate(); err != nil {
+		return err
+	}
+	return nil
 }
 
 type CacheTTLConfig struct {

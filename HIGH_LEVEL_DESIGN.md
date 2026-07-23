@@ -64,8 +64,7 @@ To ensure interoperability, the uCentral client standardizes on standard envelop
   "rpc_id": "8bc92d11-536c-4860-9d8a-6809694b78ba",
   "target": "00:11:22:33:44:55",
   "uuid": 1687588800,
-  "kv_key": "desired.00:11:22:33:44:55",
-  "kv_revision": 42,
+  "kv_key": "desired.SERIAL",
   "timestamp": "2026-06-25T12:00:00Z"
 }
 ```
@@ -163,7 +162,7 @@ sequenceDiagram
 
 ### 2.5 JetStream Consistency Model
 *   **Desired Configuration:** Leverages JetStream Key-Value (KV) store using `cfg_desired` bucket and key `desired.<serial>`. The client writes the desired state to KV, then publishes a lightweight trigger to the `config.apply` subject.
-*   **Revision Match Contract:** The NATS configure trigger must carry the `uuid`, `kv_key`, and the NATS `kv_revision` write metadata to allow the downstream agent to fetch the configuration and verify ordering. The downstream agent reads the NATS trigger, retrieves the KV record, and compares revisions.
+*   **Revision Match Contract:** The NATS configure trigger must carry the `uuid` and `kv_key` to allow the downstream agent to fetch the configuration.
     *   If the KV revision matches the trigger revision, it is applied.
     *   If the KV revision is higher than the trigger revision, the agent **aborts the stale trigger** and waits for the newer trigger to arrive. This prevents applying configs whose trigger publishes failed mid-sequence.
 *   **Failure Handling:**

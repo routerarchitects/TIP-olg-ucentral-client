@@ -74,8 +74,6 @@ func TestValidCommandAction(t *testing.T) {
 		{"Action with Upgrade", CommandAction, ActionUpgrade, true},
 		{"Action with Reboot", CommandAction, ActionReboot, true},
 		{"Action with Execute", CommandAction, ActionExecute, true},
-		{"Execute with Upgrade", CommandExecute, ActionUpgrade, true},
-		{"Execute with Reboot", CommandExecute, ActionReboot, true},
 		{"Execute with Execute", CommandExecute, ActionExecute, true},
 		{"Action with Factory", CommandAction, ActionFactory, true},
 		{"Action with Certupdate", CommandAction, ActionCertupdate, true},
@@ -108,6 +106,8 @@ func TestValidCommandAction(t *testing.T) {
 		{"Action with StatusGet", CommandAction, ActionStatusGet, false},
 		{"Execute with CapabilitiesGet", CommandExecute, ActionCapabilitiesGet, false},
 		{"Execute with StatusGet", CommandExecute, ActionStatusGet, false},
+		{"Execute with Upgrade", CommandExecute, ActionUpgrade, false},
+		{"Execute with Reboot", CommandExecute, ActionReboot, false},
 
 		// Invalid enums
 		{"Invalid command", CommandType("unknown"), ActionUpgrade, false},

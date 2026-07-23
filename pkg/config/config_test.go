@@ -157,7 +157,7 @@ func TestConfig_Validation(t *testing.T) {
 	caFile := createTempFile("ca.pem", certPEM)
 	certFile := createTempFile("cert.pem", certPEM)
 	keyFile := createTempFile("key.pem", keyPEM)
-	credsFile := createTempFile("creds.creds", []byte("dummy-jwt-or-creds"))
+	credsFile := createTempFile("creds.creds", []byte("-----BEGIN NATS USER JWT-----\ndummy-jwt\n------END NATS USER JWT------"))
 
 	validTLS := CloudTLSConfig{
 		CAFile:         caFile,

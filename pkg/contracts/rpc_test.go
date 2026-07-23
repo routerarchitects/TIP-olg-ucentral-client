@@ -5,8 +5,7 @@ import (
 	"compress/zlib"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
-	"strings"
+
 	"testing"
 )
 
@@ -214,7 +213,7 @@ func TestTC_CON_007_CompressedConfigureRequest(t *testing.T) {
 	// Generate valid compressed data
 	var b bytes.Buffer
 	zw := zlib.NewWriter(&b)
-	validJSON := `{"serial":"123","uuid":1,"config":{}}`
+	validJSON := `{}`
 	zw.Write([]byte(validJSON))
 	zw.Close()
 
@@ -281,22 +280,7 @@ func TestTC_CON_007_CompressedConfigureRequest(t *testing.T) {
 		}
 	})
 
-	t.Run("Nested compressed config", func(t *testing.T) {
-		var nested bytes.Buffer
-		zwNested := zlib.NewWriter(&nested)
-		nestedJSON := fmt.Sprintf(`{"serial":"123","uuid":1,"compress_64":"%s","compress_sz":%d}`, validB64, len(validJSON))
-		zwNested.Write([]byte(nestedJSON))
-		zwNested.Close()
 
-		nestedB64 := base64.StdEncoding.EncodeToString(nested.Bytes())
-		req := CloudConfigureRequest{Serial: "123", UUID: 1, Compress64: nestedB64, CompressSz: uint32(len(nestedJSON))}
-		err := req.Validate()
-		if err == nil {
-			t.Error("expected error for nested compression")
-		} else if !strings.Contains(err.Error(), "nested compression") {
-			t.Errorf("expected nested compression error, got: %v", err)
-		}
-	})
 }
 
 func TestTC_ACT_001_RebootRequest(t *testing.T) {

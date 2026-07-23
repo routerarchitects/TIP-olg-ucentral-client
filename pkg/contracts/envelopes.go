@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 
 	"github.com/Telecominfraproject/olg-nats-agent-core/agentcore"
 )
@@ -15,8 +16,9 @@ func ValidateConfigureNotification(c *agentcore.ConfigureNotification) error {
 	if c.Version == "" || c.RPCID == "" || c.Target == "" || c.KVKey == "" || c.Timestamp.IsZero() {
 		return errors.New("missing required fields in ConfigureNotification")
 	}
-	if c.UUID == "" {
-		return errors.New("UUID must be provided")
+	uuid, err := strconv.ParseInt(c.UUID, 10, 64)
+	if err != nil || uuid <= 0 {
+		return errors.New("uuid must be a positive int64")
 	}
 	return nil
 }

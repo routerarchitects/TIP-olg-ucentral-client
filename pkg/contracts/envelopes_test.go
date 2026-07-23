@@ -252,6 +252,15 @@ func TestTC_CON_001_EnvelopeValidationBoundaries(t *testing.T) {
 		t.Error("Expected error for missing UUID")
 	}
 
+	invalidUUIDs := []string{"abc", "-1", "0", "1.5"}
+	for _, invalid := range invalidUUIDs {
+		badUUIDCmd := zeroUUIDCmd
+		badUUIDCmd.UUID = invalid
+		if err := ValidateConfigureNotification(&badUUIDCmd); err == nil {
+			t.Errorf("Expected error for invalid UUID string: %q", invalid)
+		}
+	}
+
 
 	// Payload Validation tests
 	emptyPayloadAction := agentcore.ActionCommand{

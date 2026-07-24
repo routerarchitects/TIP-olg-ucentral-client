@@ -213,7 +213,7 @@ func TestTC_CON_007_CompressedConfigureRequest(t *testing.T) {
 	// Generate valid compressed data
 	var b bytes.Buffer
 	zw := zlib.NewWriter(&b)
-	validJSON := `{}`
+	validJSON := `{"serial":"123","uuid":1,"config":{}}`
 	zw.Write([]byte(validJSON))
 	zw.Close()
 
@@ -279,6 +279,36 @@ func TestTC_CON_007_CompressedConfigureRequest(t *testing.T) {
 			t.Error("expected error for invalid inner JSON")
 		}
 	})
+
+	invalidPayloads := []struct {
+		name    string
+		payload string
+	}{
+		{"JSON null", `null`},
+		{"JSON array", `[]`},
+		{"JSON string", `"some string"`},
+		{"Empty content", `   `},
+		{"Just space", ` `},
+		{"Empty string", ``},
+		{"Missing serial", `{"uuid":1,"config":{}}`},
+		{"Missing uuid", `{"serial":"123","config":{}}`},
+	}
+
+	for _, tc := range invalidPayloads {
+		t.Run(tc.name, func(t *testing.T) {
+			var b bytes.Buffer
+			zw := zlib.NewWriter(&b)
+			zw.Write([]byte(tc.payload))
+			zw.Close()
+
+			badB64 := base64.StdEncoding.EncodeToString(b.Bytes())
+			req := CloudConfigureRequest{Serial: "123", UUID: 1, Compress64: badB64, CompressSz: uint32(len(tc.payload))}
+			err := req.Validate()
+			if err == nil {
+				t.Errorf("expected error for %s", tc.name)
+			}
+		})
+	}
 
 }
 

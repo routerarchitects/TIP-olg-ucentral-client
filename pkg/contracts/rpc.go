@@ -148,9 +148,20 @@ func (r *CloudConfigureRequest) Validate() error {
 			return errors.New("decompressed size does not match compress_sz")
 		}
 
-		var config map[string]json.RawMessage
-		if err := json.Unmarshal(bytesRead, &config); err != nil {
+		trimmed := bytes.TrimSpace(bytesRead)
+		if len(trimmed) == 0 || trimmed[0] != '{' {
 			return errors.New("decompressed payload must be a JSON configuration object")
+		}
+
+		var innerReq CloudConfigureRequest
+		if err := json.Unmarshal(trimmed, &innerReq); err != nil {
+			return errors.New("decompressed payload must be a JSON configuration object")
+		}
+		if innerReq.Compress64 != "" {
+			return errors.New("nested compression is not supported")
+		}
+		if err := innerReq.Validate(); err != nil {
+			return fmt.Errorf("invalid compressed configuration: %w", err)
 		}
 	}
 	return nil

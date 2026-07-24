@@ -519,7 +519,7 @@ TIP-olg-ucentral-client/
     // | Connected    | Connecting   | Rejected          | StateProtocolFailure  |
     // | Connected    | Connected    | Rejected          | StateProtocolFailure  |
     // | Connecting   | (Any)        | Accepted/Rejected | error (Impossible)    |
-    // | Connected    | (Any)        | Unknown/Verifying | error (Impossible)    |
+    // | Connected    | (Any)        | Unknown/Verifying | StateConnecting       |
     func DeriveConnectionState(cloud LinkState, nats LinkState, protocol ProtocolState) (ConnectionState, error)
 
     // Protocol State Lifecycle:

@@ -153,28 +153,28 @@ func TestTC_CON_006_ConfigureRequest(t *testing.T) {
 			wantError: false,
 		},
 		{
-			name:      "Valid compressed outer params",
-			req:       CloudConfigureRequest{Serial: "123", UUID: 1, Compress64: validB64, CompressSz: validSz},
+			name:      "Valid compressed payload",
+			req:       CloudConfigureRequest{Compress64: validB64, CompressSz: validSz},
 			wantError: false,
 		},
 		{
 			name:      "Both config and compress_64 present",
-			req:       CloudConfigureRequest{Serial: "123", UUID: 1, Config: []byte(`{}`), Compress64: validB64, CompressSz: validSz},
+			req:       CloudConfigureRequest{Config: []byte(`{}`), Compress64: validB64, CompressSz: validSz},
 			wantError: true,
 		},
 		{
 			name:      "Neither field present",
-			req:       CloudConfigureRequest{Serial: "123", UUID: 1},
+			req:       CloudConfigureRequest{},
 			wantError: true,
 		},
 		{
-			name:      "Missing compress_sz",
-			req:       CloudConfigureRequest{Serial: "123", UUID: 1, Compress64: validB64},
+			name:      "Missing compress_sz with compress_64",
+			req:       CloudConfigureRequest{Compress64: validB64},
 			wantError: true,
 		},
 		{
 			name:      "Missing compress_64",
-			req:       CloudConfigureRequest{Serial: "123", UUID: 1, CompressSz: validSz},
+			req:       CloudConfigureRequest{CompressSz: validSz},
 			wantError: true,
 		},
 		{
@@ -221,8 +221,6 @@ func TestTC_CON_007_CompressedConfigureRequest(t *testing.T) {
 
 	t.Run("Valid compressed config", func(t *testing.T) {
 		req := CloudConfigureRequest{
-			Serial:     "123",
-			UUID:       1,
 			Compress64: validB64,
 			CompressSz: uint32(len(validJSON)),
 		}
@@ -232,33 +230,33 @@ func TestTC_CON_007_CompressedConfigureRequest(t *testing.T) {
 		}
 	})
 
-	t.Run("Invalid base64", func(t *testing.T) {
-		req := CloudConfigureRequest{Serial: "123", UUID: 1, Compress64: "invalid base64!", CompressSz: 10}
+	t.Run("Invalid base64 payload", func(t *testing.T) {
+		req := CloudConfigureRequest{Compress64: "invalid base64!", CompressSz: 10}
 		err := req.Validate()
 		if err == nil {
 			t.Error("expected error for invalid base64")
 		}
 	})
 
-	t.Run("Invalid zlib", func(t *testing.T) {
+	t.Run("Invalid zlib payload", func(t *testing.T) {
 		invalidZlib := base64.StdEncoding.EncodeToString([]byte("not zlib data"))
-		req := CloudConfigureRequest{Serial: "123", UUID: 1, Compress64: invalidZlib, CompressSz: 10}
+		req := CloudConfigureRequest{Compress64: invalidZlib, CompressSz: 10}
 		err := req.Validate()
 		if err == nil {
 			t.Error("expected error for invalid zlib")
 		}
 	})
 
-	t.Run("Incorrect compress_sz", func(t *testing.T) {
-		req := CloudConfigureRequest{Serial: "123", UUID: 1, Compress64: validB64, CompressSz: 999}
+	t.Run("Decompressed size mismatch", func(t *testing.T) {
+		req := CloudConfigureRequest{Compress64: validB64, CompressSz: 999}
 		err := req.Validate()
 		if err == nil {
 			t.Error("expected error for incorrect compress_sz")
 		}
 	})
 
-	t.Run("Exceeds 10MB limit", func(t *testing.T) {
-		req := CloudConfigureRequest{Serial: "123", UUID: 1, Compress64: validB64, CompressSz: 11 * 1024 * 1024}
+	t.Run("Decompressed size exceeds 10MB limit", func(t *testing.T) {
+		req := CloudConfigureRequest{Compress64: validB64, CompressSz: 11 * 1024 * 1024}
 		err := req.Validate()
 		if err == nil {
 			t.Error("expected error for size exceeding 10MB limit")
@@ -272,8 +270,10 @@ func TestTC_CON_007_CompressedConfigureRequest(t *testing.T) {
 		zwBad.Write([]byte(invalidJSON))
 		zwBad.Close()
 
+		// Encode to base64
 		badB64 := base64.StdEncoding.EncodeToString(bad.Bytes())
-		req := CloudConfigureRequest{Serial: "123", UUID: 1, Compress64: badB64, CompressSz: uint32(len(invalidJSON))}
+
+		req := CloudConfigureRequest{Compress64: badB64, CompressSz: uint32(len(invalidJSON))}
 		err := req.Validate()
 		if err == nil {
 			t.Error("expected error for invalid inner JSON")
@@ -301,8 +301,10 @@ func TestTC_CON_007_CompressedConfigureRequest(t *testing.T) {
 			zw.Write([]byte(tc.payload))
 			zw.Close()
 
+			// Encode to base64
 			badB64 := base64.StdEncoding.EncodeToString(b.Bytes())
-			req := CloudConfigureRequest{Serial: "123", UUID: 1, Compress64: badB64, CompressSz: uint32(len(tc.payload))}
+
+			req := CloudConfigureRequest{Compress64: badB64, CompressSz: uint32(len(tc.payload))}
 			err := req.Validate()
 			if err == nil {
 				t.Errorf("expected error for %s", tc.name)
@@ -711,13 +713,15 @@ func TestJSONRPCResponse_Validate(t *testing.T) {
 		res     JSONRPCResponse
 		wantErr bool
 	}{
-		{"Valid result", JSONRPCResponse{JSONRPC: "2.0", Result: []byte(`{"status": "ok"}`)}, false},
-		{"Valid error", JSONRPCResponse{JSONRPC: "2.0", Error: &JSONRPCError{Code: 1, Message: "err"}}, false},
-		{"Invalid version", JSONRPCResponse{JSONRPC: "1.0", Result: []byte(`{}`)}, true},
-		{"Missing version", JSONRPCResponse{Result: []byte(`{}`)}, true},
-		{"Both result and error", JSONRPCResponse{JSONRPC: "2.0", Result: []byte(`{}`), Error: &JSONRPCError{}}, true},
-		{"Neither result nor error", JSONRPCResponse{JSONRPC: "2.0"}, true},
-		{"Null result", JSONRPCResponse{JSONRPC: "2.0", Result: []byte(`null`)}, true},
+		{"Valid result string ID", JSONRPCResponse{JSONRPC: "2.0", Result: []byte(`{"status": "ok"}`), ID: []byte(`"req-1"`)}, false},
+		{"Valid result numeric ID", JSONRPCResponse{JSONRPC: "2.0", Result: []byte(`{"status": "ok"}`), ID: []byte(`42`)}, false},
+		{"Valid error null ID", JSONRPCResponse{JSONRPC: "2.0", Error: &JSONRPCError{Code: 1, Message: "err"}, ID: []byte(`null`)}, false},
+		{"Invalid version", JSONRPCResponse{JSONRPC: "1.0", Result: []byte(`{}`), ID: []byte(`1`)}, true},
+		{"Missing version", JSONRPCResponse{Result: []byte(`{}`), ID: []byte(`1`)}, true},
+		{"Both result and error", JSONRPCResponse{JSONRPC: "2.0", Result: []byte(`{}`), Error: &JSONRPCError{}, ID: []byte(`1`)}, true},
+		{"Neither result nor error", JSONRPCResponse{JSONRPC: "2.0", ID: []byte(`1`)}, true},
+		{"Null result (Valid)", JSONRPCResponse{JSONRPC: "2.0", Result: []byte(`null`), ID: []byte(`1`)}, false},
+		{"Missing ID", JSONRPCResponse{JSONRPC: "2.0", Result: []byte(`{}`)}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -57,7 +57,7 @@ type JSONRPCResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
 	Result  json.RawMessage `json:"result,omitempty"`
 	Error   *JSONRPCError   `json:"error,omitempty"`
-	ID      json.RawMessage `json:"id,omitempty"`
+	ID      json.RawMessage `json:"id"`
 }
 
 // Validate ensures the JSONRPCResponse strictly follows JSON-RPC 2.0 invariants.
@@ -66,7 +66,7 @@ func (r *JSONRPCResponse) Validate() error {
 		return errors.New("invalid jsonrpc version, must be '2.0'")
 	}
 	
-	hasResult := r.Result != nil && len(r.Result) > 0 && string(r.Result) != "null"
+	hasResult := r.Result != nil && len(r.Result) > 0
 	hasError := r.Error != nil
 
 	if hasResult && hasError {
@@ -74,6 +74,9 @@ func (r *JSONRPCResponse) Validate() error {
 	}
 	if !hasResult && !hasError {
 		return errors.New("response must contain either result or error")
+	}
+	if r.ID == nil || len(r.ID) == 0 {
+		return errors.New("id must be included in the response")
 	}
 	return nil
 }
@@ -119,16 +122,6 @@ type CloudConfigureRequest struct {
 }
 
 func (r *CloudConfigureRequest) Validate() error {
-	if r.Serial == "" {
-		return errors.New("serial is required")
-	}
-	if r.UUID <= 0 {
-		return errors.New("uuid must be greater than zero")
-	}
-	if r.When != 0 {
-		return errors.New("when must be zero for configure")
-	}
-
 	hasConfig := len(r.Config) > 0 && string(r.Config) != "null"
 	hasCompress := r.Compress64 != "" || r.CompressSz > 0
 
@@ -137,6 +130,22 @@ func (r *CloudConfigureRequest) Validate() error {
 	}
 	if !hasConfig && !hasCompress {
 		return errors.New("must provide either config or compress_64")
+	}
+
+	if hasCompress {
+		if r.Serial != "" || r.UUID != 0 || r.When != 0 {
+			return errors.New("outer compressed request must not contain serial, uuid, or when")
+		}
+	} else {
+		if r.Serial == "" {
+			return errors.New("serial is required")
+		}
+		if r.UUID <= 0 {
+			return errors.New("uuid must be greater than zero")
+		}
+		if r.When != 0 {
+			return errors.New("when must be zero for configure")
+		}
 	}
 
 	if hasConfig {

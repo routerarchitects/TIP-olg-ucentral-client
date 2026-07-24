@@ -53,19 +53,33 @@ func (r *JSONRPCRequest) Validate() error {
 
 	if len(r.ID) > 0 {
 		trimmedID := bytes.TrimSpace(r.ID)
-
-		if !json.Valid(trimmedID) {
-			return errors.New("id must contain valid JSON")
-		}
-
-		switch trimmedID[0] {
-		case '{', '[':
-			return errors.New("id cannot be an object or array")
-		case 't', 'f':
-			return errors.New("id cannot be a boolean")
+		if len(trimmedID) > 0 {
+			if !json.Valid(trimmedID) {
+				return errors.New("id must contain valid JSON")
+			}
+			if bytes.Equal(trimmedID, []byte("null")) {
+				return errors.New("id cannot be null")
+			}
+			if trimmedID[0] == '{' || trimmedID[0] == '[' {
+				return errors.New("id cannot be an object or array")
+			}
+			if trimmedID[0] == 't' || trimmedID[0] == 'f' {
+				return errors.New("id cannot be a boolean")
+			}
+			if trimmedID[0] == '"' {
+				var id string
+				if err := json.Unmarshal(trimmedID, &id); err != nil || id == "" {
+					return errors.New("id cannot be an empty string")
+				}
+			} else {
+				// It must be a number if it is valid JSON and not object, array, bool, string, or null.
+				var id float64
+				if err := json.Unmarshal(trimmedID, &id); err != nil {
+					return errors.New("id must be a valid number without parsing issues")
+				}
+			}
 		}
 	}
-
 	if len(r.Params) > 0 {
 		trimmedParams := bytes.TrimSpace(r.Params)
 

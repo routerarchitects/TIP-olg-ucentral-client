@@ -140,8 +140,11 @@ func ValidateResultEnvelope(r *agentcore.ResultEnvelope) error {
 	if len(r.Payload) > 0 && !json.Valid(r.Payload) {
 		return errors.New("payload contains invalid JSON")
 	}
-	if r.CommandType == string(CommandConfigure) && r.UUID == "" {
-		return errors.New("uuid is required for configure results")
+	if r.CommandType == string(CommandConfigure) {
+		uuid, err := strconv.ParseInt(r.UUID, 10, 64)
+		if err != nil || uuid <= 0 {
+			return errors.New("uuid must be a positive int64 for configure results")
+		}
 	}
 	return nil
 }

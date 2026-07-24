@@ -244,6 +244,22 @@ func TestTC_CON_001_EnvelopeValidationBoundaries(t *testing.T) {
 		t.Error("Expected error for invalid JSON payload in ResultEnvelope")
 	}
 
+	invalidConfigResUUIDs := []string{"abc", "0", "-1", "9999999999999999999999999999"}
+	for _, badUUID := range invalidConfigResUUIDs {
+		badConfigRes := agentcore.ResultEnvelope{
+			Version:     "1.0",
+			RPCID:       "1",
+			Target:      "ap",
+			CommandType: "configure",
+			Result:      "success",
+			UUID:        badUUID,
+			Timestamp:   time.Now(),
+		}
+		if err := ValidateResultEnvelope(&badConfigRes); err == nil {
+			t.Errorf("Expected error for invalid configure ResultEnvelope UUID: %s", badUUID)
+		}
+	}
+
 	// ConfigureCommand Validation
 	zeroUUIDCmd := agentcore.ConfigureNotification{
 		Version:   "1.0",

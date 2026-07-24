@@ -124,6 +124,66 @@ func ValidateCommandPayload(command CommandType, action ActionType, payload json
 	return nil
 }
 
+// ValidateResultPayload verifies that the downstream agent's result payload
+// matches the expected shape of the corresponding cloud status structure.
+func ValidateResultPayload(command CommandType, action ActionType, payload json.RawMessage) error {
+	if len(payload) == 0 || string(bytes.TrimSpace(payload)) == "null" {
+		return nil // Payload is optional for many NATS command results.
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	// Note: We intentionally do NOT use DisallowUnknownFields() here to maintain
+	// permissive validation for forward compatibility, matching request payload behavior.
+
+	switch command {
+	case CommandConfigure:
+		var status CloudConfigureResultStatus
+		return decoder.Decode(&status)
+	case CommandReboot:
+		var status CloudRebootStatus
+		return decoder.Decode(&status)
+	case CommandScript:
+		var status CloudScriptStatus
+		return decoder.Decode(&status)
+	case CommandUpgrade:
+		var status CloudUpgradeStatus
+		return decoder.Decode(&status)
+	case CommandAction:
+		switch action {
+		case ActionFactory:
+			var status CloudFactoryStatus
+			return decoder.Decode(&status)
+		case ActionTelemetry:
+			var status CloudTelemetryStatus
+			return decoder.Decode(&status)
+		case ActionRTTY:
+			var status CloudRemoteAccessStatus
+			return decoder.Decode(&status)
+		case ActionCertupdate:
+			var status CloudCertupdateStatus
+			return decoder.Decode(&status)
+		case ActionReenroll:
+			var status CloudReenrollStatus
+			return decoder.Decode(&status)
+		case ActionLeds:
+			var status CloudLedsStatus
+			return decoder.Decode(&status)
+		case ActionTrace:
+			var status CloudTraceStatus
+			return decoder.Decode(&status)
+		case ActionPing:
+			// Ping does not use a status struct in the payload for NATS
+			return nil
+		default:
+			// If it's an action we don't strictly validate, allow it.
+			return nil
+		}
+	default:
+		// Other commands (like query) might not have payload validation defined yet.
+		return nil
+	}
+}
+
 type DeviceCapabilities struct {
 	Capabilities json.RawMessage `json:"capabilities"`
 	Firmware     string          `json:"firmware"`
@@ -162,5 +222,13 @@ func ValidateResultEnvelope(r *agentcore.ResultEnvelope) error {
 			return errors.New("uuid must be a positive int64 for configure results")
 		}
 	}
+
+	// For successful or error results that carry a payload, validate the shape.
+	// Some operations might not strictly mandate a payload on every error type depending on the Cloud,
+	// but the NATS contract generally expects the status block. We enforce shape matching here.
+	if err := ValidateResultPayload(CommandType(r.CommandType), ActionType(r.Action), r.Payload); err != nil {
+		return fmt.Errorf("invalid result payload for %q (action: %q): %w", r.CommandType, r.Action, err)
+	}
+
 	return nil
 }

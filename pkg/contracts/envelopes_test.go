@@ -244,6 +244,33 @@ func TestTC_CON_001_EnvelopeValidationBoundaries(t *testing.T) {
 		t.Error("Expected error for invalid JSON payload in ResultEnvelope")
 	}
 
+	invalidPayloadShapeRes := agentcore.ResultEnvelope{
+		Version:     "1.0",
+		RPCID:       "1",
+		Target:      "ap",
+		CommandType: "reboot",
+		Result:      "success",
+		Payload:     json.RawMessage(`"unexpected string"`),
+		Timestamp:   time.Now(),
+	}
+	if err := ValidateResultEnvelope(&invalidPayloadShapeRes); err == nil {
+		t.Error("Expected error for mismatched payload shape (string instead of struct) in ResultEnvelope")
+	}
+
+	invalidConfigShapeRes := agentcore.ResultEnvelope{
+		Version:     "1.0",
+		RPCID:       "1",
+		Target:      "ap",
+		CommandType: "configure",
+		UUID:        "123",
+		Result:      "success",
+		Payload:     json.RawMessage(`{"error": "string instead of int"}`),
+		Timestamp:   time.Now(),
+	}
+	if err := ValidateResultEnvelope(&invalidConfigShapeRes); err == nil {
+		t.Error("Expected error for mismatched field type in configure payload")
+	}
+
 	invalidConfigResUUIDs := []string{"abc", "0", "-1", "9999999999999999999999999999"}
 	for _, badUUID := range invalidConfigResUUIDs {
 		badConfigRes := agentcore.ResultEnvelope{

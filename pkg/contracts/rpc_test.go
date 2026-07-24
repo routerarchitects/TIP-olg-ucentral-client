@@ -385,9 +385,9 @@ func TestValidation_EdgeCases(t *testing.T) {
 	if err := upgReqBadUri.Validate(); err == nil {
 		t.Error("Expected error for malformed URI in Upgrade")
 	}
-	upgReqBadScheme := CloudUpgradeRequest{Serial: "123", URI: "ftp://example.com/fw.bin"}
-	if err := upgReqBadScheme.Validate(); err == nil {
-		t.Error("Expected error for non-http/https URI in Upgrade")
+	upgReqInvalidScheme := CloudUpgradeRequest{Serial: "123", URI: "http://example.com/fw.bin"}
+	if err := upgReqInvalidScheme.Validate(); err == nil {
+		t.Error("Expected error for non-https URI in Upgrade")
 	}
 	upgReqNonZeroWhen := CloudUpgradeRequest{Serial: "123", URI: "https://example.com/fw.bin", When: 1}
 	if err := upgReqNonZeroWhen.Validate(); err == nil {
@@ -444,7 +444,7 @@ func TestValidation_EdgeCases(t *testing.T) {
 	if err := scriptReqMissing.Validate(); err == nil {
 		t.Error("Expected error for missing script and uri")
 	}
-	scriptReqBoth := CloudScriptRequest{Serial: "1", Type: "shell", Script: "YQ==", URI: "http://example.com"}
+	scriptReqBoth := CloudScriptRequest{Serial: "1", Type: "shell", Script: "YQ==", URI: "https://example.com"}
 	if err := scriptReqBoth.Validate(); err == nil {
 		t.Error("Expected error for both script and uri")
 	}
@@ -461,9 +461,9 @@ func TestValidation_EdgeCases(t *testing.T) {
 	if err := scriptReqEmpty.Validate(); err == nil {
 		t.Error("Expected error for empty Script")
 	}
-	scriptReqBadScheme := CloudScriptRequest{Serial: "1", Type: "shell", URI: "ftp://example.com/script.sh"}
-	if err := scriptReqBadScheme.Validate(); err == nil {
-		t.Error("Expected error for non-http/https URI in Script")
+	scriptReqInvalidScheme := CloudScriptRequest{Serial: "1", Type: "shell", URI: "http://example.com/script.sh"}
+	if err := scriptReqInvalidScheme.Validate(); err == nil {
+		t.Error("Expected error for non-https URI in Script")
 	}
 
 	// Unknown scriptId rejection test
@@ -519,9 +519,9 @@ func TestValidation_EdgeCases(t *testing.T) {
 	if err := traceBadUri.Validate(); err == nil {
 		t.Error("Expected error for malformed URI in Trace")
 	}
-	traceBadScheme := CloudTraceRequest{Serial: "1", URI: "ftp://example.com/output"}
-	if err := traceBadScheme.Validate(); err == nil {
-		t.Error("Expected error for non-http/https URI in Trace")
+	traceReqInvalidScheme := CloudTraceRequest{Serial: "1", Network: "up", URI: "http://example.com/trace.pcap"}
+	if err := traceReqInvalidScheme.Validate(); err == nil {
+		t.Error("Expected error for non-https URI in Trace")
 	}
 	traceFileScheme := CloudTraceRequest{Serial: "1", URI: "file:///etc/passwd"}
 	if err := traceFileScheme.Validate(); err == nil {

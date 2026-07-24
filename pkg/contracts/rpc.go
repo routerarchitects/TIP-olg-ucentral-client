@@ -53,25 +53,33 @@ func (r *JSONRPCRequest) Validate() error {
 
 	if len(r.ID) > 0 {
 		trimmedID := bytes.TrimSpace(r.ID)
-		if len(trimmedID) > 0 {
-			if trimmedID[0] == '{' || trimmedID[0] == '[' {
-				return errors.New("id cannot be an object or array")
-			}
-			if trimmedID[0] == 't' || trimmedID[0] == 'f' {
-				return errors.New("id cannot be a boolean")
-			}
+
+		if !json.Valid(trimmedID) {
+			return errors.New("id must contain valid JSON")
+		}
+
+		switch trimmedID[0] {
+		case '{', '[':
+			return errors.New("id cannot be an object or array")
+		case 't', 'f':
+			return errors.New("id cannot be a boolean")
 		}
 	}
 
-	if len(r.Params) > 0 && string(r.Params) != "null" {
+	if len(r.Params) > 0 {
 		trimmedParams := bytes.TrimSpace(r.Params)
-		if len(trimmedParams) > 0 {
-			if trimmedParams[0] != '{' && trimmedParams[0] != '[' {
-				return errors.New("params must be an object or array")
-			}
+
+		if !json.Valid(trimmedParams) {
+			return errors.New("params must contain valid JSON")
 		}
-	} else if string(r.Params) == "null" {
-		return errors.New("params must be an object or array if present, not null")
+
+		if bytes.Equal(trimmedParams, []byte("null")) {
+			return errors.New("params must be an object or array if present, not null")
+		}
+
+		if trimmedParams[0] != '{' && trimmedParams[0] != '[' {
+			return errors.New("params must be an object or array")
+		}
 	}
 
 	return nil

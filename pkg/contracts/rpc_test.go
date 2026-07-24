@@ -710,6 +710,8 @@ func TestJSONRPCRequest_Validate(t *testing.T) {
 		{"Invalid version", JSONRPCRequest{JSONRPC: "1.0", Method: "ping"}, true},
 		{"Missing version", JSONRPCRequest{Method: "ping"}, true},
 		{"Missing method", JSONRPCRequest{JSONRPC: "2.0"}, true},
+		{"Invalid request malformed ID", JSONRPCRequest{JSONRPC: "2.0", Method: "ping", ID: []byte(`"unterminated`)}, true},
+		{"Invalid request malformed Params", JSONRPCRequest{JSONRPC: "2.0", Method: "ping", Params: []byte(`{"serial":`)}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

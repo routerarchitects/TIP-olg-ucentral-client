@@ -50,6 +50,16 @@ func (r *JSONRPCRequest) Validate() error {
 	if r.Method == "" {
 		return errors.New("method must be specified")
 	}
+	
+	if len(r.ID) > 0 {
+		trimmedID := bytes.TrimSpace(r.ID)
+		if len(trimmedID) > 0 {
+			if trimmedID[0] == '{' || trimmedID[0] == '[' {
+				return errors.New("id cannot be an object or array")
+			}
+		}
+	}
+	
 	return nil
 }
 

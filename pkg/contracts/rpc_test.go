@@ -693,7 +693,12 @@ func TestJSONRPCRequest_Validate(t *testing.T) {
 		req     JSONRPCRequest
 		wantErr bool
 	}{
-		{"Valid request", JSONRPCRequest{JSONRPC: "2.0", Method: "ping"}, false},
+		{"Valid request absent ID", JSONRPCRequest{JSONRPC: "2.0", Method: "ping"}, false},
+		{"Valid request string ID", JSONRPCRequest{JSONRPC: "2.0", Method: "ping", ID: []byte(`"123"`)}, false},
+		{"Valid request number ID", JSONRPCRequest{JSONRPC: "2.0", Method: "ping", ID: []byte(`42`)}, false},
+		{"Valid request null ID", JSONRPCRequest{JSONRPC: "2.0", Method: "ping", ID: []byte(`null`)}, false},
+		{"Invalid request object ID", JSONRPCRequest{JSONRPC: "2.0", Method: "ping", ID: []byte(`{"id": 1}`)}, true},
+		{"Invalid request array ID", JSONRPCRequest{JSONRPC: "2.0", Method: "ping", ID: []byte(`[1, 2]`)}, true},
 		{"Invalid version", JSONRPCRequest{JSONRPC: "1.0", Method: "ping"}, true},
 		{"Missing version", JSONRPCRequest{Method: "ping"}, true},
 		{"Missing method", JSONRPCRequest{JSONRPC: "2.0"}, true},

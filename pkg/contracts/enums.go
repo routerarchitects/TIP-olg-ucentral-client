@@ -165,7 +165,7 @@ func DeriveConnectionState(cloud LinkState, nats LinkState, protocol ProtocolSta
 		return "", fmt.Errorf("impossible state: cloud is %v, protocol is %v", cloud, protocol)
 	}
 	if cloud == LinkConnected && (protocol == ProtocolUnknown || protocol == ProtocolVerifying) {
-		return StateConnecting, nil
+		return "", fmt.Errorf("impossible state: cloud is %v, protocol is %v", cloud, protocol)
 	}
 
 	if cloud == LinkConnecting {

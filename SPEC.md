@@ -519,8 +519,14 @@ TIP-olg-ucentral-client/
     // | Connected    | Connecting   | Rejected          | StateProtocolFailure  |
     // | Connected    | Connected    | Rejected          | StateProtocolFailure  |
     // | Connecting   | (Any)        | Accepted/Rejected | error (Impossible)    |
-    // | Connected    | (Any)        | Unknown/Verifying | StateConnecting       |
+    // | Connected    | (Any)        | Unknown/Verifying | error (Impossible)    |
     func DeriveConnectionState(cloud LinkState, nats LinkState, protocol ProtocolState) (ConnectionState, error)
+
+    // Note on Impossible States:
+    // It is architecturally impossible for the Cloud link to be 'Connected' while the protocol
+    // is 'Unknown' or 'Verifying'. The Cloud LinkState MUST remain 'Connecting' while the WebSocket
+    // is open but the JSON-RPC negotiation is still verifying. It only transitions to 'Connected'
+    // AFTER a definitive JSON-RPC 'Accepted' or 'Rejected' response is received.
 
     // Protocol State Lifecycle:
     // Protocol state MUST be strictly scoped to a single Cloud session to prevent 

@@ -684,3 +684,46 @@ func TestValidation_PositiveCases(t *testing.T) {
 		t.Errorf("Expected script max timeout to be valid, got: %v", err)
 	}
 }
+
+func TestJSONRPCRequest_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		req     JSONRPCRequest
+		wantErr bool
+	}{
+		{"Valid request", JSONRPCRequest{JSONRPC: "2.0", Method: "ping"}, false},
+		{"Invalid version", JSONRPCRequest{JSONRPC: "1.0", Method: "ping"}, true},
+		{"Missing version", JSONRPCRequest{Method: "ping"}, true},
+		{"Missing method", JSONRPCRequest{JSONRPC: "2.0"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.req.Validate(); (err != nil) != tt.wantErr {
+				t.Errorf("JSONRPCRequest.Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestJSONRPCResponse_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		res     JSONRPCResponse
+		wantErr bool
+	}{
+		{"Valid result", JSONRPCResponse{JSONRPC: "2.0", Result: []byte(`{"status": "ok"}`)}, false},
+		{"Valid error", JSONRPCResponse{JSONRPC: "2.0", Error: &JSONRPCError{Code: 1, Message: "err"}}, false},
+		{"Invalid version", JSONRPCResponse{JSONRPC: "1.0", Result: []byte(`{}`)}, true},
+		{"Missing version", JSONRPCResponse{Result: []byte(`{}`)}, true},
+		{"Both result and error", JSONRPCResponse{JSONRPC: "2.0", Result: []byte(`{}`), Error: &JSONRPCError{}}, true},
+		{"Neither result nor error", JSONRPCResponse{JSONRPC: "2.0"}, true},
+		{"Null result", JSONRPCResponse{JSONRPC: "2.0", Result: []byte(`null`)}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.res.Validate(); (err != nil) != tt.wantErr {
+				t.Errorf("JSONRPCResponse.Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}

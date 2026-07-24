@@ -42,11 +42,40 @@ type JSONRPCRequest struct {
 	ID      json.RawMessage `json:"id,omitempty"`
 }
 
+// Validate ensures the JSONRPCRequest strictly follows JSON-RPC 2.0 invariants.
+func (r *JSONRPCRequest) Validate() error {
+	if r.JSONRPC != "2.0" {
+		return errors.New("invalid jsonrpc version, must be '2.0'")
+	}
+	if r.Method == "" {
+		return errors.New("method must be specified")
+	}
+	return nil
+}
+
 type JSONRPCResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
 	Result  json.RawMessage `json:"result,omitempty"`
 	Error   *JSONRPCError   `json:"error,omitempty"`
 	ID      json.RawMessage `json:"id,omitempty"`
+}
+
+// Validate ensures the JSONRPCResponse strictly follows JSON-RPC 2.0 invariants.
+func (r *JSONRPCResponse) Validate() error {
+	if r.JSONRPC != "2.0" {
+		return errors.New("invalid jsonrpc version, must be '2.0'")
+	}
+	
+	hasResult := r.Result != nil && len(r.Result) > 0 && string(r.Result) != "null"
+	hasError := r.Error != nil
+
+	if hasResult && hasError {
+		return errors.New("response cannot contain both result and error")
+	}
+	if !hasResult && !hasError {
+		return errors.New("response must contain either result or error")
+	}
+	return nil
 }
 
 type JSONRPCError struct {

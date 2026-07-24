@@ -49,7 +49,7 @@ func TestTC_CON_001_EnvelopeSerialization(t *testing.T) {
 			Target:      "ap-1",
 			CommandType: "upgrade",
 			Action:      "upgrade",
-			Payload:     json.RawMessage(`{}`),
+			Payload:     json.RawMessage(`{"serial": "ap-1", "uri": "https://downloads.example.com/firmware.bin"}`),
 			Timestamp:   time.Date(2023, 10, 1, 12, 0, 0, 0, time.UTC),
 		}
 
@@ -185,6 +185,17 @@ func TestTC_CON_001_EnvelopeValidationBoundaries(t *testing.T) {
 		t.Error("Expected error for invalid JSON payload in ActionCommand")
 	}
 
+	configureActionCmd := agentcore.ActionCommand{
+		Version:     "1.0",
+		RPCID:       "1",
+		Target:      "ap",
+		CommandType: "configure",
+		Timestamp:   time.Now(),
+	}
+	if err := ValidateActionCommand(&configureActionCmd); err == nil {
+		t.Error("Expected error for passing configure command to ActionCommand")
+	}
+
 	// ResultEnvelope Validation
 	missingCommandTypeRes := agentcore.ResultEnvelope{
 		Version:   "1.0",
@@ -245,6 +256,13 @@ func TestTC_CON_001_EnvelopeValidationBoundaries(t *testing.T) {
 	}
 	if err := ValidateConfigureNotification(&zeroUUIDCmd); err == nil {
 		t.Error("Expected error for missing UUID")
+	}
+	
+	missingKVBucketCmd := zeroUUIDCmd
+	missingKVBucketCmd.UUID = "123"
+	missingKVBucketCmd.KVBucket = ""
+	if err := ValidateConfigureNotification(&missingKVBucketCmd); err == nil {
+		t.Error("Expected error for missing KVBucket")
 	}
 
 	invalidUUIDs := []string{"abc", "-1", "0", "1.5"}

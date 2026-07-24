@@ -12,7 +12,7 @@ import (
 )
 
 func ValidateConfigureNotification(c *agentcore.ConfigureNotification) error {
-	if c.Version == "" || c.RPCID == "" || c.Target == "" || c.KVKey == "" || c.Timestamp.IsZero() {
+	if c.Version == "" || c.RPCID == "" || c.Target == "" || c.KVBucket == "" || c.KVKey == "" || c.Timestamp.IsZero() {
 		return errors.New("missing required fields in ConfigureNotification")
 	}
 	uuid, err := strconv.ParseInt(c.UUID, 10, 64)
@@ -22,8 +22,11 @@ func ValidateConfigureNotification(c *agentcore.ConfigureNotification) error {
 	return nil
 }
 
-// ValidateActionCommand enforces required envelope fields.
+// ValidateActionCommand strictly validates an incoming ActionCommand envelope.
 func ValidateActionCommand(c *agentcore.ActionCommand) error {
+	if CommandType(c.CommandType) == CommandConfigure {
+		return errors.New("command 'configure' must use ConfigureNotification envelope, not ActionCommand")
+	}
 	if c.Version == "" || c.RPCID == "" || c.Target == "" || c.Timestamp.IsZero() {
 		return errors.New("missing required fields in ActionCommand")
 	}

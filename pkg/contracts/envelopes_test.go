@@ -42,7 +42,7 @@ func TestTC_CON_001_EnvelopeSerialization(t *testing.T) {
 			}
 		}
 
-		// Valid Upgrade Action with operation_id
+		// Valid Upgrade Action
 		validUpgrade := agentcore.ActionCommand{
 			Version:     "1.0",
 			RPCID:       "corr-upgrade",

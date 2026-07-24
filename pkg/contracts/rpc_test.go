@@ -409,6 +409,11 @@ func TestValidation_EdgeCases(t *testing.T) {
 	if err := certReq.Validate(); err == nil {
 		t.Error("Expected error for invalid base64 in Certupdate")
 	}
+
+	certReqEmptyNewline := CloudCertupdateRequest{Serial: "1", Certificates: "\n\r"}
+	if err := certReqEmptyNewline.Validate(); err == nil {
+		t.Error("Expected error for empty decoded payload in Certupdate")
+	}
 	largeDecoded := make([]byte, 2*1024*1024+1)
 	largeEncoded := base64.StdEncoding.EncodeToString(largeDecoded)
 	certReqLarge := CloudCertupdateRequest{Serial: "1", Certificates: largeEncoded}
@@ -446,6 +451,11 @@ func TestValidation_EdgeCases(t *testing.T) {
 	scriptReqInvalidB64 := CloudScriptRequest{Serial: "1", Type: "shell", Script: "invalid_base64!"}
 	if err := scriptReqInvalidB64.Validate(); err == nil {
 		t.Error("Expected error for invalid base64 script")
+	}
+
+	scriptReqEmptyNewline := CloudScriptRequest{Serial: "1", Type: "shell", Script: "\n\r"}
+	if err := scriptReqEmptyNewline.Validate(); err == nil {
+		t.Error("Expected error for empty decoded script")
 	}
 	scriptReqEmpty := CloudScriptRequest{}
 	if err := scriptReqEmpty.Validate(); err == nil {
@@ -739,6 +749,11 @@ func TestJSONRPCResponse_Validate(t *testing.T) {
 		{"Neither result nor error", JSONRPCResponse{JSONRPC: "2.0", ID: []byte(`1`)}, true},
 		{"Null result (Valid)", JSONRPCResponse{JSONRPC: "2.0", Result: []byte(`null`), ID: []byte(`1`)}, false},
 		{"Missing ID", JSONRPCResponse{JSONRPC: "2.0", Result: []byte(`{}`)}, true},
+		{"Invalid result broken JSON", JSONRPCResponse{JSONRPC: "2.0", Result: []byte(`{broken`), ID: []byte(`1`)}, true},
+		{"Invalid ID object", JSONRPCResponse{JSONRPC: "2.0", Result: []byte(`{}`), ID: []byte(`{}`)}, true},
+		{"Invalid ID empty string", JSONRPCResponse{JSONRPC: "2.0", Result: []byte(`{}`), ID: []byte(`""`)}, true},
+		{"Invalid ID boolean", JSONRPCResponse{JSONRPC: "2.0", Result: []byte(`{}`), ID: []byte(`true`)}, true},
+		{"Invalid ID null when result is present", JSONRPCResponse{JSONRPC: "2.0", Result: []byte(`{}`), ID: []byte(`null`)}, true}, // Though our helper allowNull is tied to the response itself having an error, wait, if allowNull=true for all responses... ah, the spec says response id must match request id, and if request id is null it matches. If we pass allowNull=true unconditionally, then null ID is always allowed in our Validate(). That is acceptable according to the JSON-RPC spec. Let's just test that {} and booleans fail.
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

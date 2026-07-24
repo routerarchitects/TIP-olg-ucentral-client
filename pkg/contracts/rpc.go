@@ -42,6 +42,43 @@ type JSONRPCRequest struct {
 	ID      json.RawMessage `json:"id,omitempty"`
 }
 
+func validateJSONRPCID(id json.RawMessage, allowNull bool) error {
+	trimmed := bytes.TrimSpace(id)
+	if len(trimmed) == 0 {
+		return nil // Missing or empty id implies no ID check if not required, but since we already check length > 0 before calling, this is just a safety. Wait, actually we shouldn't pass it if it's empty, or we should handle it.
+	}
+
+	if !json.Valid(trimmed) {
+		return errors.New("id must contain valid JSON")
+	}
+
+	if bytes.Equal(trimmed, []byte("null")) {
+		if allowNull {
+			return nil
+		}
+		return errors.New("id cannot be null")
+	}
+
+	switch trimmed[0] {
+	case '{', '[':
+		return errors.New("id cannot be an object or array")
+	case 't', 'f':
+		return errors.New("id cannot be a boolean")
+	case '"':
+		var value string
+		if err := json.Unmarshal(trimmed, &value); err != nil || value == "" {
+			return errors.New("id cannot be an empty string")
+		}
+	default:
+		// It must be a number if it is valid JSON and not object, array, bool, string, or null.
+		var floatID float64
+		if err := json.Unmarshal(trimmed, &floatID); err != nil {
+			return errors.New("id must be a valid number without parsing issues")
+		}
+	}
+	return nil
+}
+
 // Validate ensures the JSONRPCRequest strictly follows JSON-RPC 2.0 invariants.
 func (r *JSONRPCRequest) Validate() error {
 	if r.JSONRPC != "2.0" {
@@ -52,32 +89,8 @@ func (r *JSONRPCRequest) Validate() error {
 	}
 
 	if len(r.ID) > 0 {
-		trimmedID := bytes.TrimSpace(r.ID)
-		if len(trimmedID) > 0 {
-			if !json.Valid(trimmedID) {
-				return errors.New("id must contain valid JSON")
-			}
-			if bytes.Equal(trimmedID, []byte("null")) {
-				return errors.New("id cannot be null")
-			}
-			if trimmedID[0] == '{' || trimmedID[0] == '[' {
-				return errors.New("id cannot be an object or array")
-			}
-			if trimmedID[0] == 't' || trimmedID[0] == 'f' {
-				return errors.New("id cannot be a boolean")
-			}
-			if trimmedID[0] == '"' {
-				var id string
-				if err := json.Unmarshal(trimmedID, &id); err != nil || id == "" {
-					return errors.New("id cannot be an empty string")
-				}
-			} else {
-				// It must be a number if it is valid JSON and not object, array, bool, string, or null.
-				var id float64
-				if err := json.Unmarshal(trimmedID, &id); err != nil {
-					return errors.New("id must be a valid number without parsing issues")
-				}
-			}
+		if err := validateJSONRPCID(r.ID, false); err != nil {
+			return err
 		}
 	}
 	if len(r.Params) > 0 {
@@ -111,9 +124,21 @@ func (r *JSONRPCResponse) Validate() error {
 	if r.JSONRPC != "2.0" {
 		return errors.New("invalid jsonrpc version, must be '2.0'")
 	}
+	if len(r.ID) == 0 {
+		return errors.New("id is required in JSON-RPC responses")
+	}
 
-	hasResult := r.Result != nil && len(r.Result) > 0
 	hasError := r.Error != nil
+
+	if err := validateJSONRPCID(r.ID, hasError); err != nil {
+		return err
+	}
+
+	hasResult := len(r.Result) > 0
+
+	if hasResult && !json.Valid(r.Result) {
+		return errors.New("result must contain valid JSON")
+	}
 
 	if hasResult && hasError {
 		return errors.New("response cannot contain both result and error")
@@ -588,6 +613,9 @@ func (r *CloudCertupdateRequest) Validate() error {
 	if err != nil {
 		return errors.New("certificates must be valid base64")
 	}
+	if len(bytesRead) == 0 {
+		return errors.New("certificates payload must not be empty")
+	}
 	if len(bytesRead) > 2*1024*1024 {
 		return errors.New("certificates exceed 2 MB decoded limit")
 	}
@@ -668,6 +696,9 @@ func (r *CloudScriptRequest) Validate() error {
 		bytesRead, err := io.ReadAll(limitReader)
 		if err != nil {
 			return errors.New("script must be valid base64")
+		}
+		if len(bytesRead) == 0 {
+			return errors.New("decoded script must not be empty")
 		}
 		if len(bytesRead) > 1024*1024 {
 			return errors.New("script exceeds 1 MB decoded limit")

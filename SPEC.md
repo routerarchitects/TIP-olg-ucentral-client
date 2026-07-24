@@ -92,7 +92,7 @@ TIP-olg-ucentral-client/
     	JSONRPC string          `json:"jsonrpc"`
     	Result  json.RawMessage `json:"result,omitempty"`
     	Error   *JSONRPCError   `json:"error,omitempty"`
-    	ID      json.RawMessage `json:"id,omitempty"`
+    	ID      json.RawMessage `json:"id"`
     }
 
     type JSONRPCError struct {
@@ -378,11 +378,11 @@ TIP-olg-ucentral-client/
 
     type ConfigureCommand struct {
         Version     string          `json:"version"`
-        CorrelationID string          `json:"correlation_id"`
+        RPCID string          `json:"rpc_id"`
         Target      string          `json:"target"`
-        UUID        int64          `json:"uuid"`
+        UUID        string          `json:"uuid"`
+        KVBucket    string          `json:"kv_bucket"`
         KVKey       string          `json:"kv_key"`
-        KVRevision  uint64          `json:"kv_revision"`
         Timestamp   string          `json:"timestamp"`
     }
 
@@ -390,8 +390,7 @@ TIP-olg-ucentral-client/
 
     type ActionCommand struct {
     	Version     string          `json:"version"`
-    	CorrelationID string          `json:"correlation_id"`
-    	OperationID string          `json:"operation_id,omitempty"`
+    	RPCID string          `json:"rpc_id"`
     	Target      string          `json:"target"`
     	CommandType string          `json:"command_type"`
     	Action      string          `json:"action"`
@@ -399,7 +398,10 @@ TIP-olg-ucentral-client/
     	Timestamp   string          `json:"timestamp"`
     }
 
-    // Validate enforces that all required fields are present. If Action == "upgrade", OperationID must be non-empty.
+    // Validate enforces that all required fields are present.
+    // The shared agentcore NATS envelopes do not carry operation_id.
+    // Upgrade operation identity is maintained locally in OperationStore.
+    // Generic downstream upgrade status is correlated with the single locally active upgrade record.
     func (c *ActionCommand) Validate() error
 
 
@@ -411,8 +413,7 @@ TIP-olg-ucentral-client/
 
     type DeviceStatus struct {
     	Version     string          `json:"version"`
-    	CorrelationID string          `json:"correlation_id,omitempty"`
-    	OperationID string          `json:"operation_id,omitempty"` // Identifies the long-running async operation
+    	RPCID string          `json:"rpc_id,omitempty"`
     	Target      string          `json:"target"`
     	Operation string          `json:"operation,omitempty"`
     	Active    bool            `json:"active,omitempty"`
@@ -421,17 +422,15 @@ TIP-olg-ucentral-client/
     	Message   string          `json:"message,omitempty"`
     	Timestamp   string          `json:"timestamp"`
     }
-    // Note: If a response relates to a specific upgrade operation, OperationID must be non-empty, even if it is a terminal state (Active=false). A response with Active=true and an empty OperationID is invalid and must trigger the indeterminate recovery behavior defined by REQ-011.
 
     type ResultEnvelope struct {
     	Version     string          `json:"version"`
-    	CorrelationID string          `json:"correlation_id"`
+    	RPCID string          `json:"rpc_id"`
     	Target      string          `json:"target"`
     	CommandType string          `json:"command_type"`
-    	OperationID string          `json:"operation_id,omitempty"` // Mandatory for upgrade results
-    	UUID        int64          `json:"uuid,omitempty"` // Omitted for Action
+    	UUID        string          `json:"uuid,omitempty"` // Omitted for Action
     	Result      ResultType      `json:"result"`
-    	Message     string          `json:"message"`
+    	Message     string          `json:"message,omitempty"` // Optional. If omitted, implies no additional context beyond the result state.
     	Payload     json.RawMessage `json:"payload,omitempty"` // Command-specific data (e.g. latency, result_64)
     	Timestamp   string          `json:"timestamp"`
     }
@@ -440,7 +439,7 @@ TIP-olg-ucentral-client/
 
     type CloudCapabilitiesQuery struct {
     	Version       string `json:"version"`
-    	CorrelationID string `json:"correlation_id"`
+    	RPCID string `json:"rpc_id"`
     	Target        string `json:"target"`
     	CommandType   string `json:"command_type"`
     	Action        string `json:"action"`
@@ -449,14 +448,12 @@ TIP-olg-ucentral-client/
 
     type CloudDeviceStatusQuery struct {
     	Version       string `json:"version"`
-    	CorrelationID string `json:"correlation_id"`
-    	OperationID   string `json:"operation_id,omitempty"`
+    	RPCID string `json:"rpc_id"`
     	Target        string `json:"target"`
     	CommandType   string `json:"command_type"`
     	Action        string `json:"action"`
     	Timestamp     string `json:"timestamp"`
     }
-    // Note: For upgrade results, operation_id is mandatory. For non-upgrade commands, operation_id may be omitted.
     ```
 
 *   **Enums (`pkg/contracts/enums.go`):**
@@ -525,6 +522,12 @@ TIP-olg-ucentral-client/
     // | Connecting   | (Any)        | Accepted/Rejected | error (Impossible)    |
     // | Connected    | (Any)        | Unknown/Verifying | error (Impossible)    |
     func DeriveConnectionState(cloud LinkState, nats LinkState, protocol ProtocolState) (ConnectionState, error)
+
+    // Note on Impossible States:
+    // It is architecturally impossible for the Cloud link to be 'Connected' while the protocol
+    // is 'Unknown' or 'Verifying'. The Cloud LinkState MUST remain 'Connecting' while the WebSocket
+    // is open but the JSON-RPC negotiation is still verifying. It only transitions to 'Connected'
+    // AFTER a definitive JSON-RPC 'Accepted' or 'Rejected' response is received.
 
     // Protocol State Lifecycle:
     // Protocol state MUST be strictly scoped to a single Cloud session to prevent 
@@ -753,16 +756,16 @@ TIP-olg-ucentral-client/
 
 **Command Result Queue Lifecycle & Ownership Rules:**
 *   **Ownership:** The queue is populated (`Push`) by the asynchronous NATS Subscriber goroutines. It is consumed (`Pop`) exclusively by a dedicated Request Manager processing loop. The Request Manager must correlate the NATS result, transition the transaction state, release any held locks, cache the final response, and then push the finalized JSON-RPC response payload into the Priority 0 Outbound Scheduler.
-* **Overflow Policy (Exceptional Local Delivery Failure):** Before attempting to enqueue a command result, the NATS subscriber must decode the existing `ResultEnvelope` sufficiently to obtain its `correlation_id`, command type, and subject context. It then calls `CommandResultQueue.Push(payload)`.
+* **Overflow Policy (Exceptional Local Delivery Failure):** Before attempting to enqueue a command result, the NATS subscriber must decode the existing `ResultEnvelope` sufficiently to obtain its `rpc_id`, command type, and subject context. It then calls `CommandResultQueue.Push(payload)`.
 
-If `Push()` returns `ErrQueueFull`, the subscriber must not silently discard the correlated result or wait for the transaction timeout. Using the already-extracted `correlation_id`, it must:
+If `Push()` returns `ErrQueueFull`, the subscriber must not silently discard the correlated result or wait for the transaction timeout. Using the already-extracted `rpc_id`, it must:
 1. Record the `command_result_overflow` metric.
 2. Log the correlation ID, command type, and NATS subject.
 3. Pass the exact, original JSON response payload into the normal `RequestManager.Complete()` or `Fail()` methods to finalize the transaction according to the true device outcome.
 
 The Request Manager MUST NOT rewrite the transaction state to Failed and MUST NOT cache a generated `-32603` failure. The exact original downstream response remains preserved in the `TransactionCache` under the original Cloud session key. It must not be automatically replayed to a newly connected Cloud session merely because that session reuses the same JSON-RPC ID. Cross-session recovery requires an explicit status query, `operation_id`, or another defined recovery mechanism.
 
-If the result payload cannot be decoded or its `correlation_id` does not match an active transaction, it may be discarded only after logging and metric emission.
+If the result payload cannot be decoded or its `rpc_id` does not match an active transaction, it may be discarded only after logging and metric emission.
 *   **Telemetry and Log Throttling (Activation & Release):** The Main loop polls `Utilization()` before processing telemetry or standard logs.
     *   **Activation:** If `Utilization() >= 0.90` (90% capacity, e.g., 45/50 items), the daemon engages throttling, pausing all reads of both telemetry and standard logs from the `TelemetryRingBuffer` (which is shared by both streams).
     *   **Release:** Throttling remains engaged until `Utilization() <= 0.50` (queue drops to 50% capacity), creating a hysteresis loop to prevent rapid toggling, at which point telemetry and log forwarding resumes.
@@ -811,7 +814,7 @@ If the result payload cannot be decoded or its `correlation_id` does not match a
     )
 
     type Transaction struct {
-    	CorrelationID    string
+    	RPCID    string
     	CloudSessionID   string
     	CloudRPCID       json.RawMessage
     	RequestKey       string // sessionID:method:canonicalID (e.g. "session-uuid:configure:number:42")
@@ -830,25 +833,25 @@ If the result payload cannot be decoded or its `correlation_id` does not match a
     // the transaction still exists, and the transaction is still in TxPendingPublish state
     // before calling NATS Publish.
     type DispatchItem struct {
-    	CorrelationID string
+    	RPCID string
     	Payload       []byte
     }
 
     type DefaultRequestManager struct {
     	mu                          sync.Mutex
     	dispatchTimeout             time.Duration           // Bounded deadline for TxPreparingDispatch and TxPendingPublish (from OLG_TIMEOUT_DISPATCH)
-    	transactionsByCorrelationID map[string]*Transaction // Key: CorrelationID
-    	activeCloudRequests         map[string]string       // Key: RequestKey, Value: CorrelationID
+    	transactionsByRPCID map[string]*Transaction // Key: RPCID
+    	activeCloudRequests         map[string]string       // Key: RequestKey, Value: RPCID
     	stateLock                   sync.Mutex              // Enforces serialized state-changing commands
-    	activeStateTx               string                  // CorrelationID or OperationID holding the state lock
+    	activeStateTx               string                  // RPCID or OperationID holding the state lock
     	cache                       *TransactionCache
     	cacheTTLConfig              CacheTTLConfig
     	scheduler                   *PriorityScheduler
     	store                       OperationStore
-    	pendingReplies              map[string][]byte       // Key: CorrelationID
+    	pendingReplies              map[string][]byte       // Key: RPCID
     }
 
-    // CanonicalRequestKey formats the session ID, method, and raw JSON-RPC ID into a strongly-typed string (e.g., "session-uuid:configure:number:42")
+    // CanonicalRequestKey formats the session ID, method, and raw JSON-RPC ID into a strongly-typed string (e.g., "session-uuid:configure:number:42", or "session-uuid:notification:<generated-uuid>" for notifications)
     // to strictly prevent collisions across methods, numeric/string IDs, and different Cloud sessions. This key MUST be used by
     // activeCloudRequests, TransactionCache, duplicate-active detection, and completed-response replay.
     func CanonicalRequestKey(sessionID string, method string, id json.RawMessage) (string, error)
@@ -872,9 +875,9 @@ If the result payload cannot be decoded or its `correlation_id` does not match a
     // atomically verify the transaction identity and transition it to Failed if it expires before MarkInFlight is called.
     func (m *DefaultRequestManager) CreateTransaction(sessionID string, cloudRPCID json.RawMessage, respondToCloud bool, method string, timeout time.Duration, isStateChanging bool) (*Transaction, error)
     // MarkPreparingDispatch transitions the transaction from TxCreated to TxPreparingDispatch.
-    func (m *DefaultRequestManager) MarkPreparingDispatch(correlationID string) error
+    func (m *DefaultRequestManager) MarkPreparingDispatch(rpcID string) error
     // MarkPendingPublish transitions the transaction from TxPreparingDispatch to TxPendingPublish.
-    func (m *DefaultRequestManager) MarkPendingPublish(correlationID string) error
+    func (m *DefaultRequestManager) MarkPendingPublish(rpcID string) error
     // MarkInFlight is the final step of action dispatch. The dispatch sequence MUST be:
     // (1) Create/register transaction, (2) Install/register NATS reply inbox subscription,
     // (3) Prepare NATS command, (4) Publish to NATS successfully, (5) Call MarkInFlight.
@@ -883,27 +886,27 @@ If the result payload cannot be decoded or its `correlation_id` does not match a
     // Timeout is invalid in TxCreated, TxPreparingDispatch, and TxPendingPublish.
     // If a fast reply was buffered in pendingReplies during TxPendingPublish, MarkInFlight MUST immediately submit it to 
     // the terminal processing sequence after safely entering TxInFlight.
-    func (m *DefaultRequestManager) MarkInFlight(correlationID string) error
+    func (m *DefaultRequestManager) MarkInFlight(rpcID string) error
     // Terminal methods (Complete, Fail, Timeout) perform terminal processing as an atomic logical sequence:
     // (1) Acquire the Request Manager mutex. Evaluate transition legality. If already terminal, return ErrAlreadyTerminal (an expected race).
     // (1b) If the transaction is in TxPendingPublish, store the response in pendingReplies, return nil, and DO NOT proceed.
     // (2) Immediately mark the transaction state as terminal to win the race.
     // (3) Translate the downstream result and build the exact final Cloud response.
     // (4) Store the response in TransactionCache (only if RespondToCloud=true and RequestKey is valid), determining the correct TTL by calling `m.cacheTTLConfig.TTLForMethod(transaction.Method)`.
-    // (5) Remove active indexes (activeCloudRequests, transactionsByCorrelationID) and release the activeStateTx lock if held by this correlationID.
+    // (5) Remove active indexes (activeCloudRequests, transactionsByRPCID) and release the activeStateTx lock if held by this rpcID.
     // (6) Release the Request Manager mutex.
     // (7) Reserve/enqueue Priority-0 delivery of the cached response. If reservation fails, DO NOT alter the transaction state. The true device outcome must be preserved. Simply trigger path recovery.
     // These methods are concurrency-safe and may be invoked by the dedicated result-processing loop,
     // by a NATS subscriber, or by the timeout timer.
-    func (m *DefaultRequestManager) Complete(correlationID string, response []byte) error
+    func (m *DefaultRequestManager) Complete(rpcID string, response []byte) error
     // RespondAndRetain separates the synchronous JSON-RPC transaction from a persistent background operation (e.g. upgrade).
     // It MUST follow this sequence under the Request Manager mutex: (1) Validate the transaction is valid for retention (e.g. upgrade).
-    // (2) Persist the OperationStore record. (3) Transfer state-changing reservation ownership from CorrelationID to OperationID.
+    // (2) Persist the OperationStore record. (3) Transfer state-changing reservation ownership from RPCID to OperationID.
     // (4) Cancel the ordinary response timer. (5) Cache the initial "started" response. (6) Remove the JSON-RPC transaction from active maps and mark it completed. (7) Release mutex and enqueue response.
-    func (m *DefaultRequestManager) RespondAndRetain(correlationID string, response []byte) error
+    func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) error
 
-    func (m *DefaultRequestManager) Fail(correlationID string, errResponse []byte) error
-    func (m *DefaultRequestManager) Timeout(correlationID string) error
+    func (m *DefaultRequestManager) Fail(rpcID string, errResponse []byte) error
+    func (m *DefaultRequestManager) Timeout(rpcID string) error
 
 #### PR 3.2: Duplicate Attachment & Cache TTL
 *   **Target File:** `pkg/reqmgr/cache.go`, `pkg/reqmgr/store.go`, `pkg/reqmgr/manager.go` (extensions)
@@ -932,7 +935,7 @@ If the result payload cannot be decoded or its `correlation_id` does not match a
 
     type PersistentOperation struct {
     	OperationID string          `json:"operation_id"`
-    	CorrelationID string          `json:"correlation_id"`
+    	RPCID string          `json:"rpc_id"`
     	CloudRPCID    json.RawMessage `json:"cloud_rpc_id"`
     	Target      string          `json:"target"`
     	Action      string          `json:"action"`

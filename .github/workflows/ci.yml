@@ -1,0 +1,45 @@
+name: Go Continuous Integration
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+    branches: [ "RA-dev-main" ]
+
+jobs:
+  build-and-test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Verify Module Dependencies
+        run: |
+          go mod download
+          go mod verify
+
+      - name: Check Code Formatting
+        run: |
+          unformatted=$(find . -name "*.go" -not -path "*/vendor/*" -print0 | xargs -0 -r gofmt -l)
+          if [ -n "$unformatted" ]; then
+            echo "The following files are not formatted properly:"
+            echo "$unformatted"
+            echo "Please run 'gofmt -w .' on your local files."
+            exit 1
+          fi
+
+      - name: Run Unit Tests
+        run: go test -v -race -p=1 ./...
+
+      - name: Compile Code
+        run: go build -v ./...
+
+      # End of CI workflow

@@ -11,8 +11,14 @@ import (
 	"github.com/Telecominfraproject/olg-nats-agent-core/agentcore"
 )
 
+// EnvelopeVersion is the required wire protocol version for all NATS envelopes.
+const EnvelopeVersion = "1.0"
+
 func ValidateConfigureNotification(c *agentcore.ConfigureNotification) error {
-	if c.Version == "" || c.RPCID == "" || c.Target == "" || c.KVBucket == "" || c.KVKey == "" || c.Timestamp.IsZero() {
+	if c.Version != EnvelopeVersion {
+		return fmt.Errorf("unsupported envelope version: %q", c.Version)
+	}
+	if c.RPCID == "" || c.Target == "" || c.KVBucket == "" || c.KVKey == "" || c.Timestamp.IsZero() {
 		return errors.New("missing required fields in ConfigureNotification")
 	}
 	uuid, err := strconv.ParseInt(c.UUID, 10, 64)
@@ -27,7 +33,10 @@ func ValidateActionCommand(c *agentcore.ActionCommand) error {
 	if CommandType(c.CommandType) == CommandConfigure {
 		return errors.New("command 'configure' must use ConfigureNotification envelope, not ActionCommand")
 	}
-	if c.Version == "" || c.RPCID == "" || c.Target == "" || c.Timestamp.IsZero() {
+	if c.Version != EnvelopeVersion {
+		return fmt.Errorf("unsupported envelope version: %q", c.Version)
+	}
+	if c.RPCID == "" || c.Target == "" || c.Timestamp.IsZero() {
 		return errors.New("missing required fields in ActionCommand")
 	}
 	if !CommandType(c.CommandType).Valid() {
@@ -120,15 +129,22 @@ type DeviceCapabilities struct {
 	Firmware     string          `json:"firmware"`
 }
 
-func ValidateDeviceStatus(s *agentcore.StatusEnvelope) error {
-	if s.Version == "" || s.Target == "" || s.Status == "" || s.Timestamp.IsZero() {
+// ValidateStatusEnvelope verifies a StatusEnvelope is well-formed.
+func ValidateStatusEnvelope(s *agentcore.StatusEnvelope) error {
+	if s.Version != EnvelopeVersion {
+		return fmt.Errorf("unsupported envelope version: %q", s.Version)
+	}
+	if s.Target == "" || s.Status == "" || s.Timestamp.IsZero() {
 		return errors.New("missing required fields in StatusEnvelope")
 	}
 	return nil
 }
 
 func ValidateResultEnvelope(r *agentcore.ResultEnvelope) error {
-	if r.Version == "" || r.RPCID == "" || r.Target == "" || r.CommandType == "" || r.Result == "" || r.Timestamp.IsZero() {
+	if r.Version != EnvelopeVersion {
+		return fmt.Errorf("unsupported envelope version: %q", r.Version)
+	}
+	if r.RPCID == "" || r.Target == "" || r.CommandType == "" || r.Result == "" || r.Timestamp.IsZero() {
 		return errors.New("missing required fields in ResultEnvelope")
 	}
 	if !CommandType(r.CommandType).Valid() {

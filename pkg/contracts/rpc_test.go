@@ -742,7 +742,8 @@ func TestJSONRPCResponse_Validate(t *testing.T) {
 	}{
 		{"Valid result string ID", JSONRPCResponse{JSONRPC: "2.0", Result: []byte(`{"status": "ok"}`), ID: []byte(`"req-1"`)}, false},
 		{"Valid result numeric ID", JSONRPCResponse{JSONRPC: "2.0", Result: []byte(`{"status": "ok"}`), ID: []byte(`42`)}, false},
-		{"Valid error null ID", JSONRPCResponse{JSONRPC: "2.0", Error: &JSONRPCError{Code: 1, Message: "err"}, ID: []byte(`null`)}, false},
+		{"Valid error null ID (Parse Error)", JSONRPCResponse{JSONRPC: "2.0", Error: &JSONRPCError{Code: ErrParse, Message: "err"}, ID: []byte(`null`)}, false},
+		{"Invalid error null ID (Other Error)", JSONRPCResponse{JSONRPC: "2.0", Error: &JSONRPCError{Code: 1, Message: "err"}, ID: []byte(`null`)}, true},
 		{"Invalid version", JSONRPCResponse{JSONRPC: "1.0", Result: []byte(`{}`), ID: []byte(`1`)}, true},
 		{"Missing version", JSONRPCResponse{Result: []byte(`{}`), ID: []byte(`1`)}, true},
 		{"Both result and error", JSONRPCResponse{JSONRPC: "2.0", Result: []byte(`{}`), Error: &JSONRPCError{}, ID: []byte(`1`)}, true},

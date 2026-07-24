@@ -129,8 +129,9 @@ func (r *JSONRPCResponse) Validate() error {
 	}
 
 	hasError := r.Error != nil
+	allowNullID := hasError && (r.Error.Code == ErrParse || r.Error.Code == ErrInvalidRequest)
 
-	if err := validateJSONRPCID(r.ID, hasError); err != nil {
+	if err := validateJSONRPCID(r.ID, allowNullID); err != nil {
 		return err
 	}
 

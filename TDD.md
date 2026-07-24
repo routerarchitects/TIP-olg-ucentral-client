@@ -12,7 +12,7 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Setup:* Create instances of `ConfigureCommand`, `ActionCommand`, and `ResultEnvelope`.
     *   *Assert:* Marshalling to JSON must produce exact keys for each envelope type:
         *   `ActionCommand`: `version`, `rpc_id`, `target`, `command_type`, `action`, `payload`, `timestamp`. Must assert that if `payload` is nil, it is correctly omitted or formatted. Furthermore, envelope validation must check the upgrade payload, URI, command/action relationship, and required common fields. (Note: `operation_id` behavior is tested under `OperationStore` and Request Manager tests, not envelope serialization tests, as the shared agent-core fields do not contain it).
-        *   `ConfigureCommand`: `version`, `rpc_id`, `target`, `uuid`, `kv_key`, `timestamp`. Must assert that the raw `payload` is absent.
+        *   `ConfigureCommand`: `version`, `rpc_id`, `target`, `uuid`, `kv_bucket`, `kv_key`, `timestamp`. Must assert that the raw `payload` is absent.
         *   `ResultEnvelope`: `version`, `rpc_id`, `target`, `command_type`, `result`, `message`, `timestamp`. Verify payload is serialized for command-specific results such as script, certupdate, and ping, and omitted when empty. Additionally verify that `uuid` is serialized for configure operations, and omitted fields (like `operation_id`, which is not present in the envelope) are absent from the JSON.
 *   **TC-CON-002 (Error Mappings):**
     *   *Requirement Mapping:* `REQ-021` (JSON-RPC Error Mapping)
@@ -309,7 +309,7 @@ This document details the test plans, test cases, and verification strategies fo
 *   **TC-NET-003 (JetStream KV Revision Guard & Trigger Contract):**
     *   *Requirement Mapping:* `REQ-006` (JetStream KV Consistency Contract)
     *   *Setup:* Write config payload to JetStream KV. Retrieve the sequence revision and publish the `config.apply` NATS trigger. Intercept the serialized trigger. Then, simulate a downstream agent processing the trigger.
-    *   *Assert:* The intercepted trigger must contain `uuid`, `kv_key`, `target`, and `rpc_id` while strictly omitting the full configuration `payload`.
+    *   *Assert:* The intercepted trigger must contain `uuid`, `kv_bucket`, `kv_key`, `target`, and `rpc_id` while strictly omitting the full configuration `payload`.
 *   **TC-SEC-001 (Target Subject Isolation Constraints):**
     *   *Requirement Mapping:* `REQ-004` (Subject Schema Versioning), `REQ-016` (NATS Security & Target Isolation)
     *   *Setup:* Attempt to publish or subscribe to a subject with a different target serial (e.g. `ucentral.v1.device.different-serial.state`).

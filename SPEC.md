@@ -381,6 +381,7 @@ TIP-olg-ucentral-client/
         RPCID string          `json:"rpc_id"`
         Target      string          `json:"target"`
         UUID        string          `json:"uuid"`
+        KVBucket    string          `json:"kv_bucket"`
         KVKey       string          `json:"kv_key"`
         Timestamp   string          `json:"timestamp"`
     }

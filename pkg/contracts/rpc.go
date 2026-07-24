@@ -50,16 +50,30 @@ func (r *JSONRPCRequest) Validate() error {
 	if r.Method == "" {
 		return errors.New("method must be specified")
 	}
-	
+
 	if len(r.ID) > 0 {
 		trimmedID := bytes.TrimSpace(r.ID)
 		if len(trimmedID) > 0 {
 			if trimmedID[0] == '{' || trimmedID[0] == '[' {
 				return errors.New("id cannot be an object or array")
 			}
+			if trimmedID[0] == 't' || trimmedID[0] == 'f' {
+				return errors.New("id cannot be a boolean")
+			}
 		}
 	}
-	
+
+	if len(r.Params) > 0 && string(r.Params) != "null" {
+		trimmedParams := bytes.TrimSpace(r.Params)
+		if len(trimmedParams) > 0 {
+			if trimmedParams[0] != '{' && trimmedParams[0] != '[' {
+				return errors.New("params must be an object or array")
+			}
+		}
+	} else if string(r.Params) == "null" {
+		return errors.New("params must be an object or array if present, not null")
+	}
+
 	return nil
 }
 
@@ -75,7 +89,7 @@ func (r *JSONRPCResponse) Validate() error {
 	if r.JSONRPC != "2.0" {
 		return errors.New("invalid jsonrpc version, must be '2.0'")
 	}
-	
+
 	hasResult := r.Result != nil && len(r.Result) > 0
 	hasError := r.Error != nil
 

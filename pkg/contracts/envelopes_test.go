@@ -257,7 +257,7 @@ func TestTC_CON_001_EnvelopeValidationBoundaries(t *testing.T) {
 	if err := ValidateConfigureNotification(&zeroUUIDCmd); err == nil {
 		t.Error("Expected error for missing UUID")
 	}
-	
+
 	missingKVBucketCmd := zeroUUIDCmd
 	missingKVBucketCmd.UUID = "123"
 	missingKVBucketCmd.KVBucket = ""

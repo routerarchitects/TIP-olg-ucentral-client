@@ -92,7 +92,7 @@ TIP-olg-ucentral-client/
     	JSONRPC string          `json:"jsonrpc"`
     	Result  json.RawMessage `json:"result,omitempty"`
     	Error   *JSONRPCError   `json:"error,omitempty"`
-    	ID      json.RawMessage `json:"id,omitempty"`
+    	ID      json.RawMessage `json:"id"`
     }
 
     type JSONRPCError struct {

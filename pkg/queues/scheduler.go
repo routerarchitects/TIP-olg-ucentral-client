@@ -121,6 +121,7 @@ func (s *PriorityScheduler) Next(ctx context.Context) (OutboundMessage, error) {
 		// If both happen simultaneously, select exclusively picks one case.
 		// If <-ctx.Done() is picked, the close(ctxDone) executed later is harmless
 		// because the watcher has already safely exited. No deadlocks or leaks can occur.
+		s.consecutiveP0 = 0 // Reset starvation counter on idle
 		ctxDone := make(chan struct{})
 		go func() {
 			select {

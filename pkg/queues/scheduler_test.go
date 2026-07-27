@@ -3,6 +3,7 @@ package queues
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -243,30 +244,73 @@ func TestPriorityScheduler_InvalidEmergencyCapacity(t *testing.T) {
 func TestPriorityScheduler_ConcurrencyStress(t *testing.T) {
 	s := NewPriorityScheduler(100, 100)
 
-	// Launch 50 writers and 50 readers concurrently, aggressively
-	// cancelling contexts to trigger the select race condition.
-	done := make(chan struct{})
+	var wg sync.WaitGroup
+	errChan := make(chan error, 10000)
 
+	// Launch 50 writers and 50 readers concurrently
 	for i := 0; i < 50; i++ {
+		wg.Add(2) // 1 writer, 1 reader
+
+		// Writer
 		go func() {
+			defer wg.Done()
 			for j := 0; j < 100; j++ {
-				_ = s.Push(OutboundMessage{Priority: PriorityHigh})
+				err := s.Push(OutboundMessage{Priority: PriorityHigh})
+				if err != nil && err != ErrQueueFull {
+					errChan <- fmt.Errorf("unexpected push error: %w", err)
+				}
 				time.Sleep(1 * time.Millisecond) // Ensure context watchers have time to start
 			}
 		}()
 
+		// Reader
 		go func() {
+			defer wg.Done()
 			for j := 0; j < 100; j++ {
 				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Millisecond)
-				_, _ = s.Next(ctx)
+				_, err := s.Next(ctx)
 				cancel()
+				if err != nil && err != context.DeadlineExceeded && err != context.Canceled {
+					errChan <- fmt.Errorf("unexpected next error: %w", err)
+				}
 			}
-			done <- struct{}{}
 		}()
 	}
 
-	// Wait for readers to finish
-	for i := 0; i < 50; i++ {
-		<-done
+	// Wait for all goroutines to finish safely
+	wg.Wait()
+	close(errChan)
+
+	// Check for any unexpected errors
+	for err := range errChan {
+		t.Errorf("Concurrency error: %v", err)
 	}
 }
+
+func TestTCSCH005_AntiStarvationIdleReset(t *testing.T) {
+	s := NewPriorityScheduler(10, 100)
+	ctx := context.Background()
+
+	// 1. Hit the starvation threshold
+	for i := 0; i < 10; i++ {
+		s.Push(OutboundMessage{Priority: PriorityHighest})
+		_, _ = s.Next(ctx)
+	}
+
+	// 2. Simulate an idle queue by calling Next() with an instant timeout.
+	// It will check queues, find them empty, reset the counter, sleep, and immediately wake up due to timeout.
+	timeoutCtx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
+	_, _ = s.Next(timeoutCtx)
+	cancel()
+
+	// 3. Now push a P1 and a P0 concurrently.
+	s.Push(OutboundMessage{Priority: PriorityHigh})
+	s.Push(OutboundMessage{Priority: PriorityHighest})
+
+	// 4. Because the counter reset during the idle period, P0 should correctly win.
+	msg, _ := s.Next(ctx)
+	if msg.Priority != PriorityHighest {
+		t.Fatalf("expected P0 to win after idle reset, got %v", msg.Priority)
+	}
+}
+

@@ -88,6 +88,11 @@ func (s *PriorityScheduler) Next(ctx context.Context) (OutboundMessage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Register a cancellation callback to wake up the condition variable.
+	// Safety note: `stop()` does not block waiting for the callback to finish.
+	// If a successful dequeue races with context cancellation, `stop()` returns 
+	// immediately, and the deferred `s.mu.Unlock()` executes. The callback will 
+	// then acquire the lock and perform a harmless spurious Broadcast().
 	stop := context.AfterFunc(ctx, func() {
 		s.mu.Lock()
 		s.cond.Broadcast()

@@ -42,6 +42,7 @@ type PriorityScheduler struct {
 	capacity      int // maximum entries for Priority 1, 2, and 3
 	emergencyCap  int // maximum entries for the Priority 0 emergency queue
 	consecutiveP0 int
+	lastYield     Priority
 }
 
 func NewPriorityScheduler(capacity int, emergencyCap int) *PriorityScheduler {
@@ -122,8 +123,10 @@ func (s *PriorityScheduler) Next(ctx context.Context) (OutboundMessage, error) {
 // The caller must hold s.mu.
 func (s *PriorityScheduler) tryDequeue() (OutboundMessage, bool) {
 	if s.consecutiveP0 >= 10 {
-		// Anti-starvation: check queues 1, 2, 3
-		for p := PriorityHigh; p <= PriorityLow; p++ {
+		// Anti-starvation: round-robin check queues 1, 2, 3
+		for i := 1; i <= 3; i++ {
+			p := Priority(int(s.lastYield)%3 + 1)
+			s.lastYield = p
 			if len(s.queues[p]) > 0 {
 				msg := pop(&s.queues[p])
 				s.consecutiveP0 = 0

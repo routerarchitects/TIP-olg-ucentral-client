@@ -144,7 +144,7 @@ func TestTCSCH004_NonBlockingPriority1Overflow(t *testing.T) {
 func TestTCSCH005_AntiStarvationYieldLimit(t *testing.T) {
 	s := NewPriorityScheduler(10, 100)
 
-	// Pre-fill 30 P0, 1 P1, 1 P2, 1 P3
+	// Pre-fill 30 P0, 3 P1, 3 P2, 3 P3
 	for i := 0; i < 30; i++ {
 		err := s.Push(OutboundMessage{Priority: PriorityHighest})
 		if err != nil {
@@ -153,9 +153,11 @@ func TestTCSCH005_AntiStarvationYieldLimit(t *testing.T) {
 	}
 
 	for p := PriorityHigh; p <= PriorityLow; p++ {
-		err := s.Push(OutboundMessage{Priority: p})
-		if err != nil {
-			t.Fatalf("unexpected error pushing P%d: %v", p, err)
+		for i := 0; i < 3; i++ {
+			err := s.Push(OutboundMessage{Priority: p})
+			if err != nil {
+				t.Fatalf("unexpected error pushing P%d: %v", p, err)
+			}
 		}
 	}
 
@@ -336,12 +338,31 @@ func TestPriorityScheduler_ConcurrencyStress(t *testing.T) {
 	}
 }
 
+type barrierCtx struct {
+	context.Context
+	onDone chan struct{}
+}
+
+func (c *barrierCtx) Done() <-chan struct{} {
+	select {
+	case c.onDone <- struct{}{}:
+	default:
+	}
+	return c.Context.Done()
+}
+
 func TestPriorityScheduler_CancelledConsumerWakeupRace(t *testing.T) {
 	s := NewPriorityScheduler(10, 100)
 
 	for i := 0; i < 200; i++ {
-		ctxA, cancelA := context.WithCancel(context.Background())
-		ctxB, cancelB := context.WithCancel(context.Background())
+		baseCtxA, cancelA := context.WithCancel(context.Background())
+		baseCtxB, cancelB := context.WithCancel(context.Background())
+
+		barrierA := make(chan struct{}, 1)
+		barrierB := make(chan struct{}, 1)
+
+		ctxA := &barrierCtx{Context: baseCtxA, onDone: barrierA}
+		ctxB := &barrierCtx{Context: baseCtxB, onDone: barrierB}
 
 		aDone := make(chan error, 1)
 		go func() {
@@ -355,8 +376,13 @@ func TestPriorityScheduler_CancelledConsumerWakeupRace(t *testing.T) {
 			msgChan <- msg
 		}()
 
-		// 1. Confirm both consumers are blocked
-		time.Sleep(5 * time.Millisecond)
+		// 1. Confirm both consumers are blocked waiting for the queue
+		<-barrierA
+		<-barrierB
+
+		// Yield briefly to ensure s.cond.Wait() is fully entered after ctx.Done() is called
+		// (since ctx.Done() evaluation happens just before s.cond.Wait() in the loop)
+		time.Sleep(1 * time.Millisecond)
 
 		// 2. Ensure Consumer A’s context is cancelled just before the message is pushed.
 		// Note: This test verifies that Consumer B receives the message without a swallowed wakeup,

@@ -659,7 +659,8 @@ TIP-olg-ucentral-client/
     // - Next() blocks until a message is available or the context is canceled.
     //   Highest priority messages (0) are selected first, but to prevent starvation of lower priorities,
     //   a strict yield mechanism is enforced: after 10 consecutive Priority 0 messages are yielded, 
-    //   the scheduler must yield at least one available message from the next highest populated queue (1, 2, or 3).
+    //   the scheduler must yield at least one available message from the lower queues (1, 2, or 3) 
+    //   using a round-robin scan to prevent same-priority starvation among the lower queues.
     // - Context cancellation drives scheduler shutdown and unblocks waiting Next calls.
     type OutboundScheduler interface {
     	// Push transfers ownership only when it returns nil.

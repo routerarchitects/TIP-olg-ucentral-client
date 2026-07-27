@@ -359,7 +359,10 @@ func TestPriorityScheduler_CancelledConsumerWakeupRace(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 
 		// 2. Ensure Consumer A’s context is cancelled just before the message is pushed.
-		// If Push() uses Signal(), it has a high probability of waking A instead of B.
+		// Note: This test verifies that Consumer B receives the message without a swallowed wakeup,
+		// but it does not fully distinguish between Push() using Broadcast() vs Signal() because
+		// Consumer A's own context-watcher goroutine also calls Broadcast().
+		// We use Broadcast() in Push() as defense-in-depth against scheduling races.
 		cancelA()
 
 		err := s.Push(OutboundMessage{Priority: PriorityHigh, SessionID: "wakeup-test"})

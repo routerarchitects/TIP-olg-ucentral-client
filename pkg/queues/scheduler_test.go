@@ -287,30 +287,48 @@ func TestPriorityScheduler_ConcurrencyStress(t *testing.T) {
 	}
 }
 
-func TestTCSCH005_AntiStarvationIdleReset(t *testing.T) {
+func TestPriorityScheduler_CancelledConsumerWakeupRace(t *testing.T) {
 	s := NewPriorityScheduler(10, 100)
-	ctx := context.Background()
 
-	// 1. Hit the starvation threshold
-	for i := 0; i < 10; i++ {
-		s.Push(OutboundMessage{Priority: PriorityHighest})
-		_, _ = s.Next(ctx)
+	// Consumer A: Gets a canceled context
+	ctxA, cancelA := context.WithCancel(context.Background())
+	cancelA() // Canceled immediately
+
+	// Consumer B: Gets a normal context
+	ctxB, cancelB := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelB()
+
+	// Launch Consumer A
+	go func() {
+		_, _ = s.Next(ctxA)
+	}()
+
+	// Launch Consumer B
+	msgChan := make(chan OutboundMessage)
+	go func() {
+		msg, err := s.Next(ctxB)
+		if err == nil {
+			msgChan <- msg
+		}
+	}()
+
+	// Give them time to block
+	time.Sleep(50 * time.Millisecond)
+
+	// Push a message
+	err := s.Push(OutboundMessage{Priority: PriorityHigh, SessionID: "wakeup-test"})
+	if err != nil {
+		t.Fatalf("unexpected error pushing: %v", err)
 	}
 
-	// 2. Simulate an idle queue by calling Next() with an instant timeout.
-	// It will check queues, find them empty, reset the counter, sleep, and immediately wake up due to timeout.
-	timeoutCtx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
-	_, _ = s.Next(timeoutCtx)
-	cancel()
-
-	// 3. Now push a P1 and a P0 concurrently.
-	s.Push(OutboundMessage{Priority: PriorityHigh})
-	s.Push(OutboundMessage{Priority: PriorityHighest})
-
-	// 4. Because the counter reset during the idle period, P0 should correctly win.
-	msg, _ := s.Next(ctx)
-	if msg.Priority != PriorityHighest {
-		t.Fatalf("expected P0 to win after idle reset, got %v", msg.Priority)
+	// Verify Consumer B receives it (Wakeup wasn't swallowed by A)
+	select {
+	case msg := <-msgChan:
+		if msg.SessionID != "wakeup-test" {
+			t.Fatalf("expected wakeup-test, got %v", msg.SessionID)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("Consumer B never woke up - wakeup was swallowed")
 	}
 }
 

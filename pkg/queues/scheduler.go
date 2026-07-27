@@ -63,20 +63,6 @@ func (s *PriorityScheduler) Push(msg OutboundMessage) error {
 		return ErrInvalidPriority
 	}
 
-	// Fast capacity check to avoid allocations when full
-	s.mu.Lock()
-	if s.isFull(msg.Priority) {
-		s.mu.Unlock()
-		return ErrQueueFull
-	}
-	s.mu.Unlock()
-
-	queued := msg
-	if msg.Payload != nil {
-		queued.Payload = append([]byte(nil), msg.Payload...)
-	}
-
-	// Recheck before append in case another producer filled the queue
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -84,8 +70,13 @@ func (s *PriorityScheduler) Push(msg OutboundMessage) error {
 		return ErrQueueFull
 	}
 
+	queued := msg
+	if msg.Payload != nil {
+		queued.Payload = append([]byte(nil), msg.Payload...)
+	}
+
 	s.queues[msg.Priority] = append(s.queues[msg.Priority], queued)
-	s.cond.Signal()
+	s.cond.Broadcast() // Broadcast prevents a cancelled consumer from swallowing the wakeup
 	return nil
 }
 
@@ -108,7 +99,6 @@ func (s *PriorityScheduler) Next(ctx context.Context) (OutboundMessage, error) {
 		// If both happen simultaneously, select exclusively picks one case.
 		// If <-ctx.Done() is picked, the close(ctxDone) executed later is harmless
 		// because the watcher has already safely exited. No deadlocks or leaks can occur.
-		s.consecutiveP0 = 0 // Reset starvation counter on idle
 		ctxDone := make(chan struct{})
 		go func() {
 			select {

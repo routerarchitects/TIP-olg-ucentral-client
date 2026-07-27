@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -242,10 +243,12 @@ func TestPriorityScheduler_InvalidEmergencyCapacity(t *testing.T) {
 }
 
 func TestPriorityScheduler_ConcurrencyStress(t *testing.T) {
-	s := NewPriorityScheduler(100, 100)
+	s := NewPriorityScheduler(1000, 1000)
 
 	var wg sync.WaitGroup
 	errChan := make(chan error, 10000)
+
+	var pushedCount, receivedCount int32
 
 	// Launch 50 writers and 50 readers concurrently
 	for i := 0; i < 50; i++ {
@@ -256,10 +259,12 @@ func TestPriorityScheduler_ConcurrencyStress(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
 				err := s.Push(OutboundMessage{Priority: PriorityHigh})
-				if err != nil && err != ErrQueueFull {
+				if err == nil {
+					atomic.AddInt32(&pushedCount, 1)
+				} else if err != ErrQueueFull {
 					errChan <- fmt.Errorf("unexpected push error: %w", err)
 				}
-				time.Sleep(1 * time.Millisecond) // Ensure context watchers have time to start
+				time.Sleep(time.Microsecond)
 			}
 		}()
 
@@ -267,43 +272,61 @@ func TestPriorityScheduler_ConcurrencyStress(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
-				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Millisecond)
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 				_, err := s.Next(ctx)
 				cancel()
-				if err != nil && err != context.DeadlineExceeded && err != context.Canceled {
+				if err == nil {
+					atomic.AddInt32(&receivedCount, 1)
+				} else if err != context.DeadlineExceeded && err != context.Canceled {
 					errChan <- fmt.Errorf("unexpected next error: %w", err)
 				}
 			}
 		}()
 	}
 
-	// Wait for all goroutines to finish safely
 	wg.Wait()
 	close(errChan)
 
-	// Check for any unexpected errors
 	for err := range errChan {
 		t.Errorf("Concurrency error: %v", err)
+	}
+
+	// Drain remaining messages
+	ctx := context.Background()
+	for {
+		ctxTimeout, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
+		_, err := s.Next(ctxTimeout)
+		cancel()
+		if err != nil {
+			break
+		}
+		atomic.AddInt32(&receivedCount, 1)
+	}
+
+	finalPushed := atomic.LoadInt32(&pushedCount)
+	finalReceived := atomic.LoadInt32(&receivedCount)
+
+	if finalPushed == 0 {
+		t.Fatalf("Test invalid: 0 messages were successfully pushed")
+	}
+	if finalPushed != finalReceived {
+		t.Fatalf("Message count mismatch: pushed %d, received %d", finalPushed, finalReceived)
 	}
 }
 
 func TestPriorityScheduler_CancelledConsumerWakeupRace(t *testing.T) {
 	s := NewPriorityScheduler(10, 100)
 
-	// Consumer A: Gets a canceled context
 	ctxA, cancelA := context.WithCancel(context.Background())
-	cancelA() // Canceled immediately
-
-	// Consumer B: Gets a normal context
 	ctxB, cancelB := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancelB()
 
-	// Launch Consumer A
+	// Launch Consumer A (will block, then get cancelled)
 	go func() {
 		_, _ = s.Next(ctxA)
 	}()
 
-	// Launch Consumer B
+	// Launch Consumer B (will block, then receive message)
 	msgChan := make(chan OutboundMessage)
 	go func() {
 		msg, err := s.Next(ctxB)
@@ -312,10 +335,11 @@ func TestPriorityScheduler_CancelledConsumerWakeupRace(t *testing.T) {
 		}
 	}()
 
-	// Give them time to block
-	time.Sleep(50 * time.Millisecond)
+	// Give them time to block on cond.Wait()
+	time.Sleep(100 * time.Millisecond)
 
-	// Push a message
+	// Concurrently cancel A and push a message to trigger the race
+	go cancelA()
 	err := s.Push(OutboundMessage{Priority: PriorityHigh, SessionID: "wakeup-test"})
 	if err != nil {
 		t.Fatalf("unexpected error pushing: %v", err)

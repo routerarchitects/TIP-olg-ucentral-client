@@ -63,16 +63,26 @@ func (s *PriorityScheduler) Push(msg OutboundMessage) error {
 		return ErrInvalidPriority
 	}
 
+	// 1. Quick capacity check
+	s.mu.Lock()
+	if s.isFull(msg.Priority) {
+		s.mu.Unlock()
+		return ErrQueueFull
+	}
+	s.mu.Unlock()
+
+	// 2. Clone payload safely without blocking other producers or consumers
+	queued := msg
+	if msg.Payload != nil {
+		queued.Payload = append([]byte(nil), msg.Payload...)
+	}
+
+	// 3. Recheck capacity and append
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.isFull(msg.Priority) {
 		return ErrQueueFull
-	}
-
-	queued := msg
-	if msg.Payload != nil {
-		queued.Payload = append([]byte(nil), msg.Payload...)
 	}
 
 	s.queues[msg.Priority] = append(s.queues[msg.Priority], queued)

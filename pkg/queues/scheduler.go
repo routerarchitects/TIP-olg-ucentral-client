@@ -18,13 +18,19 @@ const (
 type OutboundMessage struct {
 	SessionID string
 	Priority  Priority
-	Payload   []byte
+
+	// Payload ownership transfers to the scheduler after a successful Push.
+	// The producer must not modify or reuse the backing array afterward.
+	// Ownership transfers again to the caller of Next when the message is dequeued.
+	Payload []byte
 }
 
 var ErrQueueFull = errors.New("queue is at maximum capacity")
 var ErrInvalidPriority = errors.New("invalid message priority")
 
 type OutboundScheduler interface {
+	// Push transfers ownership only when it returns nil.
+	// On error, ownership remains with the caller.
 	Push(msg OutboundMessage) error
 	Next(ctx context.Context) (OutboundMessage, error)
 }
@@ -58,9 +64,8 @@ func (s *PriorityScheduler) isFull(priority Priority) bool {
 	return len(s.queues[priority]) >= s.capacity
 }
 
-// Push adds a message to the appropriate priority queue.
-// Important: Push does NOT clone the message payload. To avoid data races,
-// callers must not mutate the payload after it has been passed to the scheduler.
+// Push appends a message to the appropriate priority queue.
+// It implements OutboundScheduler.Push.
 func (s *PriorityScheduler) Push(msg OutboundMessage) error {
 	if msg.Priority < PriorityHighest || msg.Priority > PriorityLow {
 		return ErrInvalidPriority

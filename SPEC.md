@@ -641,6 +641,10 @@ TIP-olg-ucentral-client/
     type OutboundMessage struct {
     	SessionID string
     	Priority  Priority
+
+    	// Payload ownership transfers to the scheduler after a successful Push.
+    	// The producer must not modify or reuse the backing array afterward.
+    	// Ownership transfers again to the caller of Next when the message is dequeued.
     	Payload   []byte
     }
 
@@ -658,6 +662,8 @@ TIP-olg-ucentral-client/
     //   the scheduler must yield at least one available message from the next highest populated queue (1, 2, or 3).
     // - Context cancellation drives scheduler shutdown and unblocks waiting Next calls.
     type OutboundScheduler interface {
+    	// Push transfers ownership only when it returns nil.
+    	// On error, ownership remains with the caller.
     	Push(msg OutboundMessage) error
     	Next(ctx context.Context) (OutboundMessage, error)
     }

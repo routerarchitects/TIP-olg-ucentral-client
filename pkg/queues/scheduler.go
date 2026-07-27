@@ -88,6 +88,13 @@ func (s *PriorityScheduler) Next(ctx context.Context) (OutboundMessage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	stop := context.AfterFunc(ctx, func() {
+		s.mu.Lock()
+		s.cond.Broadcast()
+		s.mu.Unlock()
+	})
+	defer stop()
+
 	for {
 		if ctx.Err() != nil {
 			return OutboundMessage{}, ctx.Err()
@@ -97,25 +104,8 @@ func (s *PriorityScheduler) Next(ctx context.Context) (OutboundMessage, error) {
 			return msg, nil
 		}
 
-		// No messages found, spin up watcher and go to sleep.
-		// Note on Safety: If ctx.Done() fires, it locks s.mu and Broadcasts.
-		// If Wait() returns normally, close(ctxDone) unblocks the select.
-		// If both happen simultaneously, select exclusively picks one case.
-		// If <-ctx.Done() is picked, the close(ctxDone) executed later is harmless
-		// because the watcher has already safely exited. No deadlocks or leaks can occur.
-		ctxDone := make(chan struct{})
-		go func() {
-			select {
-			case <-ctx.Done():
-				s.mu.Lock()
-				s.cond.Broadcast()
-				s.mu.Unlock()
-			case <-ctxDone:
-			}
-		}()
-
+		// No messages found, wait for a signal.
 		s.cond.Wait()
-		close(ctxDone)
 	}
 }
 
@@ -154,6 +144,12 @@ func (s *PriorityScheduler) tryDequeue() (OutboundMessage, bool) {
 func pop(queue *[]OutboundMessage) OutboundMessage {
 	msg := (*queue)[0]
 	(*queue)[0] = OutboundMessage{} // Overwrite to prevent memory leak
-	*queue = (*queue)[1:]
+
+	if len(*queue) == 1 {
+		*queue = nil // Release the backing array when empty
+	} else {
+		*queue = (*queue)[1:]
+	}
+
 	return msg
 }

@@ -377,16 +377,15 @@ func TestPriorityScheduler_CancelledConsumerWakeupRace(t *testing.T) {
 		}()
 
 		// 1. Confirm both consumers are blocked waiting for the queue
-		timeout := time.After(1 * time.Second)
 		select {
 		case <-barrierA:
-		case <-timeout:
+		case <-time.After(1 * time.Second):
 			t.Fatalf("timeout waiting for consumer A to block")
 		}
 
 		select {
 		case <-barrierB:
-		case <-timeout:
+		case <-time.After(1 * time.Second):
 			t.Fatalf("timeout waiting for consumer B to block")
 		}
 

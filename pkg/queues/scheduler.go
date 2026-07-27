@@ -63,7 +63,10 @@ func (s *PriorityScheduler) Push(msg OutboundMessage) error {
 		return ErrInvalidPriority
 	}
 
-	// 1. Quick capacity check
+	// 1. Advisory capacity check (optimization).
+	// This fast, unlocked check prevents expensive cloning if the queue is already full.
+	// Under high contention, this may be stale and result in wasted cloning work if the queue 
+	// fills before step 3, but this tradeoff prevents large allocations from blocking the mutex.
 	s.mu.Lock()
 	if s.isFull(msg.Priority) {
 		s.mu.Unlock()

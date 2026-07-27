@@ -56,20 +56,25 @@ func (s *PriorityScheduler) Push(msg OutboundMessage) error {
 		return ErrInvalidPriority
 	}
 
+	queued := msg
+	if msg.Payload != nil {
+		queued.Payload = append([]byte(nil), msg.Payload...)
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if msg.Priority == PriorityHighest {
-		if len(s.queues[msg.Priority]) >= s.emergencyCap {
+	if queued.Priority == PriorityHighest {
+		if len(s.queues[queued.Priority]) >= s.emergencyCap {
 			return ErrQueueFull
 		}
 	} else {
-		if len(s.queues[msg.Priority]) >= s.capacity {
+		if len(s.queues[queued.Priority]) >= s.capacity {
 			return ErrQueueFull
 		}
 	}
 
-	s.queues[msg.Priority] = append(s.queues[msg.Priority], msg)
+	s.queues[queued.Priority] = append(s.queues[queued.Priority], queued)
 	s.cond.Signal()
 	return nil
 }
@@ -83,35 +88,7 @@ func (s *PriorityScheduler) Next(ctx context.Context) (OutboundMessage, error) {
 			return OutboundMessage{}, ctx.Err()
 		}
 
-		if s.consecutiveP0 >= 10 {
-			// Anti-starvation: check queues 1, 2, 3
-			for p := PriorityHigh; p <= PriorityLow; p++ {
-				if len(s.queues[p]) > 0 {
-					msg := pop(&s.queues[p])
-					s.consecutiveP0 = 0
-					return msg, nil
-				}
-			}
-			// If 1, 2, 3 are empty, we can just fall through and pick from 0 if it has items
-		}
-
-		// Normal selection
-		found := false
-		var msg OutboundMessage
-		for p := PriorityHighest; p <= PriorityLow; p++ {
-			if len(s.queues[p]) > 0 {
-				msg = pop(&s.queues[p])
-				if p == PriorityHighest {
-					s.consecutiveP0++
-				} else {
-					s.consecutiveP0 = 0
-				}
-				found = true
-				break
-			}
-		}
-
-		if found {
+		if msg, found := s.tryDequeue(); found {
 			return msg, nil
 		}
 
@@ -136,6 +113,36 @@ func (s *PriorityScheduler) Next(ctx context.Context) (OutboundMessage, error) {
 		s.cond.Wait()
 		close(ctxDone)
 	}
+}
+
+// tryDequeue attempts to select a message according to priority and anti-starvation rules.
+// The caller must hold s.mu.
+func (s *PriorityScheduler) tryDequeue() (OutboundMessage, bool) {
+	if s.consecutiveP0 >= 10 {
+		// Anti-starvation: check queues 1, 2, 3
+		for p := PriorityHigh; p <= PriorityLow; p++ {
+			if len(s.queues[p]) > 0 {
+				msg := pop(&s.queues[p])
+				s.consecutiveP0 = 0
+				return msg, true
+			}
+		}
+	}
+
+	// Normal selection
+	for p := PriorityHighest; p <= PriorityLow; p++ {
+		if len(s.queues[p]) > 0 {
+			msg := pop(&s.queues[p])
+			if p == PriorityHighest {
+				s.consecutiveP0++
+			} else {
+				s.consecutiveP0 = 0
+			}
+			return msg, true
+		}
+	}
+
+	return OutboundMessage{}, false
 }
 
 func pop(queue *[]OutboundMessage) OutboundMessage {

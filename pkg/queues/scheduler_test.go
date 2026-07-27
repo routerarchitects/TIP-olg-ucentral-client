@@ -26,7 +26,7 @@ func TestTCSCH001_PriorityOutboundOrdering(t *testing.T) {
 
 	ctx := context.Background()
 
-	// They should pop in strict priority order (0, 1, 2, 3), 
+	// They should pop in strict priority order (0, 1, 2, 3),
 	// and within each priority, strictly FIFO (0, 1, 2)
 	orderedPriorities := []Priority{PriorityHighest, PriorityHigh, PriorityMedium, PriorityLow}
 	for _, p := range orderedPriorities {
@@ -150,7 +150,7 @@ func TestTCSCH005_AntiStarvationYieldLimit(t *testing.T) {
 			t.Fatalf("unexpected error pushing P0: %v", err)
 		}
 	}
-	
+
 	for p := PriorityHigh; p <= PriorityLow; p++ {
 		err := s.Push(OutboundMessage{Priority: p})
 		if err != nil {
@@ -162,7 +162,7 @@ func TestTCSCH005_AntiStarvationYieldLimit(t *testing.T) {
 
 	// Should yield 10 P0s -> 1 P1 -> 10 P0s -> 1 P2 -> 10 P0s -> 1 P3
 	expectedPattern := []Priority{PriorityHigh, PriorityMedium, PriorityLow}
-	
+
 	for _, expectedFallback := range expectedPattern {
 		// Yield 10 P0s
 		for i := 0; i < 10; i++ {
@@ -174,7 +174,7 @@ func TestTCSCH005_AntiStarvationYieldLimit(t *testing.T) {
 				t.Fatalf("expected P0, got %v", msg.Priority)
 			}
 		}
-		
+
 		// Yield the fallback
 		msg, err := s.Next(ctx)
 		if err != nil {
@@ -240,3 +240,33 @@ func TestPriorityScheduler_InvalidEmergencyCapacity(t *testing.T) {
 	_ = NewPriorityScheduler(10, -1)
 }
 
+func TestPriorityScheduler_ConcurrencyStress(t *testing.T) {
+	s := NewPriorityScheduler(100, 100)
+
+	// Launch 50 writers and 50 readers concurrently, aggressively
+	// cancelling contexts to trigger the select race condition.
+	done := make(chan struct{})
+
+	for i := 0; i < 50; i++ {
+		go func() {
+			for j := 0; j < 100; j++ {
+				_ = s.Push(OutboundMessage{Priority: PriorityHigh})
+				time.Sleep(1 * time.Millisecond) // Ensure context watchers have time to start
+			}
+		}()
+
+		go func() {
+			for j := 0; j < 100; j++ {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Millisecond)
+				_, _ = s.Next(ctx)
+				cancel()
+			}
+			done <- struct{}{}
+		}()
+	}
+
+	// Wait for readers to finish
+	for i := 0; i < 50; i++ {
+		<-done
+	}
+}

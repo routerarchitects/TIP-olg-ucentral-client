@@ -115,7 +115,12 @@ func (s *PriorityScheduler) Next(ctx context.Context) (OutboundMessage, error) {
 			return msg, nil
 		}
 
-		// No messages found, spin up watcher and go to sleep
+		// No messages found, spin up watcher and go to sleep.
+		// Note on Safety: If ctx.Done() fires, it locks s.mu and Broadcasts.
+		// If Wait() returns normally, close(ctxDone) unblocks the select.
+		// If both happen simultaneously, select exclusively picks one case.
+		// If <-ctx.Done() is picked, the close(ctxDone) executed later is harmless
+		// because the watcher has already safely exited. No deadlocks or leaks can occur.
 		ctxDone := make(chan struct{})
 		go func() {
 			select {

@@ -377,8 +377,18 @@ func TestPriorityScheduler_CancelledConsumerWakeupRace(t *testing.T) {
 		}()
 
 		// 1. Confirm both consumers are blocked waiting for the queue
-		<-barrierA
-		<-barrierB
+		timeout := time.After(1 * time.Second)
+		select {
+		case <-barrierA:
+		case <-timeout:
+			t.Fatalf("timeout waiting for consumer A to block")
+		}
+
+		select {
+		case <-barrierB:
+		case <-timeout:
+			t.Fatalf("timeout waiting for consumer B to block")
+		}
 
 		// Yield briefly to ensure s.cond.Wait() is fully entered after ctx.Done() is called
 		// (since ctx.Done() evaluation happens just before s.cond.Wait() in the loop)
@@ -397,8 +407,13 @@ func TestPriorityScheduler_CancelledConsumerWakeupRace(t *testing.T) {
 		}
 
 		// 3. Confirm Consumer A returns context.Canceled
-		if err := <-aDone; err != context.Canceled {
-			t.Fatalf("Consumer A should have returned Canceled, got %v", err)
+		select {
+		case err := <-aDone:
+			if err != context.Canceled {
+				t.Fatalf("Consumer A should have returned Canceled, got %v", err)
+			}
+		case <-time.After(1 * time.Second):
+			t.Fatalf("timeout waiting for consumer A to exit")
 		}
 
 		// 4. Confirm Consumer B receives the message

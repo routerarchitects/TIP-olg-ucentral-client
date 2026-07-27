@@ -39,6 +39,10 @@ type PriorityScheduler struct {
 }
 
 func NewPriorityScheduler(capacity int, emergencyCap int) *PriorityScheduler {
+	if capacity <= 0 || emergencyCap <= 0 {
+		panic("queues: capacities must be greater than 0")
+	}
+
 	s := &PriorityScheduler{
 		capacity:     capacity,
 		emergencyCap: emergencyCap,
@@ -73,23 +77,6 @@ func (s *PriorityScheduler) Push(msg OutboundMessage) error {
 func (s *PriorityScheduler) Next(ctx context.Context) (OutboundMessage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	if ctx.Err() != nil {
-		return OutboundMessage{}, ctx.Err()
-	}
-
-	ctxDone := make(chan struct{})
-	defer close(ctxDone)
-
-	go func() {
-		select {
-		case <-ctx.Done():
-			s.mu.Lock()
-			s.cond.Broadcast()
-			s.mu.Unlock()
-		case <-ctxDone:
-		}
-	}()
 
 	for {
 		if ctx.Err() != nil {
@@ -128,7 +115,20 @@ func (s *PriorityScheduler) Next(ctx context.Context) (OutboundMessage, error) {
 			return msg, nil
 		}
 
+		// No messages found, spin up watcher and go to sleep
+		ctxDone := make(chan struct{})
+		go func() {
+			select {
+			case <-ctx.Done():
+				s.mu.Lock()
+				s.cond.Broadcast()
+				s.mu.Unlock()
+			case <-ctxDone:
+			}
+		}()
+
 		s.cond.Wait()
+		close(ctxDone)
 	}
 }
 

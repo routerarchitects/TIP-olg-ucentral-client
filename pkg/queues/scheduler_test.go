@@ -10,46 +10,35 @@ import (
 func TestTCSCH001_PriorityOutboundOrdering(t *testing.T) {
 	s := NewPriorityScheduler(10, 100)
 
-	// Push 5 PriorityLow messages with distinct payloads to verify FIFO
-	for i := 0; i < 5; i++ {
-		err := s.Push(OutboundMessage{
-			Priority:  PriorityLow,
-			SessionID: fmt.Sprintf("low-%d", i),
-		})
-		if err != nil {
-			t.Fatalf("unexpected error pushing low priority: %v", err)
+	// Push 3 messages for each priority level, in reverse order to prove sorting
+	priorities := []Priority{PriorityLow, PriorityMedium, PriorityHigh, PriorityHighest}
+	for _, p := range priorities {
+		for i := 0; i < 3; i++ {
+			err := s.Push(OutboundMessage{
+				Priority:  p,
+				SessionID: fmt.Sprintf("p%d-%d", p, i),
+			})
+			if err != nil {
+				t.Fatalf("unexpected error pushing priority %v: %v", p, err)
+			}
 		}
-	}
-
-	// Push 1 PriorityHighest
-	err := s.Push(OutboundMessage{
-		Priority:  PriorityHighest,
-		SessionID: "highest-0",
-	})
-	if err != nil {
-		t.Fatalf("unexpected error pushing highest priority: %v", err)
 	}
 
 	ctx := context.Background()
 
-	// First should be PriorityHighest
-	msg, err := s.Next(ctx)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if msg.Priority != PriorityHighest || msg.SessionID != "highest-0" {
-		t.Fatalf("expected PriorityHighest (highest-0), got %v (%s)", msg.Priority, msg.SessionID)
-	}
-
-	// Next 5 should be PriorityLow in FIFO order
-	for i := 0; i < 5; i++ {
-		msg, err := s.Next(ctx)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		expectedID := fmt.Sprintf("low-%d", i)
-		if msg.Priority != PriorityLow || msg.SessionID != expectedID {
-			t.Fatalf("expected PriorityLow (%s), got %v (%s)", expectedID, msg.Priority, msg.SessionID)
+	// They should pop in strict priority order (0, 1, 2, 3), 
+	// and within each priority, strictly FIFO (0, 1, 2)
+	orderedPriorities := []Priority{PriorityHighest, PriorityHigh, PriorityMedium, PriorityLow}
+	for _, p := range orderedPriorities {
+		for i := 0; i < 3; i++ {
+			msg, err := s.Next(ctx)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			expectedID := fmt.Sprintf("p%d-%d", p, i)
+			if msg.Priority != p || msg.SessionID != expectedID {
+				t.Fatalf("expected Priority %v (%s), got Priority %v (%s)", p, expectedID, msg.Priority, msg.SessionID)
+			}
 		}
 	}
 }
@@ -154,61 +143,45 @@ func TestTCSCH004_NonBlockingPriority1Overflow(t *testing.T) {
 func TestTCSCH005_AntiStarvationYieldLimit(t *testing.T) {
 	s := NewPriorityScheduler(10, 100)
 
-	// Pre-fill 20 P0 and 5 P3
-	for i := 0; i < 20; i++ {
+	// Pre-fill 30 P0, 1 P1, 1 P2, 1 P3
+	for i := 0; i < 30; i++ {
 		err := s.Push(OutboundMessage{Priority: PriorityHighest})
 		if err != nil {
 			t.Fatalf("unexpected error pushing P0: %v", err)
 		}
 	}
-	for i := 0; i < 5; i++ {
-		err := s.Push(OutboundMessage{Priority: PriorityLow})
+	
+	for p := PriorityHigh; p <= PriorityLow; p++ {
+		err := s.Push(OutboundMessage{Priority: p})
 		if err != nil {
-			t.Fatalf("unexpected error pushing P3: %v", err)
+			t.Fatalf("unexpected error pushing P%d: %v", p, err)
 		}
 	}
 
 	ctx := context.Background()
 
-	// Should yield exactly 10 P0
-	for i := 0; i < 10; i++ {
+	// Should yield 10 P0s -> 1 P1 -> 10 P0s -> 1 P2 -> 10 P0s -> 1 P3
+	expectedPattern := []Priority{PriorityHigh, PriorityMedium, PriorityLow}
+	
+	for _, expectedFallback := range expectedPattern {
+		// Yield 10 P0s
+		for i := 0; i < 10; i++ {
+			msg, err := s.Next(ctx)
+			if err != nil {
+				t.Fatalf("unexpected error on next: %v", err)
+			}
+			if msg.Priority != PriorityHighest {
+				t.Fatalf("expected P0, got %v", msg.Priority)
+			}
+		}
+		
+		// Yield the fallback
 		msg, err := s.Next(ctx)
 		if err != nil {
-			t.Fatalf("unexpected error on next: %v", err)
+			t.Fatalf("unexpected error on next fallback: %v", err)
 		}
-		if msg.Priority != PriorityHighest {
-			t.Fatalf("expected P0, got %v at index %d", msg.Priority, i)
-		}
-	}
-
-	// Next must be P3 (Anti-starvation)
-	msg, err := s.Next(ctx)
-	if err != nil {
-		t.Fatalf("unexpected error on next: %v", err)
-	}
-	if msg.Priority != PriorityLow {
-		t.Fatalf("expected P3 due to anti-starvation, got %v", msg.Priority)
-	}
-
-	// Should yield remaining 10 P0
-	for i := 0; i < 10; i++ {
-		msg, err = s.Next(ctx)
-		if err != nil {
-			t.Fatalf("unexpected error on next: %v", err)
-		}
-		if msg.Priority != PriorityHighest {
-			t.Fatalf("expected P0, got %v at index %d", msg.Priority, i)
-		}
-	}
-
-	// Finally, drain remaining 4 P3
-	for i := 0; i < 4; i++ {
-		msg, err = s.Next(ctx)
-		if err != nil {
-			t.Fatalf("unexpected error on next: %v", err)
-		}
-		if msg.Priority != PriorityLow {
-			t.Fatalf("expected P3, got %v at index %d", msg.Priority, i)
+		if msg.Priority != expectedFallback {
+			t.Fatalf("expected fallback %v, got %v", expectedFallback, msg.Priority)
 		}
 	}
 }
@@ -248,3 +221,22 @@ func TestPriorityScheduler_InvalidPriority(t *testing.T) {
 		t.Fatalf("expected ErrInvalidPriority, got %v", err)
 	}
 }
+
+func TestPriorityScheduler_InvalidCapacity(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("NewPriorityScheduler did not panic on 0 capacity")
+		}
+	}()
+	_ = NewPriorityScheduler(0, 100)
+}
+
+func TestPriorityScheduler_InvalidEmergencyCapacity(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("NewPriorityScheduler did not panic on negative emergency capacity")
+		}
+	}()
+	_ = NewPriorityScheduler(10, -1)
+}
+

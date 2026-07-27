@@ -9,7 +9,7 @@ import (
 
 func TestTCSCH001_PriorityOutboundOrdering(t *testing.T) {
 	s := NewPriorityScheduler(10, 100)
-	
+
 	// Push 5 PriorityLow messages with distinct payloads to verify FIFO
 	for i := 0; i < 5; i++ {
 		err := s.Push(OutboundMessage{
@@ -20,7 +20,7 @@ func TestTCSCH001_PriorityOutboundOrdering(t *testing.T) {
 			t.Fatalf("unexpected error pushing low priority: %v", err)
 		}
 	}
-	
+
 	// Push 1 PriorityHighest
 	err := s.Push(OutboundMessage{
 		Priority:  PriorityHighest,
@@ -31,7 +31,7 @@ func TestTCSCH001_PriorityOutboundOrdering(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	
+
 	// First should be PriorityHighest
 	msg, err := s.Next(ctx)
 	if err != nil {
@@ -40,7 +40,7 @@ func TestTCSCH001_PriorityOutboundOrdering(t *testing.T) {
 	if msg.Priority != PriorityHighest || msg.SessionID != "highest-0" {
 		t.Fatalf("expected PriorityHighest (highest-0), got %v (%s)", msg.Priority, msg.SessionID)
 	}
-	
+
 	// Next 5 should be PriorityLow in FIFO order
 	for i := 0; i < 5; i++ {
 		msg, err := s.Next(ctx)
@@ -64,7 +64,7 @@ func TestTCSCH002_SchedulerBlockingAndWakeup(t *testing.T) {
 		err error
 	}
 	ch := make(chan result)
-	
+
 	go func() {
 		msg, err := s.Next(ctx)
 		ch <- result{msg, err}
@@ -100,7 +100,7 @@ func TestTCSCH002_SchedulerBlockingAndWakeup(t *testing.T) {
 
 func TestTCSCH002_ContextCancellation(t *testing.T) {
 	s := NewPriorityScheduler(10, 100)
-	
+
 	// Context with a short timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -117,7 +117,7 @@ func TestTCSCH002_ContextCancellation(t *testing.T) {
 
 func TestTCSCH003_Priority0EmergencyQueue(t *testing.T) {
 	s := NewPriorityScheduler(10, 2) // emergencyCap = 2
-	
+
 	// Fill emergency queue
 	for i := 0; i < 2; i++ {
 		err := s.Push(OutboundMessage{Priority: PriorityHighest})
@@ -125,7 +125,7 @@ func TestTCSCH003_Priority0EmergencyQueue(t *testing.T) {
 			t.Fatalf("unexpected error pushing to P0: %v", err)
 		}
 	}
-	
+
 	// Next push must fail
 	err := s.Push(OutboundMessage{Priority: PriorityHighest})
 	if err != ErrQueueFull {
@@ -135,7 +135,7 @@ func TestTCSCH003_Priority0EmergencyQueue(t *testing.T) {
 
 func TestTCSCH004_NonBlockingPriority1Overflow(t *testing.T) {
 	s := NewPriorityScheduler(2, 100) // capacity = 2
-	
+
 	// Fill P1 queue
 	for i := 0; i < 2; i++ {
 		err := s.Push(OutboundMessage{Priority: PriorityHigh})
@@ -143,7 +143,7 @@ func TestTCSCH004_NonBlockingPriority1Overflow(t *testing.T) {
 			t.Fatalf("unexpected error pushing to P1: %v", err)
 		}
 	}
-	
+
 	// Next push must fail
 	err := s.Push(OutboundMessage{Priority: PriorityHigh})
 	if err != ErrQueueFull {
@@ -153,7 +153,7 @@ func TestTCSCH004_NonBlockingPriority1Overflow(t *testing.T) {
 
 func TestTCSCH005_AntiStarvationYieldLimit(t *testing.T) {
 	s := NewPriorityScheduler(10, 100)
-	
+
 	// Pre-fill 20 P0 and 5 P3
 	for i := 0; i < 20; i++ {
 		err := s.Push(OutboundMessage{Priority: PriorityHighest})
@@ -169,7 +169,7 @@ func TestTCSCH005_AntiStarvationYieldLimit(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	
+
 	// Should yield exactly 10 P0
 	for i := 0; i < 10; i++ {
 		msg, err := s.Next(ctx)
@@ -180,7 +180,7 @@ func TestTCSCH005_AntiStarvationYieldLimit(t *testing.T) {
 			t.Fatalf("expected P0, got %v at index %d", msg.Priority, i)
 		}
 	}
-	
+
 	// Next must be P3 (Anti-starvation)
 	msg, err := s.Next(ctx)
 	if err != nil {
@@ -189,7 +189,7 @@ func TestTCSCH005_AntiStarvationYieldLimit(t *testing.T) {
 	if msg.Priority != PriorityLow {
 		t.Fatalf("expected P3 due to anti-starvation, got %v", msg.Priority)
 	}
-	
+
 	// Should yield remaining 10 P0
 	for i := 0; i < 10; i++ {
 		msg, err = s.Next(ctx)
@@ -200,7 +200,7 @@ func TestTCSCH005_AntiStarvationYieldLimit(t *testing.T) {
 			t.Fatalf("expected P0, got %v at index %d", msg.Priority, i)
 		}
 	}
-	
+
 	// Finally, drain remaining 4 P3
 	for i := 0; i < 4; i++ {
 		msg, err = s.Next(ctx)
@@ -215,7 +215,7 @@ func TestTCSCH005_AntiStarvationYieldLimit(t *testing.T) {
 
 func TestTCSCH006_NonBlockingPriority2and3Overflow(t *testing.T) {
 	s := NewPriorityScheduler(2, 100)
-	
+
 	// Priority 2
 	for i := 0; i < 2; i++ {
 		err := s.Push(OutboundMessage{Priority: PriorityMedium})
@@ -227,7 +227,7 @@ func TestTCSCH006_NonBlockingPriority2and3Overflow(t *testing.T) {
 	if err != ErrQueueFull {
 		t.Fatalf("expected ErrQueueFull for P2, got %v", err)
 	}
-	
+
 	// Priority 3
 	for i := 0; i < 2; i++ {
 		err = s.Push(OutboundMessage{Priority: PriorityLow})

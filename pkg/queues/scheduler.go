@@ -51,30 +51,40 @@ func NewPriorityScheduler(capacity int, emergencyCap int) *PriorityScheduler {
 	return s
 }
 
+func (s *PriorityScheduler) isFull(priority Priority) bool {
+	if priority == PriorityHighest {
+		return len(s.queues[priority]) >= s.emergencyCap
+	}
+	return len(s.queues[priority]) >= s.capacity
+}
+
 func (s *PriorityScheduler) Push(msg OutboundMessage) error {
 	if msg.Priority < PriorityHighest || msg.Priority > PriorityLow {
 		return ErrInvalidPriority
 	}
+
+	// Fast capacity check to avoid allocations when full
+	s.mu.Lock()
+	if s.isFull(msg.Priority) {
+		s.mu.Unlock()
+		return ErrQueueFull
+	}
+	s.mu.Unlock()
 
 	queued := msg
 	if msg.Payload != nil {
 		queued.Payload = append([]byte(nil), msg.Payload...)
 	}
 
+	// Recheck before append in case another producer filled the queue
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if queued.Priority == PriorityHighest {
-		if len(s.queues[queued.Priority]) >= s.emergencyCap {
-			return ErrQueueFull
-		}
-	} else {
-		if len(s.queues[queued.Priority]) >= s.capacity {
-			return ErrQueueFull
-		}
+	if s.isFull(msg.Priority) {
+		return ErrQueueFull
 	}
 
-	s.queues[queued.Priority] = append(s.queues[queued.Priority], queued)
+	s.queues[msg.Priority] = append(s.queues[msg.Priority], queued)
 	s.cond.Signal()
 	return nil
 }

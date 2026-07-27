@@ -22,6 +22,7 @@ type OutboundMessage struct {
 }
 
 var ErrQueueFull = errors.New("queue is at maximum capacity")
+var ErrInvalidPriority = errors.New("invalid message priority")
 
 type OutboundScheduler interface {
 	Push(msg OutboundMessage) error
@@ -47,6 +48,10 @@ func NewPriorityScheduler(capacity int, emergencyCap int) *PriorityScheduler {
 }
 
 func (s *PriorityScheduler) Push(msg OutboundMessage) error {
+	if msg.Priority < PriorityHighest || msg.Priority > PriorityLow {
+		return ErrInvalidPriority
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -95,8 +100,7 @@ func (s *PriorityScheduler) Next(ctx context.Context) (OutboundMessage, error) {
 			// Anti-starvation: check queues 1, 2, 3
 			for p := PriorityHigh; p <= PriorityLow; p++ {
 				if len(s.queues[p]) > 0 {
-					msg := s.queues[p][0]
-					s.queues[p] = s.queues[p][1:]
+					msg := pop(&s.queues[p])
 					s.consecutiveP0 = 0
 					return msg, nil
 				}
@@ -109,8 +113,7 @@ func (s *PriorityScheduler) Next(ctx context.Context) (OutboundMessage, error) {
 		var msg OutboundMessage
 		for p := PriorityHighest; p <= PriorityLow; p++ {
 			if len(s.queues[p]) > 0 {
-				msg = s.queues[p][0]
-				s.queues[p] = s.queues[p][1:]
+				msg = pop(&s.queues[p])
 				if p == PriorityHighest {
 					s.consecutiveP0++
 				} else {
@@ -127,4 +130,11 @@ func (s *PriorityScheduler) Next(ctx context.Context) (OutboundMessage, error) {
 
 		s.cond.Wait()
 	}
+}
+
+func pop(queue *[]OutboundMessage) OutboundMessage {
+	msg := (*queue)[0]
+	(*queue)[0] = OutboundMessage{} // Overwrite to prevent memory leak
+	*queue = (*queue)[1:]
+	return msg
 }

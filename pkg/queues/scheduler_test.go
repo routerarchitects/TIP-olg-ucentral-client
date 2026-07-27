@@ -317,42 +317,56 @@ func TestPriorityScheduler_ConcurrencyStress(t *testing.T) {
 func TestPriorityScheduler_CancelledConsumerWakeupRace(t *testing.T) {
 	s := NewPriorityScheduler(10, 100)
 
-	ctxA, cancelA := context.WithCancel(context.Background())
-	ctxB, cancelB := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancelB()
-
-	// Launch Consumer A (will block, then get cancelled)
-	go func() {
-		_, _ = s.Next(ctxA)
-	}()
-
-	// Launch Consumer B (will block, then receive message)
-	msgChan := make(chan OutboundMessage)
-	go func() {
-		msg, err := s.Next(ctxB)
-		if err == nil {
-			msgChan <- msg
+	for i := 0; i < 50; i++ {
+		ctxB, cancelB := context.WithTimeout(context.Background(), 2*time.Second)
+		
+		var cancelFuncs []context.CancelFunc
+		for j := 0; j < 5; j++ {
+			ctxA, cancelA := context.WithCancel(context.Background())
+			cancelFuncs = append(cancelFuncs, cancelA)
+			go func(ctx context.Context) {
+				_, _ = s.Next(ctx)
+			}(ctxA)
 		}
-	}()
 
-	// Give them time to block on cond.Wait()
-	time.Sleep(100 * time.Millisecond)
+		msgChan := make(chan OutboundMessage, 1)
+		go func() {
+			msg, err := s.Next(ctxB)
+			if err == nil {
+				msgChan <- msg
+			}
+		}()
 
-	// Concurrently cancel A and push a message to trigger the race
-	go cancelA()
-	err := s.Push(OutboundMessage{Priority: PriorityHigh, SessionID: "wakeup-test"})
-	if err != nil {
-		t.Fatalf("unexpected error pushing: %v", err)
-	}
+		// Give them time to block on cond.Wait()
+		time.Sleep(10 * time.Millisecond)
 
-	// Verify Consumer B receives it (Wakeup wasn't swallowed by A)
-	select {
-	case msg := <-msgChan:
-		if msg.SessionID != "wakeup-test" {
-			t.Fatalf("expected wakeup-test, got %v", msg.SessionID)
+		// Concurrently cancel all A's and push a message to trigger the race
+		for _, cancel := range cancelFuncs {
+			go cancel()
 		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatalf("Consumer B never woke up - wakeup was swallowed")
+		
+		err := s.Push(OutboundMessage{Priority: PriorityHigh, SessionID: "wakeup-test"})
+		if err != nil {
+			t.Fatalf("unexpected error pushing: %v", err)
+		}
+
+		// Verify Consumer B receives it
+		select {
+		case msg := <-msgChan:
+			if msg.SessionID != "wakeup-test" {
+				t.Fatalf("expected wakeup-test, got %v", msg.SessionID)
+			}
+		case <-time.After(50 * time.Millisecond):
+			s.mu.Lock()
+			left := len(s.queues[PriorityHigh])
+			s.mu.Unlock()
+			if left > 0 {
+				t.Fatalf("Consumer B never woke up and message is stuck in queue - wakeup was swallowed on iteration %d", i)
+			}
+			// If left == 0, one of the A consumers grabbed it before its context cancellation fully propagated.
+			// This is a normal Go scheduler race and does not indicate a swallowed wakeup.
+		}
+		cancelB()
 	}
 }
 

@@ -313,4 +313,3 @@ func TestTCSCH005_AntiStarvationIdleReset(t *testing.T) {
 		t.Fatalf("expected P0 to win after idle reset, got %v", msg.Priority)
 	}
 }
-

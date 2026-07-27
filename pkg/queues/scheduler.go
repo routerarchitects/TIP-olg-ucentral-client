@@ -34,8 +34,7 @@ type PriorityScheduler struct {
 	cond          *sync.Cond
 	queues        [4][]OutboundMessage
 	reserved      [4]int
-	capacity      int
-	emergCapacity int
+	capacity      int // maximum entries for Priority 1, 2, and 3
 	emergencyCap  int // maximum entries for the Priority 0 emergency queue
 	consecutiveP0 int
 }
@@ -46,9 +45,8 @@ func NewPriorityScheduler(capacity int, emergencyCap int) *PriorityScheduler {
 	}
 
 	s := &PriorityScheduler{
-		capacity:      capacity,
-		emergCapacity: emergencyCap,
-		emergencyCap:  emergencyCap,
+		capacity:     capacity,
+		emergencyCap: emergencyCap,
 	}
 	s.cond = sync.NewCond(&s.mu)
 	return s
@@ -56,7 +54,7 @@ func NewPriorityScheduler(capacity int, emergencyCap int) *PriorityScheduler {
 
 func (s *PriorityScheduler) isFull(priority Priority) bool {
 	if priority == PriorityHighest {
-		return len(s.queues[priority]) >= s.emergCapacity
+		return len(s.queues[priority]) >= s.emergencyCap
 	}
 	return len(s.queues[priority]) >= s.capacity
 }
@@ -65,7 +63,7 @@ func (s *PriorityScheduler) isFull(priority Priority) bool {
 // The caller must hold s.mu.
 func (s *PriorityScheduler) isFullIncludingReserved(priority Priority) bool {
 	if priority == PriorityHighest {
-		return len(s.queues[priority])+s.reserved[priority] >= s.emergCapacity
+		return len(s.queues[priority])+s.reserved[priority] >= s.emergencyCap
 	}
 	return len(s.queues[priority])+s.reserved[priority] >= s.capacity
 }

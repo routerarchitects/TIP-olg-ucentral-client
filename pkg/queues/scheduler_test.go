@@ -436,20 +436,30 @@ func TestTCSCH005_AntiStarvationSparseAndLate(t *testing.T) {
 	// Case 1: Sparse lower-priority gaps. P1 is empty, P2 is populated.
 	// We push 10 P0s and 1 P2.
 	for i := 0; i < 10; i++ {
-		_ = s.Push(OutboundMessage{Priority: PriorityHighest})
+		if err := s.Push(OutboundMessage{Priority: PriorityHighest}); err != nil {
+			t.Fatalf("unexpected Push error: %v", err)
+		}
 	}
-	_ = s.Push(OutboundMessage{Priority: PriorityMedium})
+	if err := s.Push(OutboundMessage{Priority: PriorityMedium}); err != nil {
+		t.Fatalf("unexpected Push error: %v", err)
+	}
 
 	// First 10 should be P0
 	for i := 0; i < 10; i++ {
-		msg, _ := s.Next(ctx)
+		msg, err := s.Next(ctx)
+		if err != nil {
+			t.Fatalf("unexpected Next error: %v", err)
+		}
 		if msg.Priority != PriorityHighest {
 			t.Fatalf("expected P0, got %v", msg.Priority)
 		}
 	}
 
 	// 11th should be P2, even though P1 is empty.
-	msg, _ := s.Next(ctx)
+	msg, err := s.Next(ctx)
+	if err != nil {
+		t.Fatalf("unexpected Next error: %v", err)
+	}
 	if msg.Priority != PriorityMedium {
 		t.Fatalf("expected P2 fallback on empty P1, got %v", msg.Priority)
 	}
@@ -457,13 +467,18 @@ func TestTCSCH005_AntiStarvationSparseAndLate(t *testing.T) {
 	// Case 2: Late-arriving lower-priority messages.
 	// Push 15 P0s. No lower queues populated.
 	for i := 0; i < 15; i++ {
-		_ = s.Push(OutboundMessage{Priority: PriorityHighest})
+		if err := s.Push(OutboundMessage{Priority: PriorityHighest}); err != nil {
+			t.Fatalf("unexpected Push error: %v", err)
+		}
 	}
 
 	// Read 11 P0s. Since lower queues are empty, anti-starvation yields nothing,
 	// and drops back to normal selection, popping P0.
 	for i := 0; i < 11; i++ {
-		msg, _ := s.Next(ctx)
+		msg, err := s.Next(ctx)
+		if err != nil {
+			t.Fatalf("unexpected Next error: %v", err)
+		}
 		if msg.Priority != PriorityHighest {
 			t.Fatalf("expected P0 on empty fallbacks, got %v", msg.Priority)
 		}
@@ -471,10 +486,15 @@ func TestTCSCH005_AntiStarvationSparseAndLate(t *testing.T) {
 
 	// At this point, consecutiveP0 = 11.
 	// Now a lower priority message arrives.
-	_ = s.Push(OutboundMessage{Priority: PriorityLow})
+	if err := s.Push(OutboundMessage{Priority: PriorityLow}); err != nil {
+		t.Fatalf("unexpected Push error: %v", err)
+	}
 
 	// The very next Next() should immediately yield it because consecutiveP0 >= 10.
-	msg, _ = s.Next(ctx)
+	msg, err = s.Next(ctx)
+	if err != nil {
+		t.Fatalf("unexpected Next error: %v", err)
+	}
 	if msg.Priority != PriorityLow {
 		t.Fatalf("expected immediate P3 fallback due to high consecutiveP0, got %v", msg.Priority)
 	}

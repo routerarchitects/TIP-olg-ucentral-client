@@ -323,7 +323,7 @@ func TestPriorityScheduler_ConcurrencyStress(t *testing.T) {
 	if len(sentIDs) == 0 {
 		t.Fatalf("Test invalid: 0 messages were successfully pushed")
 	}
-	
+
 	for id := range sentIDs {
 		if !receivedIDs[id] {
 			t.Errorf("Message %s was pushed but never received", id)
@@ -342,7 +342,7 @@ func TestPriorityScheduler_CancelledConsumerWakeupRace(t *testing.T) {
 	for i := 0; i < 200; i++ {
 		ctxA, cancelA := context.WithCancel(context.Background())
 		ctxB, cancelB := context.WithCancel(context.Background())
-		
+
 		aDone := make(chan error, 1)
 		go func() {
 			_, err := s.Next(ctxA)
@@ -361,7 +361,7 @@ func TestPriorityScheduler_CancelledConsumerWakeupRace(t *testing.T) {
 		// 2. Ensure Consumer A’s context is cancelled just before the message is pushed.
 		// If Push() uses Signal(), it has a high probability of waking A instead of B.
 		cancelA()
-		
+
 		err := s.Push(OutboundMessage{Priority: PriorityHigh, SessionID: "wakeup-test"})
 		if err != nil {
 			t.Fatalf("unexpected error pushing: %v", err)
@@ -381,7 +381,7 @@ func TestPriorityScheduler_CancelledConsumerWakeupRace(t *testing.T) {
 		case <-time.After(100 * time.Millisecond):
 			t.Fatalf("Consumer B never woke up - wakeup was swallowed on iteration %d", i)
 		}
-		
+
 		cancelB()
 	}
 }

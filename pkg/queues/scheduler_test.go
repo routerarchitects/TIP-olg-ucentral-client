@@ -39,7 +39,7 @@ func TestPriorityScheduler_AntiStarvation(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	
+
 	// Should get 10 P0
 	for i := 0; i < 10; i++ {
 		msg, _ := s.Next(ctx)
@@ -47,13 +47,13 @@ func TestPriorityScheduler_AntiStarvation(t *testing.T) {
 			t.Fatalf("expected 10 P0, got %v at index %d", msg.Priority, i)
 		}
 	}
-	
+
 	// Should get 1 P3
 	msg, _ := s.Next(ctx)
 	if msg.Priority != PriorityLow {
 		t.Fatalf("expected 1 P3 due to anti-starvation, got %v", msg.Priority)
 	}
-	
+
 	// Should get remaining 10 P0
 	for i := 0; i < 10; i++ {
 		msg, _ := s.Next(ctx)
@@ -89,7 +89,7 @@ func TestPriorityScheduler_BlockingWakeup(t *testing.T) {
 
 func TestPriorityScheduler_Overflow(t *testing.T) {
 	s := NewPriorityScheduler(2, 2)
-	
+
 	s.Push(OutboundMessage{Priority: PriorityHighest})
 	s.Push(OutboundMessage{Priority: PriorityHighest})
 	err := s.Push(OutboundMessage{Priority: PriorityHighest})

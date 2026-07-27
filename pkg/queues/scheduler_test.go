@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -248,35 +247,45 @@ func TestPriorityScheduler_ConcurrencyStress(t *testing.T) {
 	var wg sync.WaitGroup
 	errChan := make(chan error, 10000)
 
-	var pushedCount, receivedCount int32
+	sentIDs := make(map[string]bool)
+	receivedIDs := make(map[string]bool)
+	var mapMu sync.Mutex
 
 	// Launch 50 writers and 50 readers concurrently
 	for i := 0; i < 50; i++ {
 		wg.Add(2) // 1 writer, 1 reader
 
 		// Writer
-		go func() {
+		go func(writerID int) {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
-				err := s.Push(OutboundMessage{Priority: PriorityHigh})
+				sessionID := fmt.Sprintf("w%d-m%d", writerID, j)
+				err := s.Push(OutboundMessage{Priority: PriorityHigh, SessionID: sessionID})
 				if err == nil {
-					atomic.AddInt32(&pushedCount, 1)
+					mapMu.Lock()
+					sentIDs[sessionID] = true
+					mapMu.Unlock()
 				} else if err != ErrQueueFull {
 					errChan <- fmt.Errorf("unexpected push error: %w", err)
 				}
 				time.Sleep(time.Microsecond)
 			}
-		}()
+		}(i)
 
 		// Reader
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
-				_, err := s.Next(ctx)
+				msg, err := s.Next(ctx)
 				cancel()
 				if err == nil {
-					atomic.AddInt32(&receivedCount, 1)
+					mapMu.Lock()
+					if receivedIDs[msg.SessionID] {
+						errChan <- fmt.Errorf("duplicate message received: %s", msg.SessionID)
+					}
+					receivedIDs[msg.SessionID] = true
+					mapMu.Unlock()
 				} else if err != context.DeadlineExceeded && err != context.Canceled {
 					errChan <- fmt.Errorf("unexpected next error: %w", err)
 				}
@@ -295,77 +304,84 @@ func TestPriorityScheduler_ConcurrencyStress(t *testing.T) {
 	ctx := context.Background()
 	for {
 		ctxTimeout, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
-		_, err := s.Next(ctxTimeout)
+		msg, err := s.Next(ctxTimeout)
 		cancel()
 		if err != nil {
 			break
 		}
-		atomic.AddInt32(&receivedCount, 1)
+		mapMu.Lock()
+		if receivedIDs[msg.SessionID] {
+			t.Errorf("duplicate message received in drain: %s", msg.SessionID)
+		}
+		receivedIDs[msg.SessionID] = true
+		mapMu.Unlock()
 	}
 
-	finalPushed := atomic.LoadInt32(&pushedCount)
-	finalReceived := atomic.LoadInt32(&receivedCount)
+	mapMu.Lock()
+	defer mapMu.Unlock()
 
-	if finalPushed == 0 {
+	if len(sentIDs) == 0 {
 		t.Fatalf("Test invalid: 0 messages were successfully pushed")
 	}
-	if finalPushed != finalReceived {
-		t.Fatalf("Message count mismatch: pushed %d, received %d", finalPushed, finalReceived)
+	
+	for id := range sentIDs {
+		if !receivedIDs[id] {
+			t.Errorf("Message %s was pushed but never received", id)
+		}
+	}
+	for id := range receivedIDs {
+		if !sentIDs[id] {
+			t.Errorf("Message %s was received but never pushed", id)
+		}
 	}
 }
 
 func TestPriorityScheduler_CancelledConsumerWakeupRace(t *testing.T) {
 	s := NewPriorityScheduler(10, 100)
 
-	for i := 0; i < 50; i++ {
-		ctxB, cancelB := context.WithTimeout(context.Background(), 2*time.Second)
+	for i := 0; i < 200; i++ {
+		ctxA, cancelA := context.WithCancel(context.Background())
+		ctxB, cancelB := context.WithCancel(context.Background())
 		
-		var cancelFuncs []context.CancelFunc
-		for j := 0; j < 5; j++ {
-			ctxA, cancelA := context.WithCancel(context.Background())
-			cancelFuncs = append(cancelFuncs, cancelA)
-			go func(ctx context.Context) {
-				_, _ = s.Next(ctx)
-			}(ctxA)
-		}
+		aDone := make(chan error, 1)
+		go func() {
+			_, err := s.Next(ctxA)
+			aDone <- err
+		}()
 
 		msgChan := make(chan OutboundMessage, 1)
 		go func() {
-			msg, err := s.Next(ctxB)
-			if err == nil {
-				msgChan <- msg
-			}
+			msg, _ := s.Next(ctxB)
+			msgChan <- msg
 		}()
 
-		// Give them time to block on cond.Wait()
-		time.Sleep(10 * time.Millisecond)
+		// 1. Confirm both consumers are blocked
+		time.Sleep(5 * time.Millisecond)
 
-		// Concurrently cancel all A's and push a message to trigger the race
-		for _, cancel := range cancelFuncs {
-			go cancel()
-		}
+		// 2. Ensure Consumer A’s context is cancelled just before the message is pushed.
+		// If Push() uses Signal(), it has a high probability of waking A instead of B.
+		cancelA()
 		
 		err := s.Push(OutboundMessage{Priority: PriorityHigh, SessionID: "wakeup-test"})
 		if err != nil {
 			t.Fatalf("unexpected error pushing: %v", err)
 		}
 
-		// Verify Consumer B receives it
+		// 3. Confirm Consumer A returns context.Canceled
+		if err := <-aDone; err != context.Canceled {
+			t.Fatalf("Consumer A should have returned Canceled, got %v", err)
+		}
+
+		// 4. Confirm Consumer B receives the message
 		select {
 		case msg := <-msgChan:
 			if msg.SessionID != "wakeup-test" {
 				t.Fatalf("expected wakeup-test, got %v", msg.SessionID)
 			}
-		case <-time.After(50 * time.Millisecond):
-			s.mu.Lock()
-			left := len(s.queues[PriorityHigh])
-			s.mu.Unlock()
-			if left > 0 {
-				t.Fatalf("Consumer B never woke up and message is stuck in queue - wakeup was swallowed on iteration %d", i)
-			}
-			// If left == 0, one of the A consumers grabbed it before its context cancellation fully propagated.
-			// This is a normal Go scheduler race and does not indicate a swallowed wakeup.
+		case <-time.After(100 * time.Millisecond):
+			t.Fatalf("Consumer B never woke up - wakeup was swallowed on iteration %d", i)
 		}
+		
 		cancelB()
 	}
 }

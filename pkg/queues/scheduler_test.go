@@ -339,4 +339,3 @@ func TestPriorityScheduler_PayloadCloning(t *testing.T) {
 		t.Fatalf("expected payload 'hello', got '%s'", string(msg.Payload))
 	}
 }
-

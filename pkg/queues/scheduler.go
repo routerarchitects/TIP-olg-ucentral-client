@@ -33,7 +33,6 @@ type PriorityScheduler struct {
 	mu            sync.Mutex
 	cond          *sync.Cond
 	queues        [4][]OutboundMessage
-	reserved      [4]int
 	capacity      int // maximum entries for Priority 1, 2, and 3
 	emergencyCap  int // maximum entries for the Priority 0 emergency queue
 	consecutiveP0 int
@@ -59,41 +58,22 @@ func (s *PriorityScheduler) isFull(priority Priority) bool {
 	return len(s.queues[priority]) >= s.capacity
 }
 
-// isFullIncludingReserved checks capacity including pending allocations
-// The caller must hold s.mu.
-func (s *PriorityScheduler) isFullIncludingReserved(priority Priority) bool {
-	if priority == PriorityHighest {
-		return len(s.queues[priority])+s.reserved[priority] >= s.emergencyCap
-	}
-	return len(s.queues[priority])+s.reserved[priority] >= s.capacity
-}
-
+// Push adds a message to the appropriate priority queue.
+// Important: Push does NOT clone the message payload. To avoid data races,
+// callers must not mutate the payload after it has been passed to the scheduler.
 func (s *PriorityScheduler) Push(msg OutboundMessage) error {
 	if msg.Priority < PriorityHighest || msg.Priority > PriorityLow {
 		return ErrInvalidPriority
 	}
 
-	// 1. Check capacity including reserved slots to prevent bounded-capacity bypass
-	s.mu.Lock()
-	if s.isFullIncludingReserved(msg.Priority) {
-		s.mu.Unlock()
-		return ErrQueueFull
-	}
-	s.reserved[msg.Priority]++
-	s.mu.Unlock()
-
-	// 2. Clone payload safely without blocking other producers or consumers
-	queued := msg
-	if msg.Payload != nil {
-		queued.Payload = append([]byte(nil), msg.Payload...)
-	}
-
-	// 3. Append to queue and release reservation
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.reserved[msg.Priority]--
-	s.queues[msg.Priority] = append(s.queues[msg.Priority], queued)
+	if s.isFull(msg.Priority) {
+		return ErrQueueFull
+	}
+
+	s.queues[msg.Priority] = append(s.queues[msg.Priority], msg)
 	s.cond.Broadcast() // Broadcast prevents a cancelled consumer from swallowing the wakeup
 	return nil
 }

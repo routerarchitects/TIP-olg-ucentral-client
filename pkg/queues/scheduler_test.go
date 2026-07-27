@@ -388,29 +388,3 @@ func TestPriorityScheduler_CancelledConsumerWakeupRace(t *testing.T) {
 		cancelB()
 	}
 }
-
-func TestPriorityScheduler_PayloadCloning(t *testing.T) {
-	s := NewPriorityScheduler(10, 100)
-
-	originalBytes := []byte("hello")
-	err := s.Push(OutboundMessage{
-		Priority: PriorityHigh,
-		Payload:  originalBytes,
-	})
-	if err != nil {
-		t.Fatalf("unexpected error pushing message: %v", err)
-	}
-
-	// Mutate the original buffer
-	originalBytes[0] = 'H'
-
-	// Verify the queued message was cloned and not mutated
-	msg, err := s.Next(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error on next: %v", err)
-	}
-
-	if string(msg.Payload) != "hello" {
-		t.Fatalf("expected payload 'hello', got '%s'", string(msg.Payload))
-	}
-}

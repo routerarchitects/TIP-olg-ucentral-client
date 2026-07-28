@@ -1,6 +1,7 @@
 package queues
 
 import (
+	"sync"
 	"testing"
 )
 
@@ -76,4 +77,53 @@ func TestHysteresisMonitor_InvalidConfig(t *testing.T) {
 			NewHysteresisMonitor(tt.provider, tt.upper, tt.lower)
 		})
 	}
+}
+
+type mockProvider struct {
+	mu          sync.Mutex
+	utilization float64
+}
+
+func (m *mockProvider) Utilization() float64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.utilization
+}
+
+func (m *mockProvider) SetUtilization(v float64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.utilization = v
+}
+
+func TestHysteresisMonitor_Concurrency(t *testing.T) {
+	mp := &mockProvider{utilization: 0.5}
+	monitor := NewHysteresisMonitor(mp, 0.9, 0.5)
+
+	var wg sync.WaitGroup
+	// Spin up 100 goroutines to concurrently read the throttled state
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				_ = monitor.IsThrottled()
+			}
+		}()
+	}
+
+	// Concurrently change the utilization value
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if i%2 == 0 {
+				mp.SetUtilization(0.95)
+			} else {
+				mp.SetUtilization(0.45)
+			}
+		}(i)
+	}
+
+	wg.Wait()
 }

@@ -2,8 +2,12 @@ package queues
 
 import (
 	"context"
+	"errors"
 	"sync"
 )
+
+// ErrQueueClosed is returned when a queue operation is attempted on a closed queue.
+var ErrQueueClosed = errors.New("queue is closed")
 
 // NATSDispatchBuffer buffers commands headed for NATS. Rejects immediately when full.
 type NATSDispatchBuffer struct {
@@ -48,7 +52,7 @@ func (d *NATSDispatchBuffer) Pop(ctx context.Context) ([]byte, error) {
 		if !ok {
 			// This branch isn't currently reachable since we don't expose a Close(),
 			// but it's defensively correct if Close() is added in the future.
-			return nil, context.Canceled
+			return nil, ErrQueueClosed
 		}
 		return payload, nil
 	case <-ctx.Done():
@@ -58,6 +62,8 @@ func (d *NATSDispatchBuffer) Pop(ctx context.Context) ([]byte, error) {
 
 // CommandResultQueue acts as a bounded, high-priority ingress buffer for JSON-RPC
 // command execution results arriving from the downstream NATS agents.
+// It is strictly non-blocking on consumers and network I/O, meaning it
+// immediately returns ErrQueueFull when at capacity (though it uses a fast-path mutex internally).
 type CommandResultQueue struct {
 	mu       sync.Mutex
 	items    [][]byte

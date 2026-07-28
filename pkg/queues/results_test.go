@@ -144,3 +144,33 @@ func BenchmarkNATSDispatchBuffer_SustainedSaturation(b *testing.B) {
 		}
 	}
 }
+
+func TestNATSDispatchBuffer_PushOwnership(t *testing.T) {
+	d := NewNATSDispatchBuffer(1)
+
+	originalData := []byte(`{"command": "test"}`)
+	err := d.Push(originalData)
+	if err != nil {
+		t.Fatalf("failed to push: %v", err)
+	}
+
+	// Mutate the original slice
+	originalData[13] = 'f'
+	originalData[14] = 'a'
+	originalData[15] = 'i'
+	originalData[16] = 'l'
+
+	// Pop and verify
+	popped, err := d.Pop(context.Background())
+	if err != nil {
+		t.Fatalf("expected to find item")
+	}
+
+	expectedData := []byte(`{"command": "test"}`)
+	if bytes.Equal(popped, originalData) {
+		t.Fatalf("mutation on input slice leaked into the queue: %s", popped)
+	}
+	if !bytes.Equal(popped, expectedData) {
+		t.Fatalf("queue data was corrupted: got %s, expected %s", popped, expectedData)
+	}
+}

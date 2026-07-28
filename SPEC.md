@@ -29,9 +29,10 @@ TIP-olg-ucentral-client/
     │   └── config.go               # Configuration structs (Cloud, NATS, Queues)
     ├── queues/                     # Priority queues, buffers, & scheduler
     │   ├── scheduler.go            # Priority Outbound WebSocket Scheduler
-    │   ├── buffer.go               # Bounded Ring Buffer & NATS Dispatch Buffer
+    │   ├── buffer.go               # Bounded Ring Buffer
     │   ├── coalescer.go            # State message coalescer (last-write-wins)
-    │   └── results.go              # High-priority bounded result buffer
+    │   ├── results.go              # High-priority bounded result buffer & NATS Dispatch Buffer
+    │   └── hysteresis.go           # Backpressure control and utilization monitor
     ├── reqmgr/                     # Request Manager & Cache
     │   ├── manager.go              # Request lifecycle coordinator
     │   ├── transaction.go          # Transaction state machine
@@ -691,7 +692,7 @@ TIP-olg-ucentral-client/
     ```
 
 #### PR 2.2: Buffers, Coalescer & Telemetry Ring Buffer
-*   **Target File:** `pkg/queues/buffer.go`, `pkg/queues/coalescer.go`, `pkg/queues/results.go`
+*   **Target File:** `pkg/queues/buffer.go`, `pkg/queues/coalescer.go`, `pkg/queues/results.go`, `pkg/queues/hysteresis.go`
 *   **Core Structures:**
     ```go
     package queues
@@ -759,6 +760,23 @@ TIP-olg-ucentral-client/
     func (q *CommandResultQueue) Push(payload []byte) error
     func (q *CommandResultQueue) Pop() ([]byte, bool)
     func (q *CommandResultQueue) Utilization() float64
+
+    // UtilizationProvider allows generic monitoring of queue saturation
+    type UtilizationProvider interface {
+        Utilization() float64
+    }
+
+    // HysteresisMonitor tracks backpressure state using high/low watermarks
+    type HysteresisMonitor struct {
+        mu           sync.Mutex
+        provider     UtilizationProvider
+        isThrottled  bool
+        upperPercent float64
+        lowerPercent float64
+    }
+    
+    func NewHysteresisMonitor(provider UtilizationProvider, upper, lower float64) *HysteresisMonitor
+    func (m *HysteresisMonitor) IsThrottled() bool
     ```
 
 **Command Result Queue Lifecycle & Ownership Rules:**
@@ -773,9 +791,9 @@ If `Push()` returns `ErrQueueFull`, the subscriber must not silently discard the
 The Request Manager MUST NOT rewrite the transaction state to Failed and MUST NOT cache a generated `-32603` failure. The exact original downstream response remains preserved in the `TransactionCache` under the original Cloud session key. It must not be automatically replayed to a newly connected Cloud session merely because that session reuses the same JSON-RPC ID. Cross-session recovery requires an explicit status query, `operation_id`, or another defined recovery mechanism.
 
 If the result payload cannot be decoded or its `rpc_id` does not match an active transaction, it may be discarded only after logging and metric emission.
-*   **Telemetry and Log Throttling (Activation & Release):** The Main loop polls `Utilization()` before processing telemetry or standard logs.
-    *   **Activation:** If `Utilization() >= 0.90` (90% capacity, e.g., 45/50 items), the daemon engages throttling, pausing all reads of both telemetry and standard logs from the `TelemetryRingBuffer` (which is shared by both streams).
-    *   **Release:** Throttling remains engaged until `Utilization() <= 0.50` (queue drops to 50% capacity), creating a hysteresis loop to prevent rapid toggling, at which point telemetry and log forwarding resumes.
+*   **Telemetry and Log Throttling (Activation & Release):** The Main loop uses the `HysteresisMonitor` to check `IsThrottled()` before processing telemetry or standard logs.
+    *   **Activation:** If `CommandResultQueue.Utilization() >= 0.90` (90% capacity, e.g., 45/50 items), the monitor engages throttling, pausing all reads of both telemetry and standard logs from the `TelemetryRingBuffer` (which is shared by both streams).
+    *   **Release:** Throttling remains engaged until `CommandResultQueue.Utilization() <= 0.50` (queue drops to 50% capacity), preventing rapid toggling, at which point telemetry and log forwarding resumes.
 
 ---
 

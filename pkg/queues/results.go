@@ -28,8 +28,9 @@ func NewNATSDispatchBuffer(capacity int) *NATSDispatchBuffer {
 // Returns ErrQueueFull if the buffer is at capacity.
 func (d *NATSDispatchBuffer) Push(payload []byte) error {
 	// Fast-fail pre-check to avoid unnecessary allocations during sustained saturation.
-	// If a race condition occurs and the channel fills immediately after this check,
-	// the select's default case will safely catch it.
+	// NOTE: Per the specification's struct definition, we accept the rare race condition 
+	// where the queue fills between this check and the clone, causing a wasted allocation.
+	// We optimize for the common sustained-saturation case without altering the spec.
 	if len(d.ch) == cap(d.ch) {
 		return ErrQueueFull
 	}

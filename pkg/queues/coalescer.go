@@ -47,8 +47,11 @@ func (c *StateCoalescer) Peek() (StateSnapshot, bool) {
 		return StateSnapshot{}, false
 	}
 
+	cloned := make([]byte, len(c.latestState))
+	copy(cloned, c.latestState)
+
 	return StateSnapshot{
-		Payload:    c.latestState,
+		Payload:    cloned,
 		Generation: c.generation,
 	}, true
 }

@@ -66,3 +66,28 @@ func TestTCBUF002_StateCoalescing_GenerationsAndCloning(t *testing.T) {
 		t.Fatalf("expected coalescer to be empty after valid commit")
 	}
 }
+
+func TestStateCoalescer_PeekOwnership(t *testing.T) {
+	c := NewStateCoalescer()
+	
+	originalState := []byte(`{"status": "ok"}`)
+	c.Update(originalState)
+
+	snapshot1, found := c.Peek()
+	if !found {
+		t.Fatalf("expected to find state")
+	}
+
+	// Mutate the returned payload
+	snapshot1.Payload[13] = 'x' // `{"status": "ox"}`
+
+	// Verify that the mutation did not affect the coalescer's internal state
+	snapshot2, _ := c.Peek()
+	if bytes.Equal(snapshot2.Payload, snapshot1.Payload) {
+		t.Fatalf("mutation on Peek result leaked into coalescer: %s", snapshot2.Payload)
+	}
+
+	if !bytes.Equal(snapshot2.Payload, originalState) {
+		t.Fatalf("internal state was corrupted: got %s, expected %s", snapshot2.Payload, originalState)
+	}
+}

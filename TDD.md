@@ -108,8 +108,8 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Assert:* Calling `Next()` must return the `PriorityHighest` message first. Subsequent calls must return `PriorityLow` messages in FIFO order.
 *   **TC-SCH-005 (Anti-Starvation Yield Limit):**
     *   *Requirement Mapping:* `REQ-014` (Outbound Priority Scheduler)
-    *   *Setup:* Pre-fill the scheduler with 20 `PriorityHighest` (Priority 0) messages and 5 `PriorityLow` (Priority 3) messages.
-    *   *Assert:* Calling `Next()` repeatedly must yield exactly 10 consecutive `PriorityHighest` messages, followed by 1 `PriorityLow` message, followed by the remaining 10 `PriorityHighest` messages, before draining the rest of `PriorityLow`.
+    *   *Setup:* Pre-fill the scheduler with 30 `PriorityHighest` (Priority 0) messages, and 3 messages each of `PriorityHigh` (1), `PriorityMedium` (2), and `PriorityLow` (3).
+    *   *Assert:* Calling `Next()` repeatedly must yield exactly 10 consecutive `PriorityHighest` messages, followed by 1 `PriorityHigh` message, followed by 10 `PriorityHighest` messages, followed by 1 `PriorityMedium` message, followed by 10 `PriorityHighest` messages, followed by 1 `PriorityLow` message. This verifies that anti-starvation uses round-robin selection among populated lower queues.
 *   **TC-SCH-002 (Scheduler Blocking and Wakeup):**
     *   *Requirement Mapping:* `REQ-014` (Outbound Priority Scheduler)
     *   *Setup:* Call `Next()` on an empty `PriorityScheduler` in a separate goroutine.

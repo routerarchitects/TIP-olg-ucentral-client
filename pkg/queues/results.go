@@ -102,9 +102,5 @@ func (q *CommandResultQueue) Utilization() float64 {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	if q.capacity == 0 {
-		return 1.0
-	}
-
 	return float64(len(q.items)) / float64(q.capacity)
 }

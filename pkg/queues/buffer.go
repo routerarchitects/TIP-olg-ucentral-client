@@ -36,10 +36,6 @@ func (b *TelemetryRingBuffer) Push(payload []byte) (dropped bool) {
 	cloned := make([]byte, len(payload))
 	copy(cloned, payload)
 
-	if b.capacity == 0 {
-		return true // dropped immediately if capacity is 0
-	}
-
 	if b.size == b.capacity {
 		dropped = true
 		// Overwrite the oldest element (at head)

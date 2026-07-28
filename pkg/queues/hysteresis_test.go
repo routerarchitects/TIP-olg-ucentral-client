@@ -4,8 +4,7 @@ import (
 	"testing"
 )
 
-// TC-QUE-001 & TC-QUE-003
-func TestTCQUE001_TCQUE003_HysteresisThrottling(t *testing.T) {
+func TestHysteresisMonitor_ActivationAndReleaseThresholds(t *testing.T) {
 	q := NewCommandResultQueue(10)
 	monitor := NewHysteresisMonitor(q, 0.90, 0.50)
 

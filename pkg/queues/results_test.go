@@ -125,3 +125,22 @@ func TestNATSDispatchBuffer_InvalidCapacity(t *testing.T) {
 	}()
 	NewNATSDispatchBuffer(-1)
 }
+
+func BenchmarkNATSDispatchBuffer_SustainedSaturation(b *testing.B) {
+	d := NewNATSDispatchBuffer(1)
+	payload := make([]byte, 10*1024) // 10KB payload
+
+	// Fill the buffer
+	_ = d.Push(payload)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	// Repeated pushes should fast-fail and not allocate
+	for i := 0; i < b.N; i++ {
+		err := d.Push(payload)
+		if err != ErrQueueFull {
+			b.Fatalf("expected ErrQueueFull, got %v", err)
+		}
+	}
+}

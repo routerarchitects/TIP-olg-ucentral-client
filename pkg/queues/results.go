@@ -23,6 +23,13 @@ func NewNATSDispatchBuffer(capacity int) *NATSDispatchBuffer {
 // Push adds a command payload to the dispatch buffer without blocking.
 // Returns ErrQueueFull if the buffer is at capacity.
 func (d *NATSDispatchBuffer) Push(payload []byte) error {
+	// Fast-fail pre-check to avoid unnecessary allocations during sustained saturation.
+	// If a race condition occurs and the channel fills immediately after this check,
+	// the select's default case will safely catch it.
+	if len(d.ch) == cap(d.ch) {
+		return ErrQueueFull
+	}
+
 	cloned := make([]byte, len(payload))
 	copy(cloned, payload)
 

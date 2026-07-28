@@ -16,6 +16,9 @@ type TelemetryRingBuffer struct {
 
 // NewTelemetryRingBuffer creates a new ring buffer with the given capacity.
 func NewTelemetryRingBuffer(capacity int) *TelemetryRingBuffer {
+	if capacity <= 0 {
+		panic("TelemetryRingBuffer capacity must be strictly positive")
+	}
 	return &TelemetryRingBuffer{
 		buffer:   make([][]byte, capacity),
 		capacity: capacity,

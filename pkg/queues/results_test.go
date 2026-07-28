@@ -107,3 +107,21 @@ func TestCommandResultQueue_PushOwnership(t *testing.T) {
 		t.Fatalf("queue data was corrupted: got %s, expected %s", popped, expectedData)
 	}
 }
+
+func TestCommandResultQueue_InvalidCapacity(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatalf("expected panic on zero capacity")
+		}
+	}()
+	NewCommandResultQueue(0)
+}
+
+func TestNATSDispatchBuffer_InvalidCapacity(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatalf("expected panic on zero capacity")
+		}
+	}()
+	NewNATSDispatchBuffer(-1)
+}

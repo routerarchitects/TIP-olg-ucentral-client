@@ -1,6 +1,9 @@
 package queues
 
-import "sync"
+import (
+	"math"
+	"sync"
+)
 
 // UtilizationProvider defines anything that can report how full it is (0.0 to 1.0)
 type UtilizationProvider interface {
@@ -18,6 +21,19 @@ type HysteresisMonitor struct {
 
 // NewHysteresisMonitor creates a new HysteresisMonitor.
 func NewHysteresisMonitor(provider UtilizationProvider, upper, lower float64) *HysteresisMonitor {
+	if provider == nil {
+		panic("HysteresisMonitor requires a non-nil UtilizationProvider")
+	}
+	if math.IsNaN(upper) || math.IsNaN(lower) {
+		panic("HysteresisMonitor thresholds cannot be NaN")
+	}
+	if upper <= lower {
+		panic("HysteresisMonitor upper threshold must be strictly greater than lower threshold")
+	}
+	if lower < 0.0 || upper > 1.0 {
+		panic("HysteresisMonitor thresholds must be strictly between 0.0 and 1.0")
+	}
+
 	return &HysteresisMonitor{
 		provider:     provider,
 		upperPercent: upper,

@@ -12,6 +12,9 @@ type NATSDispatchBuffer struct {
 
 // NewNATSDispatchBuffer creates a new NATSDispatchBuffer.
 func NewNATSDispatchBuffer(capacity int) *NATSDispatchBuffer {
+	if capacity <= 0 {
+		panic("NATSDispatchBuffer capacity must be strictly positive")
+	}
 	return &NATSDispatchBuffer{
 		ch: make(chan []byte, capacity),
 	}
@@ -48,6 +51,9 @@ type CommandResultQueue struct {
 
 // NewCommandResultQueue creates a new CommandResultQueue.
 func NewCommandResultQueue(capacity int) *CommandResultQueue {
+	if capacity <= 0 {
+		panic("CommandResultQueue capacity must be strictly positive")
+	}
 	return &CommandResultQueue{
 		items:    make([][]byte, 0, capacity),
 		capacity: capacity,

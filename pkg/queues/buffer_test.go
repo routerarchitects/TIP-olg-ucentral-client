@@ -57,3 +57,12 @@ func TestTCBUF001_TelemetryRingBuffer_FIFODropAndClone(t *testing.T) {
 		t.Fatalf("expected ring buffer to be empty")
 	}
 }
+
+func TestTelemetryRingBuffer_InvalidCapacity(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatalf("expected panic on zero capacity")
+		}
+	}()
+	NewTelemetryRingBuffer(0)
+}

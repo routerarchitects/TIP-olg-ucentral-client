@@ -50,3 +50,31 @@ func TestTCQUE001_TCQUE003_HysteresisThrottling(t *testing.T) {
 		t.Fatalf("expected telemetry NOT to be throttled at 50%% utilization (hysteresis release)")
 	}
 }
+
+func TestHysteresisMonitor_InvalidConfig(t *testing.T) {
+	q := NewCommandResultQueue(10)
+
+	tests := []struct {
+		name     string
+		provider UtilizationProvider
+		upper    float64
+		lower    float64
+	}{
+		{"nil provider", nil, 0.9, 0.5},
+		{"lower > upper", q, 0.5, 0.9},
+		{"lower == upper", q, 0.5, 0.5},
+		{"upper > 1", q, 1.1, 0.5},
+		{"lower < 0", q, 0.9, -0.1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r == nil {
+					t.Fatalf("expected panic for %s", tt.name)
+				}
+			}()
+			NewHysteresisMonitor(tt.provider, tt.upper, tt.lower)
+		})
+	}
+}

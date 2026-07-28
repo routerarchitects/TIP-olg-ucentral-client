@@ -29,9 +29,9 @@ TIP-olg-ucentral-client/
     │   └── config.go               # Configuration structs (Cloud, NATS, Queues)
     ├── queues/                     # Priority queues, buffers, & scheduler
     │   ├── scheduler.go            # Priority Outbound WebSocket Scheduler
-    │   ├── buffer.go               # Bounded Ring Buffer & NATS Dispatch Buffer
+    │   ├── buffer.go               # Bounded Ring Buffer
     │   ├── coalescer.go            # State message coalescer (last-write-wins)
-    │   ├── results.go              # High-priority bounded result buffer
+    │   ├── results.go              # High-priority bounded result buffer & NATS Dispatch Buffer
     │   └── hysteresis.go           # Backpressure control and utilization monitor
     ├── reqmgr/                     # Request Manager & Cache
     │   ├── manager.go              # Request lifecycle coordinator

@@ -23,8 +23,11 @@ func NewNATSDispatchBuffer(capacity int) *NATSDispatchBuffer {
 // Push adds a command payload to the dispatch buffer without blocking.
 // Returns ErrQueueFull if the buffer is at capacity.
 func (d *NATSDispatchBuffer) Push(payload []byte) error {
+	cloned := make([]byte, len(payload))
+	copy(cloned, payload)
+
 	select {
-	case d.ch <- payload:
+	case d.ch <- cloned:
 		return nil
 	default:
 		return ErrQueueFull
@@ -34,7 +37,12 @@ func (d *NATSDispatchBuffer) Push(payload []byte) error {
 // Pop blocks until a payload is available or the context is cancelled.
 func (d *NATSDispatchBuffer) Pop(ctx context.Context) ([]byte, error) {
 	select {
-	case payload := <-d.ch:
+	case payload, ok := <-d.ch:
+		if !ok {
+			// This branch isn't currently reachable since we don't expose a Close(),
+			// but it's defensively correct if Close() is added in the future.
+			return nil, context.Canceled
+		}
 		return payload, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()

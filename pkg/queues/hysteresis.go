@@ -31,7 +31,7 @@ func NewHysteresisMonitor(provider UtilizationProvider, upper, lower float64) *H
 		panic("HysteresisMonitor upper threshold must be strictly greater than lower threshold")
 	}
 	if lower < 0.0 || upper > 1.0 {
-		panic("HysteresisMonitor thresholds must be strictly between 0.0 and 1.0")
+		panic("HysteresisMonitor thresholds must be within [0.0, 1.0]")
 	}
 
 	return &HysteresisMonitor{

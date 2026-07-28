@@ -69,7 +69,7 @@ func TestTCBUF002_StateCoalescing_GenerationsAndCloning(t *testing.T) {
 
 func TestStateCoalescer_PeekOwnership(t *testing.T) {
 	c := NewStateCoalescer()
-	
+
 	originalState := []byte(`{"status": "ok"}`)
 	c.Update(originalState)
 

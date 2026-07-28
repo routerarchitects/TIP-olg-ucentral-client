@@ -63,7 +63,10 @@ func (q *CommandResultQueue) Push(payload []byte) error {
 		return ErrQueueFull
 	}
 
-	q.items = append(q.items, payload)
+	cloned := make([]byte, len(payload))
+	copy(cloned, payload)
+
+	q.items = append(q.items, cloned)
 	return nil
 }
 

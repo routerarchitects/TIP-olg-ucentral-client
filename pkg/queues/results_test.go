@@ -1,6 +1,7 @@
 package queues
 
 import (
+	"bytes"
 	"context"
 	"testing"
 )
@@ -74,5 +75,35 @@ func TestTCBUF006_CommandResultQueue_NonBlocking(t *testing.T) {
 	}
 	if q.Utilization() != 0.0 {
 		t.Fatalf("expected utilization 0.0, got %f", q.Utilization())
+	}
+}
+
+func TestCommandResultQueue_PushOwnership(t *testing.T) {
+	q := NewCommandResultQueue(1)
+
+	originalData := []byte(`{"result": "success"}`)
+	err := q.Push(originalData)
+	if err != nil {
+		t.Fatalf("failed to push: %v", err)
+	}
+
+	// Mutate the original slice
+	originalData[13] = 'f'
+	originalData[14] = 'a'
+	originalData[15] = 'i'
+	originalData[16] = 'l'
+
+	// Pop and verify
+	popped, found := q.Pop()
+	if !found {
+		t.Fatalf("expected to find item")
+	}
+
+	expectedData := []byte(`{"result": "success"}`)
+	if bytes.Equal(popped, originalData) {
+		t.Fatalf("mutation on input slice leaked into the queue: %s", popped)
+	}
+	if !bytes.Equal(popped, expectedData) {
+		t.Fatalf("queue data was corrupted: got %s, expected %s", popped, expectedData)
 	}
 }

@@ -43,10 +43,12 @@ func NewHysteresisMonitor(provider UtilizationProvider, upper, lower float64) *H
 
 // IsThrottled returns the current state, flipping only when thresholds are crossed.
 func (m *HysteresisMonitor) IsThrottled() bool {
+	// Read utilization outside the lock to avoid lock-order inversion
+	// if the generic provider happens to block or call back into this monitor.
+	util := m.provider.Utilization()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	util := m.provider.Utilization()
 
 	if m.isThrottled {
 		if util <= m.lowerPercent {

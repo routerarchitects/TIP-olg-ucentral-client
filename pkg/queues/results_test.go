@@ -174,3 +174,15 @@ func TestNATSDispatchBuffer_PushOwnership(t *testing.T) {
 		t.Fatalf("queue data was corrupted: got %s, expected %s", popped, expectedData)
 	}
 }
+
+func TestNATSDispatchBuffer_PopContextCancellation(t *testing.T) {
+	d := NewNATSDispatchBuffer(1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	_, err := d.Pop(ctx)
+	if err != context.Canceled {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}

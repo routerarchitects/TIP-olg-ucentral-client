@@ -792,8 +792,8 @@ The Request Manager MUST NOT rewrite the transaction state to Failed and MUST NO
 
 If the result payload cannot be decoded or its `rpc_id` does not match an active transaction, it may be discarded only after logging and metric emission.
 *   **Telemetry and Log Throttling (Activation & Release):** The Main loop uses the `HysteresisMonitor` to check `IsThrottled()` before processing telemetry or standard logs.
-    *   **Activation:** If the underlying provider's `Utilization() >= 0.90` (90% capacity, e.g., 45/50 items), the monitor engages throttling, pausing all reads of both telemetry and standard logs from the `TelemetryRingBuffer` (which is shared by both streams).
-    *   **Release:** Throttling remains engaged until `Utilization() <= 0.50` (queue drops to 50% capacity), preventing rapid toggling, at which point telemetry and log forwarding resumes.
+    *   **Activation:** If `CommandResultQueue.Utilization() >= 0.90` (90% capacity, e.g., 45/50 items), the monitor engages throttling, pausing all reads of both telemetry and standard logs from the `TelemetryRingBuffer` (which is shared by both streams).
+    *   **Release:** Throttling remains engaged until `CommandResultQueue.Utilization() <= 0.50` (queue drops to 50% capacity), preventing rapid toggling, at which point telemetry and log forwarding resumes.
 
 ---
 

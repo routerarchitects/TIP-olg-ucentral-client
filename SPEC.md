@@ -661,7 +661,7 @@ TIP-olg-ucentral-client/
     //   a strict yield mechanism is enforced: after 10 consecutive Priority 0 messages are yielded, 
     //   the scheduler must yield at least one available message from the lower queues (1, 2, or 3) 
     //   using a round-robin scan to prevent same-priority starvation among the lower queues.
-    // - Context cancellation drives scheduler shutdown and unblocks waiting Next calls.
+    // - Context cancellation unblocks and terminates the affected Next() call. It does not shut down the scheduler.
     type OutboundScheduler interface {
     	// Push transfers ownership only when it returns nil.
     	// On error, ownership remains with the caller.

@@ -201,7 +201,7 @@ func (m *DefaultRequestManager) ReleaseOperationLock(operationID string) error {
 	// Release the lock
 	m.activeStateTx = ""
 	m.stateLock.Unlock()
-	
+
 	return nil
 }
 

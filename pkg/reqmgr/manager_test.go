@@ -246,9 +246,17 @@ func TestTCUPG005_RespondAndRetainRollback(t *testing.T) {
 		t.Fatalf("failed to create upgrade tx: %v", err)
 	}
 
-	m.MarkPreparingDispatch(tx.RPCID)
-	m.MarkPendingPublish(tx.RPCID)
-	m.MarkInFlight(tx.RPCID)
+	if err := m.MarkPreparingDispatch(tx.RPCID); err != nil {
+		t.Fatalf("MarkPreparingDispatch failed: %v", err)
+	}
+
+	if err := m.MarkPendingPublish(tx.RPCID); err != nil {
+		t.Fatalf("MarkPendingPublish failed: %v", err)
+	}
+
+	if err := m.MarkInFlight(tx.RPCID); err != nil {
+		t.Fatalf("MarkInFlight failed: %v", err)
+	}
 
 	// Call RespondAndRetain which will fail during Save
 	err = m.RespondAndRetain(tx.RPCID, []byte(`{"status": {"error": 0}}`))

@@ -348,9 +348,19 @@ func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) 
 	// Cache logic would go here in PR 3.2
 
 	// 4. Safely clean up via the standard terminal transition
-	// If a buffered reply exists, clean it up
-	if m.pendingReplies != nil {
+	// If a buffered reply exists, process it with its proper state
+	if pending, ok := m.pendingReplies[rpcID]; ok {
 		delete(m.pendingReplies, rpcID)
+		
+		// If we are processing a buffered reply AFTER a successful save,
+		// the lock is currently held by operationID, not rpcID.
+		// We must explicitly release it since terminalTransition only releases rpcID locks.
+		if m.activeStateTx == operationID {
+			m.activeStateTx = ""
+			m.stateLock.Unlock()
+		}
+		
+		return m.terminalTransition(rpcID, pending.State)
 	}
 
 	return m.terminalTransition(rpcID, TxCompleted)
@@ -382,6 +392,21 @@ func (m *DefaultRequestManager) Fail(rpcID string, errResponse []byte) error {
 func (m *DefaultRequestManager) Timeout(rpcID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	tx, exists := m.transactionsByRPCID[rpcID]
+	if !exists {
+		return ErrAlreadyTerminal
+	}
+
+	// Buffer timeout that arrives during lock handoff disk I/O
+	if tx.Method == "upgrade" && m.activeStateTx != rpcID && m.activeStateTx != "" {
+		if m.pendingReplies == nil {
+			m.pendingReplies = make(map[string]PendingReply)
+		}
+		m.pendingReplies[rpcID] = PendingReply{Payload: nil, State: TxTimedOut}
+		return nil
+	}
+
 	return m.terminalTransition(rpcID, TxTimedOut)
 }
 

@@ -291,77 +291,105 @@ func TestTCUPG005_RespondAndRetainRollback(t *testing.T) {
 	}
 }
 
-// blockingErrorMockStore blocks Save until a channel is closed, then returns an error
-type blockingErrorMockStore struct {
+// blockingMockStore blocks Save until a channel is closed, then returns a configurable error
+type blockingMockStore struct {
 	mockStore
 	entered chan struct{}
 	release chan struct{}
+	err     error
 }
 
-func (s *blockingErrorMockStore) Save(ctx context.Context, operation *PersistentOperation) error {
+func (s *blockingMockStore) Save(ctx context.Context, operation *PersistentOperation) error {
 	close(s.entered)
 	select {
 	case <-s.release:
-		return errors.New("simulated disk failure after block")
+		return s.err
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 }
 
 func TestTCUPG006_RespondAndRetainConcurrentTerminalEvent(t *testing.T) {
-	cache := NewTransactionCache()
-	config := CacheTTLConfig{}
-	scheduler := queues.NewPriorityScheduler(10, 10)
-	store := &blockingErrorMockStore{
-		entered: make(chan struct{}),
-		release: make(chan struct{}),
-	}
-	m := NewRequestManager(10*time.Second, config, cache, scheduler, store)
-
-	cloudRPCID := json.RawMessage(`"upg-concurrent"`)
-	tx, err := m.CreateTransaction("session-err", cloudRPCID, true, "upgrade", 10*time.Second, true)
-	if err != nil {
-		t.Fatalf("failed to create upgrade tx: %v", err)
+	cases := []struct {
+		name       string
+		saveErr    error
+		terminalOp string
+	}{
+		{"Complete during Save Failure", errors.New("disk fail"), "complete"},
+		{"Fail during Save Failure", errors.New("disk fail"), "fail"},
+		{"Timeout during Save Failure", errors.New("disk fail"), "timeout"},
+		{"Complete during Save Success", nil, "complete"},
+		{"Fail during Save Success", nil, "fail"},
+		{"Timeout during Save Success", nil, "timeout"},
 	}
 
-	m.MarkPreparingDispatch(tx.RPCID)
-	m.MarkPendingPublish(tx.RPCID)
-	m.MarkInFlight(tx.RPCID)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cache := NewTransactionCache()
+			config := CacheTTLConfig{}
+			scheduler := queues.NewPriorityScheduler(10, 10)
+			store := &blockingMockStore{
+				entered: make(chan struct{}),
+				release: make(chan struct{}),
+				err:     tc.saveErr,
+			}
+			m := NewRequestManager(10*time.Second, config, cache, scheduler, store)
 
-	// Start RespondAndRetain in a goroutine so it blocks on Save
-	errCh := make(chan error)
-	go func() {
-		errCh <- m.RespondAndRetain(tx.RPCID, []byte(`{"status": {"error": 0}}`))
-	}()
+			cloudRPCID := json.RawMessage(`"upg-concurrent"`)
+			tx, err := m.CreateTransaction("session-err", cloudRPCID, true, "upgrade", 10*time.Second, true)
+			if err != nil {
+				t.Fatalf("failed to create upgrade tx: %v", err)
+			}
 
-	// Wait deterministically for Save to actually start (lock transferred)
-	<-store.entered
+			m.MarkPreparingDispatch(tx.RPCID)
+			m.MarkPendingPublish(tx.RPCID)
+			m.MarkInFlight(tx.RPCID)
 
-	// Simulate a concurrent fast NATS reply arriving
-	err = m.Complete(tx.RPCID, []byte("success"))
-	if err != nil {
-		t.Fatalf("Complete failed concurrently: %v", err)
+			// Start RespondAndRetain in a goroutine so it blocks on Save
+			errCh := make(chan error)
+			go func() {
+				errCh <- m.RespondAndRetain(tx.RPCID, []byte(`{"status": {"error": 0}}`))
+			}()
+
+			// Wait deterministically for Save to actually start (lock transferred)
+			<-store.entered
+
+			// Simulate a concurrent terminal event arriving
+			switch tc.terminalOp {
+			case "complete":
+				err = m.Complete(tx.RPCID, []byte("success"))
+			case "fail":
+				err = m.Fail(tx.RPCID, []byte("fail"))
+			case "timeout":
+				err = m.Timeout(tx.RPCID)
+			}
+			if err != nil {
+				t.Fatalf("%s failed concurrently: %v", tc.terminalOp, err)
+			}
+
+			// Unblock the Save
+			close(store.release)
+
+			// Get the RespondAndRetain result
+			err = <-errCh
+			
+			// If Save succeeded, RespondAndRetain should succeed (nil).
+			// If Save failed, RespondAndRetain should still succeed (nil) because the buffered terminal event satisfies the state machine!
+			if err != nil {
+				t.Fatalf("expected RespondAndRetain to successfully return nil due to buffered reply, got %v", err)
+			}
+
+			// Verify the lock is fully released and transaction is deleted
+			m.mu.Lock()
+			if m.activeStateTx != "" {
+				t.Fatalf("expected lock to be fully released, got %s", m.activeStateTx)
+			}
+			if _, exists := m.transactionsByRPCID[tx.RPCID]; exists {
+				t.Fatalf("expected transaction to be deleted by the buffered event")
+			}
+			m.mu.Unlock()
+		})
 	}
-
-	// Unblock the Save and force it to fail
-	close(store.release)
-
-	// Get the RespondAndRetain result
-	err = <-errCh
-	if err != nil {
-		t.Fatalf("expected RespondAndRetain to successfully return nil due to buffered reply, got %v", err)
-	}
-
-	// Because Complete arrived during the save, the transaction should have been processed
-	// and deleted, and the lock should be fully released, NOT restored!
-	m.mu.Lock()
-	if m.activeStateTx != "" {
-		t.Fatalf("expected lock to be fully released, got %s", m.activeStateTx)
-	}
-	if _, exists := m.transactionsByRPCID[tx.RPCID]; exists {
-		t.Fatalf("expected transaction to be deleted by the buffered Complete")
-	}
-	m.mu.Unlock()
 }
 
 func TestTCRM007_CanonicalRequestKey(t *testing.T) {

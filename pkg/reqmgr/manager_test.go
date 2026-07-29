@@ -49,8 +49,8 @@ func TestTCRM001_StateMachineTransitions(t *testing.T) {
 		t.Fatalf("failed to transition to TxPreparingDispatch: %v", err)
 	}
 
-	// Note: Illegal jumps to Complete/Timeout from TxPreparingDispatch are now buffered
-	// rather than returning ErrInvalidStateTransition, so we don't test rejection here.
+	// A fast Complete response received before TxInFlight is buffered.
+	// Timeout remains invalid before TxInFlight.
 
 	if tx.State != TxPreparingDispatch {
 		t.Fatalf("expected state TxPreparingDispatch, got %v", tx.State)

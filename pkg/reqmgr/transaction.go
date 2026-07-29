@@ -57,7 +57,7 @@ type Transaction struct {
 	RPCID            string
 	CloudSessionID   string
 	CloudRPCID       json.RawMessage
-	RequestKey       string // sessionID:method:canonicalID (e.g. "session-uuid:configure:number:42")
+	RequestKey       string // sessionID:typedCanonicalID, e.g. "session-uuid:n:42"
 	RespondToCloud   bool
 	Method           string
 	State            TransactionState

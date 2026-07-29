@@ -290,3 +290,146 @@ func TestTCUPG005_RespondAndRetainRollback(t *testing.T) {
 		t.Fatalf("failed to cleanup restored transaction: %v", err)
 	}
 }
+
+// blockingErrorMockStore blocks Save until a channel is closed, then returns an error
+type blockingErrorMockStore struct {
+	mockStore
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingErrorMockStore) Save(ctx context.Context, operation *PersistentOperation) error {
+	close(s.entered)
+	select {
+	case <-s.release:
+		return errors.New("simulated disk failure after block")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func TestTCUPG006_RespondAndRetainConcurrentTerminalEvent(t *testing.T) {
+	cache := NewTransactionCache()
+	config := CacheTTLConfig{}
+	scheduler := queues.NewPriorityScheduler(10, 10)
+	store := &blockingErrorMockStore{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	m := NewRequestManager(10*time.Second, config, cache, scheduler, store)
+
+	cloudRPCID := json.RawMessage(`"upg-concurrent"`)
+	tx, err := m.CreateTransaction("session-err", cloudRPCID, true, "upgrade", 10*time.Second, true)
+	if err != nil {
+		t.Fatalf("failed to create upgrade tx: %v", err)
+	}
+
+	m.MarkPreparingDispatch(tx.RPCID)
+	m.MarkPendingPublish(tx.RPCID)
+	m.MarkInFlight(tx.RPCID)
+
+	// Start RespondAndRetain in a goroutine so it blocks on Save
+	errCh := make(chan error)
+	go func() {
+		errCh <- m.RespondAndRetain(tx.RPCID, []byte(`{"status": {"error": 0}}`))
+	}()
+
+	// Wait deterministically for Save to actually start (lock transferred)
+	<-store.entered
+
+	// Simulate a concurrent fast NATS reply arriving
+	err = m.Complete(tx.RPCID, []byte("success"))
+	if err != nil {
+		t.Fatalf("Complete failed concurrently: %v", err)
+	}
+
+	// Unblock the Save and force it to fail
+	close(store.release)
+
+	// Get the RespondAndRetain result
+	err = <-errCh
+	if err != nil {
+		t.Fatalf("expected RespondAndRetain to successfully return nil due to buffered reply, got %v", err)
+	}
+
+	// Because Complete arrived during the save, the transaction should have been processed
+	// and deleted, and the lock should be fully released, NOT restored!
+	m.mu.Lock()
+	if m.activeStateTx != "" {
+		t.Fatalf("expected lock to be fully released, got %s", m.activeStateTx)
+	}
+	if _, exists := m.transactionsByRPCID[tx.RPCID]; exists {
+		t.Fatalf("expected transaction to be deleted by the buffered Complete")
+	}
+	m.mu.Unlock()
+}
+
+func TestTCRM007_CanonicalRequestKey(t *testing.T) {
+	tests := []struct {
+		name      string
+		sessionID string
+		method    string
+		id        json.RawMessage
+		wantKey   string // leave empty if expecting an error
+		wantErr   bool
+	}{
+		{"String ID", "sess", "get", json.RawMessage(`"123"`), "sess:get:s:123", false},
+		{"Number ID", "sess", "get", json.RawMessage(`123`), "sess:get:n:123", false},
+		{"Float ID", "sess", "get", json.RawMessage(`123.0`), "sess:get:n:123", false},
+		{"Exponential ID", "sess", "get", json.RawMessage(`1.23e2`), "sess:get:n:123", false},
+		{"Large Int 1", "sess", "get", json.RawMessage(`9007199254740992`), "sess:get:n:9007199254740992", false},
+		{"Large Int 2", "sess", "get", json.RawMessage(`9007199254740993`), "sess:get:n:9007199254740993", false},
+		{"Null ID", "sess", "get", json.RawMessage(`null`), "", false}, // generates UUID
+		{"Empty ID", "sess", "get", json.RawMessage(``), "", false},    // generates UUID
+		{"Object ID", "sess", "get", json.RawMessage(`{}`), "", true},
+		{"Array ID", "sess", "get", json.RawMessage(`[]`), "", true},
+		{"Boolean ID", "sess", "get", json.RawMessage(`true`), "", true},
+		{"Invalid JSON", "sess", "get", json.RawMessage(`{bad`), "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := CanonicalRequestKey(tt.sessionID, tt.method, tt.id)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("CanonicalRequestKey() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr && tt.wantKey != "" && got != tt.wantKey {
+				t.Errorf("CanonicalRequestKey() got = %v, want %v", got, tt.wantKey)
+			}
+			if !tt.wantErr && tt.wantKey == "" && len(got) < 36 {
+				t.Errorf("CanonicalRequestKey() for null/empty should generate UUID, got = %v", got)
+			}
+		})
+	}
+}
+
+func TestTCRM008_NullIDBypass(t *testing.T) {
+	cache := NewTransactionCache()
+	config := CacheTTLConfig{}
+	scheduler := queues.NewPriorityScheduler(10, 10)
+	store := &mockStore{}
+	m := NewRequestManager(10*time.Second, config, cache, scheduler, store)
+
+	// Test 1: respondToCloud = true, but id = null
+	_, err := m.CreateTransaction("sess", json.RawMessage(`null`), true, "configure", 10*time.Second, true)
+	if err == nil {
+		t.Fatalf("expected error for state-changing command with null ID, got nil")
+	}
+
+	// Test 2: respondToCloud = true, but id = empty
+	_, err = m.CreateTransaction("sess", json.RawMessage(``), true, "configure", 10*time.Second, true)
+	if err == nil {
+		t.Fatalf("expected error for state-changing command with empty ID, got nil")
+	}
+
+	// Test 3: non-state-changing command with null ID (should succeed)
+	tx, err := m.CreateTransaction("sess", json.RawMessage(`null`), true, "status.get", 10*time.Second, false)
+	if err != nil {
+		t.Fatalf("expected non-state-changing command with null ID to succeed, got %v", err)
+	}
+	if tx == nil {
+		t.Fatalf("expected transaction, got nil")
+	}
+}
+

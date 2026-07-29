@@ -1,10 +1,12 @@
 package reqmgr
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"sync"
 	"time"
 
@@ -18,6 +20,11 @@ var (
 	ErrBusy                   = errors.New("system busy or transaction active")
 )
 
+type PendingReply struct {
+	Payload []byte
+	State   TransactionState
+}
+
 type DefaultRequestManager struct {
 	mu                  sync.Mutex
 	dispatchTimeout     time.Duration
@@ -29,10 +36,16 @@ type DefaultRequestManager struct {
 	cacheTTLConfig      CacheTTLConfig
 	scheduler           *queues.PriorityScheduler
 	store               OperationStore
-	pendingReplies      map[string][]byte
+	pendingReplies      map[string]PendingReply
 }
 
 func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLConfig, cache *TransactionCache, scheduler *queues.PriorityScheduler, store OperationStore) *DefaultRequestManager {
+	if cache == nil {
+		panic("cache cannot be nil")
+	}
+	if store == nil {
+		panic("store cannot be nil")
+	}
 	return &DefaultRequestManager{
 		dispatchTimeout:     dispatchTimeout,
 		transactionsByRPCID: make(map[string]*Transaction),
@@ -41,7 +54,7 @@ func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLCon
 		cacheTTLConfig:      cacheTTLConfig,
 		scheduler:           scheduler,
 		store:               store,
-		pendingReplies:      make(map[string][]byte),
+		pendingReplies:      make(map[string]PendingReply),
 	}
 }
 
@@ -51,7 +64,28 @@ func CanonicalRequestKey(sessionID string, method string, id json.RawMessage) (s
 		// For notifications, use a generated UUID
 		return fmt.Sprintf("%s:%s:%s", sessionID, method, uuid.New().String()), nil
 	}
-	return fmt.Sprintf("%s:%s:%s", sessionID, method, string(id)), nil
+
+	decoder := json.NewDecoder(bytes.NewReader(id))
+	decoder.UseNumber()
+
+	var parsed interface{}
+	if err := decoder.Decode(&parsed); err != nil {
+		return "", fmt.Errorf("invalid json-rpc id: %w", err)
+	}
+
+	switch v := parsed.(type) {
+	case string:
+		return fmt.Sprintf("%s:%s:s:%s", sessionID, method, v), nil
+	case json.Number:
+		f, _, err := big.ParseFloat(v.String(), 10, 256, big.ToNearestEven)
+		if err != nil {
+			return "", fmt.Errorf("invalid json-rpc number: %w", err)
+		}
+		// Text('f', -1) correctly normalizes 1, 1.0, and 1e0 to "1" without losing large integer precision
+		return fmt.Sprintf("%s:%s:n:%s", sessionID, method, f.Text('f', -1)), nil
+	default:
+		return "", errors.New("json-rpc id must be string or number")
+	}
 }
 
 func (m *DefaultRequestManager) CreateTransaction(sessionID string, cloudRPCID json.RawMessage, respondToCloud bool, method string, timeout time.Duration, isStateChanging bool) (*Transaction, error) {
@@ -76,8 +110,8 @@ func (m *DefaultRequestManager) CreateTransaction(sessionID string, cloudRPCID j
 
 	// 3. Check state-changing rules
 	if isStateChanging {
-		if !respondToCloud {
-			return nil, errors.New("state changing commands must have an ID")
+		if !respondToCloud || len(cloudRPCID) == 0 || string(cloudRPCID) == "null" {
+			return nil, errors.New("state-changing commands must have a non-null ID")
 		}
 
 		// Note: We use TryLock here to avoid deadlocks. If we can't get it immediately, return busy.
@@ -193,11 +227,27 @@ func (m *DefaultRequestManager) MarkInFlight(rpcID string) error {
 	return nil
 }
 
+// Complete moves a transaction to the TxCompleted state.
+// Note: The `response` argument is currently unused. It is reserved for
+// the TransactionCache implementation in Epic 3 (PR 3.2), which will cache this payload.
 func (m *DefaultRequestManager) Complete(rpcID string, response []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	// Cache logic would go here in PR 3.2
+	tx, exists := m.transactionsByRPCID[rpcID]
+	if !exists {
+		return ErrAlreadyTerminal
+	}
 
+	// Buffer fast replies that arrive during lock handoff disk I/O
+	if tx.Method == "upgrade" && m.activeStateTx != rpcID && m.activeStateTx != "" {
+		if m.pendingReplies == nil {
+			m.pendingReplies = make(map[string]PendingReply)
+		}
+		m.pendingReplies[rpcID] = PendingReply{Payload: response, State: TxCompleted}
+		return nil
+	}
+
+	// Cache logic would go here in PR 3.2
 	return m.terminalTransition(rpcID, TxCompleted)
 }
 
@@ -218,6 +268,9 @@ func (m *DefaultRequestManager) ReleaseOperationLock(operationID string) error {
 	return nil
 }
 
+// RespondAndRetain transfers stateLock ownership to a background operation and cleans up the transaction.
+// Note: The `response` argument is currently unused. It is reserved for
+// the TransactionCache implementation in Epic 3 (PR 3.2), which will cache this payload.
 func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) error {
 	m.mu.Lock()
 
@@ -247,12 +300,9 @@ func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) 
 		tx.DispatchTimer.Stop()
 	}
 
-	// 2. Temporarily hide the transaction from active maps to protect it from concurrent
-	//    terminal method calls (like Complete/Fail) while we are unlocked.
-	delete(m.transactionsByRPCID, rpcID)
-	delete(m.activeCloudRequests, tx.RequestKey)
-
-	// Pre-transfer lock ownership to prevent fast-replies from unlocking it
+	// 2. Pre-transfer lock ownership to prevent fast-replies from unlocking it
+	// We intentionally leave the transaction in the active maps so concurrent
+	// terminal methods can find it and buffer their replies.
 	operationID := uuid.New().String()
 	m.activeStateTx = operationID
 	m.mu.Unlock()
@@ -273,18 +323,19 @@ func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) 
 	defer cancel()
 	err := m.store.Save(ctx, op)
 
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if err != nil {
 		// Rollback lock ownership if disk fails
-		m.mu.Lock()
-		defer m.mu.Unlock()
 		if m.activeStateTx == operationID {
 			m.activeStateTx = rpcID
 		}
 
-		// Restore transaction to active maps
-		m.transactionsByRPCID[rpcID] = tx
-		if tx.RespondToCloud {
-			m.activeCloudRequests[tx.RequestKey] = rpcID
+		// If a terminal event arrived while we were writing to disk, process it now!
+		if pending, ok := m.pendingReplies[rpcID]; ok {
+			delete(m.pendingReplies, rpcID)
+			return m.terminalTransition(rpcID, pending.State)
 		}
 
 		// Restart timer
@@ -297,19 +348,34 @@ func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) 
 	// Cache logic would go here in PR 3.2
 
 	// 4. Safely clean up via the standard terminal transition
-	// We MUST restore the transaction to the active maps so that terminalTransition
-	// can find it and execute the standard deletion and cleanup sequence!
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.transactionsByRPCID[rpcID] = tx
-	m.activeCloudRequests[tx.RequestKey] = rpcID
+	// If a buffered reply exists, clean it up
+	if m.pendingReplies != nil {
+		delete(m.pendingReplies, rpcID)
+	}
 
 	return m.terminalTransition(rpcID, TxCompleted)
 }
 
+// Fail moves a transaction to the TxFailed state.
+// Note: The `errResponse` argument is currently unused. It is reserved for
+// the TransactionCache implementation in Epic 3 (PR 3.2), which will cache this payload.
 func (m *DefaultRequestManager) Fail(rpcID string, errResponse []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	tx, exists := m.transactionsByRPCID[rpcID]
+	if !exists {
+		return ErrAlreadyTerminal
+	}
+
+	// Buffer fast replies that arrive during lock handoff disk I/O
+	if tx.Method == "upgrade" && m.activeStateTx != rpcID && m.activeStateTx != "" {
+		if m.pendingReplies == nil {
+			m.pendingReplies = make(map[string]PendingReply)
+		}
+		m.pendingReplies[rpcID] = PendingReply{Payload: errResponse, State: TxFailed}
+		return nil
+	}
+
 	return m.terminalTransition(rpcID, TxFailed)
 }
 

@@ -16,10 +16,11 @@ import (
 )
 
 var (
-	ErrInvalidStateTransition = errors.New("invalid state transition")
-	ErrAlreadyTerminal        = errors.New("transaction already in terminal state")
-	ErrBusy                   = errors.New("system busy or transaction active")
-	ErrOperationNotActive     = errors.New("operation is not active")
+	ErrInvalidStateTransition     = errors.New("invalid state transition")
+	ErrAlreadyTerminal            = errors.New("transaction already in terminal state")
+	ErrBusy                       = errors.New("system busy or transaction active")
+	ErrOperationNotActive         = errors.New("operation is not active")
+	ErrOperationReleaseInProgress = errors.New("operation release already in progress")
 )
 
 type PendingReply struct {
@@ -144,7 +145,14 @@ func (m *DefaultRequestManager) CreateTransaction(sessionID string, cloudRPCID j
 		DispatchDeadline: time.Now().Add(m.dispatchTimeout),
 	}
 
+	if method == "upgrade" && !isStateChanging {
+		return nil, errors.New("upgrade must be state-changing")
+	}
+
 	if isStateChanging {
+		if m.activeStateTx != "" {
+			return nil, ErrBusy
+		}
 		m.activeStateTx = rpcID
 	}
 
@@ -263,7 +271,8 @@ func (m *DefaultRequestManager) Complete(rpcID string, response []byte) error {
 	}
 
 	isPreFlight := tx.State == TxCreated || tx.State == TxPreparingDispatch || tx.State == TxPendingPublish
-	isHandoff := tx.Method == "upgrade" && m.activeStateTx != rpcID && m.activeStateTx != ""
+	// Determine if this transaction is actively undergoing a lock handoff
+	isHandoff := tx.HandoffInProgress
 
 	// Buffer fast replies that arrive before the request is officially in flight,
 	// or during lock handoff disk I/O
@@ -285,10 +294,11 @@ func (m *DefaultRequestManager) Complete(rpcID string, response []byte) error {
 func (m *DefaultRequestManager) ReleaseOperationLock(ctx context.Context, operationID string) error {
 	m.mu.Lock()
 	if m.activeStateTx != operationID {
-		// If another worker is already deleting it, we can safely consider our job done!
+		// If another worker is already deleting it, we cannot return success yet because
+		// their deletion might fail. Return a distinct error so the caller knows it is pending.
 		if m.activeStateTx == "deleting:"+operationID {
 			m.mu.Unlock()
-			return nil
+			return ErrOperationReleaseInProgress
 		}
 		m.mu.Unlock()
 		return ErrOperationNotActive
@@ -302,9 +312,8 @@ func (m *DefaultRequestManager) ReleaseOperationLock(ctx context.Context, operat
 	if err := m.store.Delete(ctx, operationID); err != nil {
 		m.mu.Lock()
 		// Roll back the state if deletion failed so it can be retried later
-		if m.activeStateTx == "deleting:"+operationID {
-			m.activeStateTx = operationID
-		}
+		// Update local state to point to the new background operation ID
+		m.activeStateTx = operationID
 		m.mu.Unlock()
 		return fmt.Errorf("failed to delete persistent operation: %w", err)
 	}
@@ -356,6 +365,7 @@ func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) 
 	// We intentionally leave the transaction in the active maps so concurrent
 	// terminal methods can find it and buffer their replies.
 	operationID := uuid.New().String()
+	tx.HandoffInProgress = true
 	m.activeStateTx = operationID
 	m.mu.Unlock()
 
@@ -382,6 +392,7 @@ func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) 
 	defer m.mu.Unlock()
 
 	if err != nil {
+		tx.HandoffInProgress = false
 		// Rollback lock ownership if disk fails
 		if m.activeStateTx == operationID {
 			m.activeStateTx = rpcID
@@ -393,12 +404,8 @@ func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) 
 			return "", m.terminalTransition(rpcID, pending.State, pending.Payload)
 		}
 
-		// Restart timer with the remaining time, NOT the full duration
-		remaining := time.Until(tx.CreatedAt.Add(tx.TimeoutDuration))
-		if remaining <= 0 {
-			remaining = 0 // Run immediately
-		}
-		tx.DispatchTimer = time.AfterFunc(remaining, func() {
+		// Restart timer
+		tx.DispatchTimer = time.AfterFunc(tx.TimeoutDuration, func() {
 			m.Timeout(rpcID)
 		})
 		return "", fmt.Errorf("failed to persist operation: %w", err)
@@ -460,7 +467,7 @@ func (m *DefaultRequestManager) Fail(rpcID string, errResponse []byte) error {
 		return ErrAlreadyTerminal
 	}
 
-	isHandoff := tx.Method == "upgrade" && m.activeStateTx != rpcID && m.activeStateTx != ""
+	isHandoff := tx.HandoffInProgress
 
 	// Buffer fast replies that arrive during lock handoff disk I/O
 	if isHandoff {
@@ -489,7 +496,7 @@ func (m *DefaultRequestManager) Timeout(rpcID string) error {
 		return ErrAlreadyTerminal
 	}
 
-	isHandoff := tx.Method == "upgrade" && m.activeStateTx != rpcID && m.activeStateTx != ""
+	isHandoff := tx.HandoffInProgress
 
 	// Buffer timeout that arrives during lock handoff disk I/O
 	if isHandoff {

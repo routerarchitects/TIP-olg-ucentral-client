@@ -54,19 +54,20 @@ func (s TransactionState) String() string {
 }
 
 type Transaction struct {
-	RPCID            string
-	CloudSessionID   string
-	CloudRPCID       json.RawMessage
-	RequestKey       string // sessionID:typedCanonicalID, e.g. "session-uuid:n:42"
-	RespondToCloud   bool
-	Method           string
-	State            TransactionState
-	Payload          []byte
-	CreatedAt        time.Time
-	TimeoutDuration  time.Duration
-	DispatchDeadline time.Time
-	DispatchTimer    *time.Timer
-	Cancel           context.CancelFunc
+	RPCID             string
+	CloudSessionID    string
+	CloudRPCID        json.RawMessage
+	RequestKey        string // sessionID:typedCanonicalID, e.g. "session-uuid:n:42"
+	RespondToCloud    bool
+	Method            string
+	State             TransactionState
+	Payload           []byte
+	HandoffInProgress bool
+	CreatedAt         time.Time
+	TimeoutDuration   time.Duration
+	DispatchDeadline  time.Time
+	DispatchTimer     *time.Timer
+	Cancel            context.CancelFunc
 }
 
 // DispatchItem represents a payload waiting in the internal dispatch buffer.

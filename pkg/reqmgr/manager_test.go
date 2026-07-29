@@ -12,11 +12,15 @@ import (
 // mockStore for testing
 type mockStore struct{}
 
-func (s *mockStore) Save(ctx context.Context, operation *PersistentOperation) error       { return nil }
-func (s *mockStore) Get(ctx context.Context, operationID string) (*PersistentOperation, error) { return nil, nil }
-func (s *mockStore) GetActive(ctx context.Context) (*PersistentOperation, error)            { return nil, nil }
-func (s *mockStore) GetPendingTerminalDelivery(ctx context.Context) ([]*PersistentOperation, error) { return nil, nil }
-func (s *mockStore) Delete(ctx context.Context, operationID string) error                 { return nil }
+func (s *mockStore) Save(ctx context.Context, operation *PersistentOperation) error { return nil }
+func (s *mockStore) Get(ctx context.Context, operationID string) (*PersistentOperation, error) {
+	return nil, nil
+}
+func (s *mockStore) GetActive(ctx context.Context) (*PersistentOperation, error) { return nil, nil }
+func (s *mockStore) GetPendingTerminalDelivery(ctx context.Context) ([]*PersistentOperation, error) {
+	return nil, nil
+}
+func (s *mockStore) Delete(ctx context.Context, operationID string) error { return nil }
 
 func setupTestManager() *DefaultRequestManager {
 	cache := NewTransactionCache()

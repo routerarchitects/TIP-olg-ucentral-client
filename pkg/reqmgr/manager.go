@@ -79,7 +79,7 @@ func (m *DefaultRequestManager) CreateTransaction(sessionID string, cloudRPCID j
 		if !respondToCloud {
 			return nil, errors.New("state changing commands must have an ID")
 		}
-		
+
 		// Note: We use TryLock here to avoid deadlocks. If we can't get it immediately, return busy.
 		if !m.stateLock.TryLock() {
 			return nil, ErrBusy

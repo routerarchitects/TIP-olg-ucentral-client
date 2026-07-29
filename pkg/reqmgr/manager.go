@@ -166,7 +166,15 @@ func (m *DefaultRequestManager) dispatchTimeoutFail(rpcID string) {
 
 	// Only fail if it is still in a pre-flight state (not TxInFlight)
 	if tx.State == TxCreated || tx.State == TxPreparingDispatch || tx.State == TxPendingPublish {
-		m.terminalTransition(rpcID, TxFailed)
+		if pending, ok := m.pendingReplies[rpcID]; ok {
+			delete(m.pendingReplies, rpcID)
+			// The hardware successfully responded, which proves the command was published.
+			// Catch up the local state machine so terminalTransition accepts it.
+			tx.State = TxInFlight
+			m.terminalTransition(rpcID, pending.State)
+		} else {
+			m.terminalTransition(rpcID, TxFailed)
+		}
 	}
 }
 
@@ -256,6 +264,8 @@ func (m *DefaultRequestManager) Complete(rpcID string, response []byte) error {
 	if isPreFlight || isHandoff {
 		if m.pendingReplies == nil {
 			m.pendingReplies = make(map[string]PendingReply)
+		} else if _, exists := m.pendingReplies[rpcID]; exists {
+			return ErrAlreadyTerminal
 		}
 		m.pendingReplies[rpcID] = PendingReply{Payload: response, State: TxCompleted}
 		return nil
@@ -285,28 +295,28 @@ func (m *DefaultRequestManager) ReleaseOperationLock(operationID string) error {
 // RespondAndRetain transfers stateLock ownership to a background operation and cleans up the transaction.
 // Note: The `response` argument is currently unused. It is reserved for
 // the TransactionCache implementation in Epic 3 (PR 3.2), which will cache this payload.
-func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) error {
+func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) (string, error) {
 	m.mu.Lock()
 
 	tx, exists := m.transactionsByRPCID[rpcID]
 	if !exists {
 		m.mu.Unlock()
-		return ErrAlreadyTerminal
+		return "", ErrAlreadyTerminal
 	}
 
 	if tx.Method != "upgrade" {
 		m.mu.Unlock()
-		return errors.New("only upgrade operations can be retained")
+		return "", errors.New("only upgrade operations can be retained")
 	}
 
 	if tx.State != TxInFlight {
 		m.mu.Unlock()
-		return ErrInvalidStateTransition
+		return "", ErrInvalidStateTransition
 	}
 
 	if m.activeStateTx != rpcID {
 		m.mu.Unlock()
-		return errors.New("transaction does not own the state lock")
+		return "", errors.New("transaction does not own the state lock")
 	}
 
 	// 1. Pause response timer to prevent timeouts during disk I/O
@@ -349,14 +359,14 @@ func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) 
 		// If a terminal event arrived while we were writing to disk, process it now!
 		if pending, ok := m.pendingReplies[rpcID]; ok {
 			delete(m.pendingReplies, rpcID)
-			return m.terminalTransition(rpcID, pending.State)
+			return "", m.terminalTransition(rpcID, pending.State)
 		}
 
 		// Restart timer
 		tx.DispatchTimer = time.AfterFunc(tx.TimeoutDuration, func() {
 			m.Timeout(rpcID)
 		})
-		return fmt.Errorf("failed to persist operation: %w", err)
+		return "", fmt.Errorf("failed to persist operation: %w", err)
 	}
 
 	// Cache logic would go here in PR 3.2
@@ -370,14 +380,17 @@ func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) 
 		// the lock is currently held by operationID, not rpcID.
 		// We must explicitly release it since terminalTransition only releases rpcID locks.
 		if m.activeStateTx == operationID {
+			// Delete the active record from persistent storage since the operation is already terminal
+			_ = m.store.Delete(context.Background(), operationID)
+
 			m.activeStateTx = ""
 			m.stateLock.Unlock()
 		}
 
-		return m.terminalTransition(rpcID, pending.State)
+		return "", m.terminalTransition(rpcID, pending.State)
 	}
 
-	return m.terminalTransition(rpcID, TxCompleted)
+	return operationID, m.terminalTransition(rpcID, TxCompleted)
 }
 
 // Fail marks a transaction as failed.
@@ -399,6 +412,8 @@ func (m *DefaultRequestManager) Fail(rpcID string, errResponse []byte) error {
 	if isHandoff {
 		if m.pendingReplies == nil {
 			m.pendingReplies = make(map[string]PendingReply)
+		} else if _, exists := m.pendingReplies[rpcID]; exists {
+			return ErrAlreadyTerminal
 		}
 		m.pendingReplies[rpcID] = PendingReply{Payload: errResponse, State: TxFailed}
 		return nil
@@ -426,6 +441,8 @@ func (m *DefaultRequestManager) Timeout(rpcID string) error {
 	if isHandoff {
 		if m.pendingReplies == nil {
 			m.pendingReplies = make(map[string]PendingReply)
+		} else if _, exists := m.pendingReplies[rpcID]; exists {
+			return ErrAlreadyTerminal
 		}
 		m.pendingReplies[rpcID] = PendingReply{Payload: nil, State: TxTimedOut}
 		return nil

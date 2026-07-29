@@ -166,7 +166,7 @@ func TestTCUPG004_UpgradeAsynchronousLockHandoff(t *testing.T) {
 	m.mu.Unlock()
 
 	// Verify illegal jump: calling RespondAndRetain from TxCreated
-	err = m.RespondAndRetain(tx.RPCID, []byte(`{"status": {"error": 0}}`))
+	_, err = m.RespondAndRetain(tx.RPCID, []byte(`{"status": {"error": 0}}`))
 	if err != ErrInvalidStateTransition {
 		t.Fatalf("expected ErrInvalidStateTransition for RespondAndRetain from TxCreated, got %v", err)
 	}
@@ -183,7 +183,7 @@ func TestTCUPG004_UpgradeAsynchronousLockHandoff(t *testing.T) {
 	}
 
 	// Call RespondAndRetain
-	err = m.RespondAndRetain(tx.RPCID, []byte(`{"status": {"error": 0}}`))
+	_, err = m.RespondAndRetain(tx.RPCID, []byte(`{"status": {"error": 0}}`))
 	if err != nil {
 		t.Fatalf("RespondAndRetain failed: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestTCUPG005_RespondAndRetainRollback(t *testing.T) {
 	}
 
 	// Call RespondAndRetain which will fail during Save
-	err = m.RespondAndRetain(tx.RPCID, []byte(`{"status": {"error": 0}}`))
+	_, err = m.RespondAndRetain(tx.RPCID, []byte(`{"status": {"error": 0}}`))
 	if err == nil {
 		t.Fatalf("expected error from RespondAndRetain, got nil")
 	}
@@ -339,7 +339,8 @@ func TestTCUPG006_RespondAndRetainConcurrentTerminalEvent(t *testing.T) {
 			// Start RespondAndRetain in a goroutine so it blocks on Save
 			errCh := make(chan error)
 			go func() {
-				errCh <- m.RespondAndRetain(tx.RPCID, []byte(`{"status": {"error": 0}}`))
+				_, err := m.RespondAndRetain(tx.RPCID, []byte(`{"status": {"error": 0}}`))
+				errCh <- err
 			}()
 
 			// Wait deterministically for Save to actually start (lock transferred)
@@ -560,7 +561,7 @@ func TestTCRM009_FastReplyBeforeInFlight(t *testing.T) {
 	}
 }
 
-func TestTCRM010_DispatchTimeoutClearsBufferedReplies(t *testing.T) {
+func TestTCRM010_DispatchTimeoutProcessesBufferedReply(t *testing.T) {
 	cache := NewTransactionCache()
 	config := CacheTTLConfig{}
 	scheduler := queues.NewPriorityScheduler(10, 10)
@@ -592,17 +593,56 @@ func TestTCRM010_DispatchTimeoutClearsBufferedReplies(t *testing.T) {
 	m.mu.Unlock()
 
 	// Simulate dispatch stalling and timing out
-	// This tests the full production cleanup path
+	// Instead of failing the transaction, it should process the buffered Complete
 	m.dispatchTimeoutFail(tx.RPCID)
 
 	// Verify both the transaction and the pending reply were removed
 	m.mu.Lock()
 	_, txExists := m.transactionsByRPCID[tx.RPCID]
 	_, pendingExists := m.pendingReplies[tx.RPCID]
-
+	
 	if txExists || pendingExists {
 		m.mu.Unlock()
 		t.Fatalf("transaction and pending reply should be removed, got txExists=%v pendingExists=%v", txExists, pendingExists)
+	}
+	m.mu.Unlock()
+}
+
+func TestTCRM011_BufferedTerminalEventRace(t *testing.T) {
+	cache := NewTransactionCache()
+	config := CacheTTLConfig{}
+	scheduler := queues.NewPriorityScheduler(10, 10)
+	store := &mockStore{}
+	m := NewRequestManager(10*time.Second, config, cache, scheduler, store)
+
+	tx, err := m.CreateTransaction("sess", json.RawMessage(`123`), true, "configure", 10*time.Second, true)
+	if err != nil {
+		t.Fatalf("failed to create tx: %v", err)
+	}
+
+	m.MarkPreparingDispatch(tx.RPCID)
+	m.MarkPendingPublish(tx.RPCID)
+
+	// First event wins the race and buffers successfully
+	err = m.Complete(tx.RPCID, []byte("success"))
+	if err != nil {
+		t.Fatalf("first event failed: %v", err)
+	}
+
+	// Second concurrent event should lose the race and receive ErrAlreadyTerminal
+	err = m.Complete(tx.RPCID, []byte("late-success"))
+	if err != ErrAlreadyTerminal {
+		t.Fatalf("expected loser to get ErrAlreadyTerminal, got %v", err)
+	}
+
+	// Verify the original buffered state is preserved
+	m.mu.Lock()
+	pending, exists := m.pendingReplies[tx.RPCID]
+	if !exists {
+		t.Fatalf("expected pending reply to exist")
+	}
+	if string(pending.Payload) != "success" {
+		t.Fatalf("expected payload to be 'success', got '%s'", string(pending.Payload))
 	}
 	m.mu.Unlock()
 }

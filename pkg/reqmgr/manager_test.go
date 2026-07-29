@@ -592,11 +592,8 @@ func TestTCRM010_DispatchTimeoutClearsBufferedReplies(t *testing.T) {
 	m.mu.Unlock()
 
 	// Simulate dispatch stalling and timing out
-	// We call terminalTransition to simulate the timer firing
-	err = m.terminalTransition(tx.RPCID, TxFailed)
-	if err != nil {
-		t.Fatalf("dispatchTimeoutFail failed: %v", err)
-	}
+	// This tests the full production cleanup path
+	m.dispatchTimeoutFail(tx.RPCID)
 
 	// Verify both the transaction and the pending reply were removed
 	m.mu.Lock()

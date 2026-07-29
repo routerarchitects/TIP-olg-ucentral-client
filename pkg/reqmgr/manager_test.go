@@ -3,6 +3,7 @@ package reqmgr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -221,4 +222,62 @@ func TestTCUPG004_UpgradeAsynchronousLockHandoff(t *testing.T) {
 		t.Fatalf("failed to create second tx after unlock: %v", err)
 	}
 	m.Fail(tx2.RPCID, []byte("cleanup"))
+}
+// errorMockStore for testing persistence failures
+type errorMockStore struct {
+	mockStore
+}
+
+func (s *errorMockStore) Save(ctx context.Context, operation *PersistentOperation) error {
+	return errors.New("simulated disk failure")
+}
+
+func TestTCUPG005_RespondAndRetainRollback(t *testing.T) {
+	cache := NewTransactionCache()
+	config := CacheTTLConfig{}
+	scheduler := queues.NewPriorityScheduler(10, 10)
+	store := &errorMockStore{}
+	m := NewRequestManager(10*time.Second, config, cache, scheduler, store)
+
+	cloudRPCID := json.RawMessage(`"upg-rollback"`)
+	tx, err := m.CreateTransaction("session-err", cloudRPCID, true, "upgrade", 10*time.Second, true)
+	if err != nil {
+		t.Fatalf("failed to create upgrade tx: %v", err)
+	}
+
+	m.MarkPreparingDispatch(tx.RPCID)
+	m.MarkPendingPublish(tx.RPCID)
+	m.MarkInFlight(tx.RPCID)
+
+	// Call RespondAndRetain which will fail during Save
+	err = m.RespondAndRetain(tx.RPCID, []byte(`{"status": {"error": 0}}`))
+	if err == nil {
+		t.Fatalf("expected error from RespondAndRetain, got nil")
+	}
+
+	// Verify rollback succeeded
+	m.mu.Lock()
+	if m.activeStateTx != tx.RPCID {
+		t.Fatalf("expected lock to be restored to rpcID, got %s", m.activeStateTx)
+	}
+
+	restoredTx, exists := m.transactionsByRPCID[tx.RPCID]
+	if !exists {
+		t.Fatalf("transaction was not restored to transactionsByRPCID")
+	}
+	if restoredTx.State != TxInFlight {
+		t.Fatalf("restored transaction is in wrong state: %v", restoredTx.State)
+	}
+
+	_, exists = m.activeCloudRequests[tx.RequestKey]
+	if !exists {
+		t.Fatalf("transaction was not restored to activeCloudRequests")
+	}
+	m.mu.Unlock()
+
+	// Verify we can now properly clean it up using standard methods
+	err = m.Fail(tx.RPCID, []byte("cleanup"))
+	if err != nil {
+		t.Fatalf("failed to cleanup restored transaction: %v", err)
+	}
 }

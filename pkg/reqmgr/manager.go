@@ -276,9 +276,17 @@ func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) 
 	if err != nil {
 		// Rollback lock ownership if disk fails
 		m.mu.Lock()
+		defer m.mu.Unlock()
 		if m.activeStateTx == operationID {
 			m.activeStateTx = rpcID
 		}
+
+		// Restore transaction to active maps
+		m.transactionsByRPCID[rpcID] = tx
+		if tx.RespondToCloud {
+			m.activeCloudRequests[tx.RequestKey] = rpcID
+		}
+
 		// Restart timer
 		tx.DispatchTimer = time.AfterFunc(tx.TimeoutDuration, func() {
 			m.Timeout(rpcID)

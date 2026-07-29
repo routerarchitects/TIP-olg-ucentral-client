@@ -137,3 +137,40 @@ func TestTCRM003_ParallelReadOperations(t *testing.T) {
 		t.Fatalf("both transactions should be active in TxCreated")
 	}
 }
+
+func TestTCUPG004_UpgradeAsynchronousLockHandoff(t *testing.T) {
+	m := setupTestManager()
+
+	cloudRPCID := json.RawMessage(`"upg-1"`)
+
+	// Start a state-changing upgrade transaction
+	tx, err := m.CreateTransaction("session-1", cloudRPCID, true, "upgrade", 10*time.Second, true)
+	if err != nil {
+		t.Fatalf("failed to create upgrade tx: %v", err)
+	}
+
+	// Verify lock is held by the RPCID
+	m.mu.Lock()
+	if m.activeStateTx != tx.RPCID {
+		t.Fatalf("expected state lock to be held by RPCID %s, got %s", tx.RPCID, m.activeStateTx)
+	}
+	m.mu.Unlock()
+
+	// Call RespondAndRetain
+	err = m.RespondAndRetain(tx.RPCID, []byte(`{"status": {"error": 0}}`))
+	if err != nil {
+		t.Fatalf("RespondAndRetain failed: %v", err)
+	}
+
+	// Verify transaction is terminal
+	m.mu.Lock()
+	if _, ok := m.transactionsByRPCID[tx.RPCID]; ok {
+		t.Fatalf("transaction should be removed from active map")
+	}
+
+	// Verify lock was transferred to a persistent operation ID (UUID, so it won't match RPCID anymore, but it won't be empty)
+	if m.activeStateTx == "" || m.activeStateTx == tx.RPCID {
+		t.Fatalf("expected state lock to be transferred to an OperationID, got %s", m.activeStateTx)
+	}
+	m.mu.Unlock()
+}

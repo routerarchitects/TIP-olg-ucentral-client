@@ -1,6 +1,7 @@
 package reqmgr
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -178,12 +179,49 @@ func (m *DefaultRequestManager) MarkInFlight(rpcID string) error {
 func (m *DefaultRequestManager) Complete(rpcID string, response []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// Add to cache (simplified)
 	return m.terminalTransition(rpcID, TxCompleted)
 }
 
 func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	tx, ok := m.transactionsByRPCID[rpcID]
+	if !ok {
+		return ErrAlreadyTerminal
+	}
+
+	if tx.Method != "upgrade" {
+		return errors.New("only upgrade operations can be retained")
+	}
+
+	operationID := uuid.New().String()
+	op := &PersistentOperation{
+		OperationID: operationID,
+		RPCID:       rpcID,
+		CloudRPCID:  tx.CloudRPCID,
+		Target:      tx.CloudSessionID,
+		Action:      tx.Method,
+		Stage:       "started",
+		Status:      "active",
+		Active:      true,
+		CreatedAt:   time.Now().Format(time.RFC3339),
+		UpdatedAt:   time.Now().Format(time.RFC3339),
+	}
+
+	if err := m.store.Save(context.Background(), op); err != nil {
+		return err
+	}
+
+	// Transfer lock ownership
+	if m.activeStateTx == rpcID {
+		m.activeStateTx = operationID
+	}
+
+	// Cache the "started" response
+	m.cache.Set(tx.RequestKey, response, m.cacheTTLConfig.TTLForMethod(tx.Method))
+
 	return m.terminalTransition(rpcID, TxCompleted)
 }
 

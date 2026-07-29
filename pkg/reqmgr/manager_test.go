@@ -516,7 +516,7 @@ func TestTCRM009_FastReplyBeforeInFlight(t *testing.T) {
 
 			// Call MarkInFlight
 			err = m.MarkInFlight(tx.RPCID)
-			
+
 			if tc.terminalOp == "complete" {
 				if err != nil {
 					t.Fatalf("MarkInFlight failed: %v", err)

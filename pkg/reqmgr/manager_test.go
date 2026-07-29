@@ -559,3 +559,53 @@ func TestTCRM009_FastReplyBeforeInFlight(t *testing.T) {
 		})
 	}
 }
+
+func TestTCRM010_DispatchTimeoutClearsBufferedReplies(t *testing.T) {
+	cache := NewTransactionCache()
+	config := CacheTTLConfig{}
+	scheduler := queues.NewPriorityScheduler(10, 10)
+	store := &mockStore{}
+	m := NewRequestManager(10*time.Second, config, cache, scheduler, store)
+
+	tx, err := m.CreateTransaction("sess", json.RawMessage(`123`), true, "configure", 10*time.Second, true)
+	if err != nil {
+		t.Fatalf("failed to create tx: %v", err)
+	}
+
+	m.MarkPreparingDispatch(tx.RPCID)
+	m.MarkPendingPublish(tx.RPCID)
+
+	// Simulate a fast reply arriving early and getting buffered
+	err = m.Complete(tx.RPCID, []byte("success"))
+	if err != nil {
+		t.Fatalf("Complete failed concurrently: %v", err)
+	}
+
+	// Verify the transaction is still technically alive and the reply is buffered
+	m.mu.Lock()
+	if _, exists := m.transactionsByRPCID[tx.RPCID]; !exists {
+		t.Fatalf("expected transaction to still exist in map")
+	}
+	if len(m.pendingReplies) != 1 {
+		t.Fatalf("expected 1 pending reply, got %d", len(m.pendingReplies))
+	}
+	m.mu.Unlock()
+
+	// Simulate dispatch stalling and timing out
+	// We call terminalTransition to simulate the timer firing
+	err = m.terminalTransition(tx.RPCID, TxFailed)
+	if err != nil {
+		t.Fatalf("dispatchTimeoutFail failed: %v", err)
+	}
+
+	// Verify both the transaction and the pending reply were removed
+	m.mu.Lock()
+	_, txExists := m.transactionsByRPCID[tx.RPCID]
+	_, pendingExists := m.pendingReplies[tx.RPCID]
+	
+	if txExists || pendingExists {
+		m.mu.Unlock()
+		t.Fatalf("transaction and pending reply should be removed, got txExists=%v pendingExists=%v", txExists, pendingExists)
+	}
+	m.mu.Unlock()
+}

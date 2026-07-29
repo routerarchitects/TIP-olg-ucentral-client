@@ -459,6 +459,10 @@ func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState Tran
 		tx.DispatchTimer.Stop()
 	}
 
+	if m.pendingReplies != nil {
+		delete(m.pendingReplies, rpcID)
+	}
+
 	if tx.RespondToCloud {
 		delete(m.activeCloudRequests, tx.RequestKey)
 	}

@@ -600,7 +600,7 @@ func TestTCRM010_DispatchTimeoutProcessesBufferedReply(t *testing.T) {
 	m.mu.Lock()
 	_, txExists := m.transactionsByRPCID[tx.RPCID]
 	_, pendingExists := m.pendingReplies[tx.RPCID]
-	
+
 	if txExists || pendingExists {
 		m.mu.Unlock()
 		t.Fatalf("transaction and pending reply should be removed, got txExists=%v pendingExists=%v", txExists, pendingExists)

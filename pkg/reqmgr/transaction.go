@@ -61,6 +61,7 @@ type Transaction struct {
 	RespondToCloud   bool
 	Method           string
 	State            TransactionState
+	Payload          []byte
 	CreatedAt        time.Time
 	TimeoutDuration  time.Duration
 	DispatchDeadline time.Time

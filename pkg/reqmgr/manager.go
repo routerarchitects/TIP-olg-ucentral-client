@@ -77,12 +77,12 @@ func CanonicalRequestKey(sessionID string, id json.RawMessage) (string, error) {
 	case string:
 		return fmt.Sprintf("%s:s:%s", sessionID, v), nil
 	case json.Number:
-		f, _, err := big.ParseFloat(v.String(), 10, 256, big.ToNearestEven)
-		if err != nil {
-			return "", fmt.Errorf("invalid json-rpc number: %w", err)
+		r, ok := new(big.Rat).SetString(v.String())
+		if !ok {
+			return "", errors.New("invalid json-rpc number")
 		}
-		// Text('f', -1) correctly normalizes 1, 1.0, and 1e0 to "1" without losing large integer precision
-		return fmt.Sprintf("%s:n:%s", sessionID, f.Text('f', -1)), nil
+		// RatString correctly normalizes 1, 1.0, and 1e0 to "1" with exact arithmetic
+		return fmt.Sprintf("%s:n:%s", sessionID, r.RatString()), nil
 	default:
 		return "", errors.New("json-rpc id must be string or number")
 	}
@@ -171,9 +171,9 @@ func (m *DefaultRequestManager) dispatchTimeoutFail(rpcID string) {
 			// The hardware successfully responded, which proves the command was published.
 			// Catch up the local state machine so terminalTransition accepts it.
 			tx.State = TxInFlight
-			m.terminalTransition(rpcID, pending.State)
+			m.terminalTransition(rpcID, pending.State, pending.Payload)
 		} else {
-			m.terminalTransition(rpcID, TxFailed)
+			m.terminalTransition(rpcID, TxFailed, nil)
 		}
 	}
 }
@@ -230,7 +230,7 @@ func (m *DefaultRequestManager) MarkInFlight(rpcID string) error {
 	// Process any buffered fast-reply that arrived while we were preparing or publishing
 	if pending, ok := m.pendingReplies[rpcID]; ok {
 		delete(m.pendingReplies, rpcID)
-		return m.terminalTransition(rpcID, pending.State)
+		return m.terminalTransition(rpcID, pending.State, pending.Payload)
 	}
 
 	if tx.DispatchTimer != nil {
@@ -272,23 +272,31 @@ func (m *DefaultRequestManager) Complete(rpcID string, response []byte) error {
 	}
 
 	// Cache logic would go here in PR 3.2
-	return m.terminalTransition(rpcID, TxCompleted)
+	return m.terminalTransition(rpcID, TxCompleted, response)
 }
 
 // ReleaseOperationLock releases the stateLock if it is currently held by the specified background operation.
-// This is used by the NATS event subscriber or background timeout sweeper to free the router.
-func (m *DefaultRequestManager) ReleaseOperationLock(operationID string) error {
+func (m *DefaultRequestManager) ReleaseOperationLock(ctx context.Context, operationID string) error {
+	m.mu.Lock()
+	if m.activeStateTx != operationID {
+		m.mu.Unlock()
+		return nil
+	}
+	m.mu.Unlock()
+
+	// Perform disk I/O outside lock
+	if err := m.store.Delete(ctx, operationID); err != nil {
+		return fmt.Errorf("failed to delete persistent operation: %w", err)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.activeStateTx != operationID {
-		return errors.New("state lock is not held by the specified operation")
+	// Re-check after I/O
+	if m.activeStateTx == operationID {
+		m.activeStateTx = ""
+		m.stateLock.Unlock()
 	}
-
-	// Release the lock
-	m.activeStateTx = ""
-	m.stateLock.Unlock()
-
 	return nil
 }
 
@@ -362,7 +370,7 @@ func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) 
 		// If a terminal event arrived while we were writing to disk, process it now!
 		if pending, ok := m.pendingReplies[rpcID]; ok {
 			delete(m.pendingReplies, rpcID)
-			return "", m.terminalTransition(rpcID, pending.State)
+			return "", m.terminalTransition(rpcID, pending.State, pending.Payload)
 		}
 
 		// Restart timer
@@ -395,7 +403,7 @@ func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) 
 				// recorded, but LEAVE the memory lock held by operationID. This forces a
 				// background sweeper to eventually retry the deletion and clear the lock.
 				delete(m.pendingReplies, rpcID)
-				_ = m.terminalTransition(rpcID, pending.State)
+				_ = m.terminalTransition(rpcID, pending.State, pending.Payload)
 
 				return "", fmt.Errorf("failed to delete terminal operation: %w", errDelete)
 			}
@@ -409,10 +417,10 @@ func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) 
 		}
 
 		delete(m.pendingReplies, rpcID)
-		return "", m.terminalTransition(rpcID, pending.State)
+		return "", m.terminalTransition(rpcID, pending.State, pending.Payload)
 	}
 
-	return operationID, m.terminalTransition(rpcID, TxCompleted)
+	return operationID, m.terminalTransition(rpcID, TxCompleted, response)
 }
 
 // Fail marks a transaction as failed.
@@ -441,7 +449,7 @@ func (m *DefaultRequestManager) Fail(rpcID string, errResponse []byte) error {
 		return nil
 	}
 
-	return m.terminalTransition(rpcID, TxFailed)
+	return m.terminalTransition(rpcID, TxFailed, errResponse)
 }
 
 // Timeout marks a transaction as timed out.
@@ -470,10 +478,10 @@ func (m *DefaultRequestManager) Timeout(rpcID string) error {
 		return nil
 	}
 
-	return m.terminalTransition(rpcID, TxTimedOut)
+	return m.terminalTransition(rpcID, TxTimedOut, nil)
 }
 
-func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState TransactionState) error {
+func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState TransactionState, payload []byte) error {
 	tx, ok := m.transactionsByRPCID[rpcID]
 	if !ok {
 		// Since RPCIDs are internally generated UUIDs, a missing transaction
@@ -493,6 +501,7 @@ func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState Tran
 	}
 
 	tx.State = finalState
+	tx.Payload = payload
 
 	if tx.DispatchTimer != nil {
 		tx.DispatchTimer.Stop()

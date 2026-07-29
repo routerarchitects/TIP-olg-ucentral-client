@@ -202,7 +202,7 @@ func TestTCUPG004_UpgradeAsynchronousLockHandoff(t *testing.T) {
 	m.mu.Unlock()
 
 	// Verify the lock can be released via the new operation ID
-	err = m.ReleaseOperationLock(opID)
+	err = m.ReleaseOperationLock(context.Background(), opID)
 	if err != nil {
 		t.Fatalf("failed to release operation lock: %v", err)
 	}

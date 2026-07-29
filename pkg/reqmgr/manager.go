@@ -391,12 +391,10 @@ func (m *DefaultRequestManager) Fail(rpcID string, errResponse []byte) error {
 		return ErrAlreadyTerminal
 	}
 
-	isPreFlight := tx.State == TxCreated || tx.State == TxPreparingDispatch || tx.State == TxPendingPublish
 	isHandoff := tx.Method == "upgrade" && m.activeStateTx != rpcID && m.activeStateTx != ""
 
-	// Buffer fast replies that arrive before the request is officially in flight,
-	// or during lock handoff disk I/O
-	if isPreFlight || isHandoff {
+	// Buffer fast replies that arrive during lock handoff disk I/O
+	if isHandoff {
 		if m.pendingReplies == nil {
 			m.pendingReplies = make(map[string]PendingReply)
 		}
@@ -416,12 +414,10 @@ func (m *DefaultRequestManager) Timeout(rpcID string) error {
 		return ErrAlreadyTerminal
 	}
 
-	isPreFlight := tx.State == TxCreated || tx.State == TxPreparingDispatch || tx.State == TxPendingPublish
 	isHandoff := tx.Method == "upgrade" && m.activeStateTx != rpcID && m.activeStateTx != ""
 
-	// Buffer timeouts that arrive before the request is officially in flight,
-	// or during lock handoff disk I/O
-	if isPreFlight || isHandoff {
+	// Buffer timeout that arrives during lock handoff disk I/O
+	if isHandoff {
 		if m.pendingReplies == nil {
 			m.pendingReplies = make(map[string]PendingReply)
 		}

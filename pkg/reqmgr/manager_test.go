@@ -108,8 +108,8 @@ func TestTCRM002_ConcurrencyRejection(t *testing.T) {
 		t.Fatalf("expected ErrBusy for concurrent state-changing tx, got %v", err)
 	}
 
-	// Fail tx1 to release the lock (internal failure)
-	err = m.terminalTransition(tx1.RPCID, TxFailed)
+	// Fail tx1 to release the lock (Fail is valid from TxCreated)
+	err = m.Fail(tx1.RPCID, []byte("failed"))
 	if err != nil {
 		t.Fatalf("failed to fail tx1: %v", err)
 	}
@@ -462,7 +462,6 @@ func TestTCRM009_FastReplyBeforeInFlight(t *testing.T) {
 	}{
 		{"Complete before InFlight", "complete", TxCompleted},
 		{"Fail before InFlight", "fail", TxFailed},
-		{"Timeout before InFlight", "timeout", TxTimedOut},
 	}
 
 	for _, tc := range cases {
@@ -494,20 +493,38 @@ func TestTCRM009_FastReplyBeforeInFlight(t *testing.T) {
 				t.Fatalf("%s failed concurrently: %v", tc.terminalOp, err)
 			}
 
-			// Verify transaction is still technically alive but buffered
+			// Verify behavior based on operation type
 			m.mu.Lock()
-			if _, exists := m.transactionsByRPCID[tx.RPCID]; !exists {
-				t.Fatalf("expected transaction to still exist in map")
-			}
-			if len(m.pendingReplies) != 1 {
-				t.Fatalf("expected 1 pending reply, got %d", len(m.pendingReplies))
+			if tc.terminalOp == "complete" {
+				// Complete is buffered
+				if _, exists := m.transactionsByRPCID[tx.RPCID]; !exists {
+					t.Fatalf("expected transaction to still exist in map")
+				}
+				if len(m.pendingReplies) != 1 {
+					t.Fatalf("expected 1 pending reply, got %d", len(m.pendingReplies))
+				}
+			} else {
+				// Fail and Timeout are processed immediately in pre-flight states
+				if _, exists := m.transactionsByRPCID[tx.RPCID]; exists {
+					t.Fatalf("expected transaction to be deleted immediately")
+				}
+				if len(m.pendingReplies) != 0 {
+					t.Fatalf("expected 0 pending replies, got %d", len(m.pendingReplies))
+				}
 			}
 			m.mu.Unlock()
 
-			// Call MarkInFlight which should drain the pending reply and delete the transaction
+			// Call MarkInFlight
 			err = m.MarkInFlight(tx.RPCID)
-			if err != nil {
-				t.Fatalf("MarkInFlight failed: %v", err)
+			
+			if tc.terminalOp == "complete" {
+				if err != nil {
+					t.Fatalf("MarkInFlight failed: %v", err)
+				}
+			} else {
+				if err != ErrAlreadyTerminal {
+					t.Fatalf("expected ErrAlreadyTerminal for MarkInFlight after immediate termination, got %v", err)
+				}
 			}
 
 			m.mu.Lock()

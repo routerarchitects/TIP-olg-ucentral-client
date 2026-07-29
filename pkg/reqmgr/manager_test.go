@@ -285,9 +285,10 @@ func TestTCUPG005_RespondAndRetainRollback(t *testing.T) {
 // blockingMockStore blocks Save until a channel is closed, then returns a configurable error
 type blockingMockStore struct {
 	mockStore
-	entered chan struct{}
-	release chan struct{}
-	err     error
+	entered   chan struct{}
+	release   chan struct{}
+	err       error
+	deleteErr error
 }
 
 func (s *blockingMockStore) Save(ctx context.Context, operation *PersistentOperation) error {
@@ -300,18 +301,26 @@ func (s *blockingMockStore) Save(ctx context.Context, operation *PersistentOpera
 	}
 }
 
+func (s *blockingMockStore) Delete(ctx context.Context, operationID string) error {
+	return s.deleteErr
+}
+
 func TestTCUPG006_RespondAndRetainConcurrentTerminalEvent(t *testing.T) {
 	cases := []struct {
 		name       string
 		saveErr    error
+		deleteErr  error
 		terminalOp string
 	}{
-		{"Complete during Save Failure", errors.New("disk fail"), "complete"},
-		{"Fail during Save Failure", errors.New("disk fail"), "fail"},
-		{"Timeout during Save Failure", errors.New("disk fail"), "timeout"},
-		{"Complete during Save Success", nil, "complete"},
-		{"Fail during Save Success", nil, "fail"},
-		{"Timeout during Save Success", nil, "timeout"},
+		{"Complete during Save Failure", errors.New("disk fail"), nil, "complete"},
+		{"Fail during Save Failure", errors.New("disk fail"), nil, "fail"},
+		{"Timeout during Save Failure", errors.New("disk fail"), nil, "timeout"},
+		{"Complete during Save Success", nil, nil, "complete"},
+		{"Fail during Save Success", nil, nil, "fail"},
+		{"Timeout during Save Success", nil, nil, "timeout"},
+		{"Complete during Delete Failure", nil, errors.New("delete fail"), "complete"},
+		{"Fail during Delete Failure", nil, errors.New("delete fail"), "fail"},
+		{"Timeout during Delete Failure", nil, errors.New("delete fail"), "timeout"},
 	}
 
 	for _, tc := range cases {
@@ -320,9 +329,10 @@ func TestTCUPG006_RespondAndRetainConcurrentTerminalEvent(t *testing.T) {
 			config := CacheTTLConfig{}
 			scheduler := queues.NewPriorityScheduler(10, 10)
 			store := &blockingMockStore{
-				entered: make(chan struct{}),
-				release: make(chan struct{}),
-				err:     tc.saveErr,
+				entered:   make(chan struct{}),
+				release:   make(chan struct{}),
+				err:       tc.saveErr,
+				deleteErr: tc.deleteErr,
 			}
 			m := NewRequestManager(10*time.Second, config, cache, scheduler, store)
 
@@ -367,14 +377,27 @@ func TestTCUPG006_RespondAndRetainConcurrentTerminalEvent(t *testing.T) {
 
 			// If Save succeeded, RespondAndRetain should succeed (nil).
 			// If Save failed, RespondAndRetain should still succeed (nil) because the buffered terminal event satisfies the state machine!
-			if err != nil {
-				t.Fatalf("expected RespondAndRetain to successfully return nil due to buffered reply, got %v", err)
+			// If Delete failed, RespondAndRetain should return the delete error.
+			if tc.deleteErr != nil {
+				if err == nil {
+					t.Fatalf("expected RespondAndRetain to return delete error, got nil")
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("expected RespondAndRetain to successfully return nil due to buffered reply, got %v", err)
+				}
 			}
 
 			// Verify the lock is fully released and transaction is deleted
 			m.mu.Lock()
-			if m.activeStateTx != "" {
-				t.Fatalf("expected lock to be fully released, got %s", m.activeStateTx)
+			if tc.deleteErr != nil {
+				if m.activeStateTx == "" || m.activeStateTx == tx.RPCID {
+					t.Fatalf("expected lock to be held by operationID when delete fails, got %s", m.activeStateTx)
+				}
+			} else {
+				if m.activeStateTx != "" {
+					t.Fatalf("expected lock to be fully released, got %s", m.activeStateTx)
+				}
 			}
 			if _, exists := m.transactionsByRPCID[tx.RPCID]; exists {
 				t.Fatalf("expected transaction to be deleted by the buffered event")

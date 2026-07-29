@@ -180,9 +180,15 @@ func TestTCUPG004_UpgradeAsynchronousLockHandoff(t *testing.T) {
 	}
 
 	// Advance transaction to TxInFlight
-	m.MarkPreparingDispatch(tx.RPCID)
-	m.MarkPendingPublish(tx.RPCID)
-	m.MarkInFlight(tx.RPCID)
+	if err := m.MarkPreparingDispatch(tx.RPCID); err != nil {
+		t.Fatalf("failed to mark preparing dispatch: %v", err)
+	}
+	if err := m.MarkPendingPublish(tx.RPCID); err != nil {
+		t.Fatalf("failed to mark pending publish: %v", err)
+	}
+	if err := m.MarkInFlight(tx.RPCID); err != nil {
+		t.Fatalf("failed to mark in flight: %v", err)
+	}
 
 	// Call RespondAndRetain
 	err = m.RespondAndRetain(tx.RPCID, []byte(`{"status": {"error": 0}}`))
@@ -196,9 +202,23 @@ func TestTCUPG004_UpgradeAsynchronousLockHandoff(t *testing.T) {
 		t.Fatalf("transaction should be removed from active map")
 	}
 
-	// Verify lock was transferred to a persistent operation ID (UUID, so it won't match RPCID anymore, but it won't be empty)
-	if m.activeStateTx == "" || m.activeStateTx == tx.RPCID {
-		t.Fatalf("expected state lock to be transferred to an OperationID, got %s", m.activeStateTx)
+	// Verify lock was transferred to a persistent operation ID
+	opID := m.activeStateTx
+	if opID == "" || opID == tx.RPCID {
+		t.Fatalf("expected state lock to be transferred to an OperationID, got %s", opID)
 	}
 	m.mu.Unlock()
+
+	// Verify the lock can be released via the new operation ID
+	err = m.ReleaseOperationLock(opID)
+	if err != nil {
+		t.Fatalf("failed to release operation lock: %v", err)
+	}
+
+	// Verify we can now start a new state-changing command
+	tx2, err := m.CreateTransaction("session-2", json.RawMessage(`3`), true, "configure", 10*time.Second, true)
+	if err != nil {
+		t.Fatalf("failed to create second tx after unlock: %v", err)
+	}
+	m.Fail(tx2.RPCID, []byte("cleanup"))
 }

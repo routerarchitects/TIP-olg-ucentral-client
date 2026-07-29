@@ -183,53 +183,90 @@ func (m *DefaultRequestManager) MarkInFlight(rpcID string) error {
 func (m *DefaultRequestManager) Complete(rpcID string, response []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	// Add to cache (simplified)
+	// Cache logic would go here in PR 3.2
+
 	return m.terminalTransition(rpcID, TxCompleted)
+}
+
+// ReleaseOperationLock releases the stateLock if it is currently held by the specified background operation.
+// This is used by the NATS event subscriber or background timeout sweeper to free the router.
+func (m *DefaultRequestManager) ReleaseOperationLock(operationID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.activeStateTx != operationID {
+		return errors.New("state lock is not held by the specified operation")
+	}
+
+	// Release the lock
+	m.activeStateTx = ""
+	m.stateLock.Unlock()
+	
+	return nil
 }
 
 func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
-	tx, ok := m.transactionsByRPCID[rpcID]
-	if !ok {
+	tx, exists := m.transactionsByRPCID[rpcID]
+	if !exists {
+		m.mu.Unlock()
 		return ErrAlreadyTerminal
 	}
 
 	if tx.Method != "upgrade" {
+		m.mu.Unlock()
 		return errors.New("only upgrade operations can be retained")
 	}
 
 	if tx.State != TxInFlight {
+		m.mu.Unlock()
 		return ErrInvalidStateTransition
 	}
 
+	// 1. Pause response timer to prevent timeouts during disk I/O
+	if tx.DispatchTimer != nil {
+		tx.DispatchTimer.Stop()
+	}
+
+	// 2. Pre-transfer lock ownership to prevent fast-replies from unlocking it
 	operationID := uuid.New().String()
+	m.activeStateTx = operationID
+	m.mu.Unlock()
+
+	// 3. Perform disk I/O outside the lock
 	op := &PersistentOperation{
 		OperationID: operationID,
 		RPCID:       rpcID,
 		CloudRPCID:  tx.CloudRPCID,
-		Target:      tx.CloudSessionID,
-		Action:      tx.Method,
+		Target:      "system",
+		Action:      "upgrade",
 		Stage:       "started",
-		Status:      "active",
+		Status:      "started",
 		Active:      true,
-		CreatedAt:   time.Now().Format(time.RFC3339),
-		UpdatedAt:   time.Now().Format(time.RFC3339),
 	}
 
-	if err := m.store.Save(context.Background(), op); err != nil {
-		return err
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := m.store.Save(ctx, op)
+
+	if err != nil {
+		// Rollback lock ownership if disk fails
+		m.mu.Lock()
+		if m.activeStateTx == operationID {
+			m.activeStateTx = rpcID
+		}
+		// Restart timer
+		tx.DispatchTimer = time.AfterFunc(tx.TimeoutDuration, func() {
+			m.Timeout(rpcID)
+		})
+		m.mu.Unlock()
+		return fmt.Errorf("failed to persist operation: %w", err)
 	}
 
-	// Transfer lock ownership
-	if m.activeStateTx == rpcID {
-		m.activeStateTx = operationID
-	}
+	// Cache logic would go here in PR 3.2
 
-	// Cache the "started" response
-	m.cache.Set(tx.RequestKey, response, m.cacheTTLConfig.TTLForMethod(tx.Method))
-
+	// 4. Safely clean up via the standard terminal transition
 	return m.terminalTransition(rpcID, TxCompleted)
 }
 

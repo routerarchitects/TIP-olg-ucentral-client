@@ -462,6 +462,7 @@ func TestTCRM009_FastReplyBeforeInFlight(t *testing.T) {
 	}{
 		{"Complete before InFlight", "complete", TxCompleted},
 		{"Fail before InFlight", "fail", TxFailed},
+		{"Timeout before InFlight", "timeout", TxTimedOut},
 	}
 
 	for _, tc := range cases {
@@ -489,22 +490,28 @@ func TestTCRM009_FastReplyBeforeInFlight(t *testing.T) {
 			case "timeout":
 				err = m.Timeout(tx.RPCID)
 			}
-			if err != nil {
-				t.Fatalf("%s failed concurrently: %v", tc.terminalOp, err)
+			if tc.terminalOp == "timeout" {
+				if err != ErrInvalidStateTransition {
+					t.Fatalf("expected ErrInvalidStateTransition for timeout, got %v", err)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("%s failed concurrently: %v", tc.terminalOp, err)
+				}
 			}
 
 			// Verify behavior based on operation type
 			m.mu.Lock()
-			if tc.terminalOp == "complete" {
-				// Complete is buffered
+			if tc.terminalOp == "complete" || tc.terminalOp == "timeout" {
+				// Complete is buffered, Timeout was rejected. In both cases, the tx is still alive.
 				if _, exists := m.transactionsByRPCID[tx.RPCID]; !exists {
 					t.Fatalf("expected transaction to still exist in map")
 				}
-				if len(m.pendingReplies) != 1 {
+				if tc.terminalOp == "complete" && len(m.pendingReplies) != 1 {
 					t.Fatalf("expected 1 pending reply, got %d", len(m.pendingReplies))
 				}
-			} else {
-				// Fail and Timeout are processed immediately in pre-flight states
+			} else if tc.terminalOp == "fail" {
+				// Fail is processed immediately in pre-flight states
 				if _, exists := m.transactionsByRPCID[tx.RPCID]; exists {
 					t.Fatalf("expected transaction to be deleted immediately")
 				}
@@ -516,12 +523,12 @@ func TestTCRM009_FastReplyBeforeInFlight(t *testing.T) {
 
 			// Call MarkInFlight
 			err = m.MarkInFlight(tx.RPCID)
-
-			if tc.terminalOp == "complete" {
+			
+			if tc.terminalOp == "complete" || tc.terminalOp == "timeout" {
 				if err != nil {
 					t.Fatalf("MarkInFlight failed: %v", err)
 				}
-			} else {
+			} else if tc.terminalOp == "fail" {
 				if err != ErrAlreadyTerminal {
 					t.Fatalf("expected ErrAlreadyTerminal for MarkInFlight after immediate termination, got %v", err)
 				}
@@ -531,11 +538,22 @@ func TestTCRM009_FastReplyBeforeInFlight(t *testing.T) {
 			if len(m.pendingReplies) != 0 {
 				t.Fatalf("expected pending reply to be drained")
 			}
-			if _, exists := m.transactionsByRPCID[tx.RPCID]; exists {
-				t.Fatalf("expected transaction to be deleted")
-			}
-			if m.activeStateTx != "" {
-				t.Fatalf("expected lock to be released")
+			if tc.terminalOp == "complete" || tc.terminalOp == "fail" {
+				if _, exists := m.transactionsByRPCID[tx.RPCID]; exists {
+					t.Fatalf("expected transaction to be deleted")
+				}
+				if m.activeStateTx != "" {
+					t.Fatalf("expected lock to be released")
+				}
+			} else if tc.terminalOp == "timeout" {
+				// Timeout was rejected, and MarkInFlight succeeded, so it's now in-flight!
+				tx, exists := m.transactionsByRPCID[tx.RPCID]
+				if !exists {
+					t.Fatalf("expected transaction to still exist after MarkInFlight")
+				}
+				if tx.State != TxInFlight {
+					t.Fatalf("expected transaction to be in TxInFlight state")
+				}
 			}
 			m.mu.Unlock()
 		})

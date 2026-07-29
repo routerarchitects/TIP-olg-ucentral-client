@@ -58,11 +58,11 @@ func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLCon
 	}
 }
 
-// CanonicalRequestKey formats the session ID, method, and raw JSON-RPC ID into a strongly-typed string.
-func CanonicalRequestKey(sessionID string, method string, id json.RawMessage) (string, error) {
+// CanonicalRequestKey formats the session ID and raw JSON-RPC ID into a strongly-typed string.
+func CanonicalRequestKey(sessionID string, id json.RawMessage) (string, error) {
 	if len(id) == 0 || string(id) == "null" {
 		// For notifications, use a generated UUID
-		return fmt.Sprintf("%s:%s:%s", sessionID, method, uuid.New().String()), nil
+		return fmt.Sprintf("%s:%s", sessionID, uuid.New().String()), nil
 	}
 
 	decoder := json.NewDecoder(bytes.NewReader(id))
@@ -75,21 +75,24 @@ func CanonicalRequestKey(sessionID string, method string, id json.RawMessage) (s
 
 	switch v := parsed.(type) {
 	case string:
-		return fmt.Sprintf("%s:%s:s:%s", sessionID, method, v), nil
+		return fmt.Sprintf("%s:s:%s", sessionID, v), nil
 	case json.Number:
 		f, _, err := big.ParseFloat(v.String(), 10, 256, big.ToNearestEven)
 		if err != nil {
 			return "", fmt.Errorf("invalid json-rpc number: %w", err)
 		}
 		// Text('f', -1) correctly normalizes 1, 1.0, and 1e0 to "1" without losing large integer precision
-		return fmt.Sprintf("%s:%s:n:%s", sessionID, method, f.Text('f', -1)), nil
+		return fmt.Sprintf("%s:n:%s", sessionID, f.Text('f', -1)), nil
 	default:
 		return "", errors.New("json-rpc id must be string or number")
 	}
 }
 
 func (m *DefaultRequestManager) CreateTransaction(sessionID string, cloudRPCID json.RawMessage, respondToCloud bool, method string, timeout time.Duration, isStateChanging bool) (*Transaction, error) {
-	reqKey, err := CanonicalRequestKey(sessionID, method, cloudRPCID)
+	isNotification := len(cloudRPCID) == 0 || string(cloudRPCID) == "null"
+	respondToCloud = respondToCloud && !isNotification
+
+	reqKey, err := CanonicalRequestKey(sessionID, cloudRPCID)
 	if err != nil {
 		return nil, err
 	}
@@ -215,6 +218,13 @@ func (m *DefaultRequestManager) MarkInFlight(rpcID string) error {
 	}
 
 	tx.State = TxInFlight
+
+	// Process any buffered fast-reply that arrived while we were preparing or publishing
+	if pending, ok := m.pendingReplies[rpcID]; ok {
+		delete(m.pendingReplies, rpcID)
+		return m.terminalTransition(rpcID, pending.State)
+	}
+
 	if tx.DispatchTimer != nil {
 		tx.DispatchTimer.Stop()
 	}
@@ -238,8 +248,12 @@ func (m *DefaultRequestManager) Complete(rpcID string, response []byte) error {
 		return ErrAlreadyTerminal
 	}
 
-	// Buffer fast replies that arrive during lock handoff disk I/O
-	if tx.Method == "upgrade" && m.activeStateTx != rpcID && m.activeStateTx != "" {
+	isPreFlight := tx.State == TxCreated || tx.State == TxPreparingDispatch || tx.State == TxPendingPublish
+	isHandoff := tx.Method == "upgrade" && m.activeStateTx != rpcID && m.activeStateTx != ""
+
+	// Buffer fast replies that arrive before the request is officially in flight,
+	// or during lock handoff disk I/O
+	if isPreFlight || isHandoff {
 		if m.pendingReplies == nil {
 			m.pendingReplies = make(map[string]PendingReply)
 		}
@@ -377,8 +391,12 @@ func (m *DefaultRequestManager) Fail(rpcID string, errResponse []byte) error {
 		return ErrAlreadyTerminal
 	}
 
-	// Buffer fast replies that arrive during lock handoff disk I/O
-	if tx.Method == "upgrade" && m.activeStateTx != rpcID && m.activeStateTx != "" {
+	isPreFlight := tx.State == TxCreated || tx.State == TxPreparingDispatch || tx.State == TxPendingPublish
+	isHandoff := tx.Method == "upgrade" && m.activeStateTx != rpcID && m.activeStateTx != ""
+
+	// Buffer fast replies that arrive before the request is officially in flight,
+	// or during lock handoff disk I/O
+	if isPreFlight || isHandoff {
 		if m.pendingReplies == nil {
 			m.pendingReplies = make(map[string]PendingReply)
 		}
@@ -398,8 +416,12 @@ func (m *DefaultRequestManager) Timeout(rpcID string) error {
 		return ErrAlreadyTerminal
 	}
 
-	// Buffer timeout that arrives during lock handoff disk I/O
-	if tx.Method == "upgrade" && m.activeStateTx != rpcID && m.activeStateTx != "" {
+	isPreFlight := tx.State == TxCreated || tx.State == TxPreparingDispatch || tx.State == TxPendingPublish
+	isHandoff := tx.Method == "upgrade" && m.activeStateTx != rpcID && m.activeStateTx != ""
+
+	// Buffer timeouts that arrive before the request is officially in flight,
+	// or during lock handoff disk I/O
+	if isPreFlight || isHandoff {
 		if m.pendingReplies == nil {
 			m.pendingReplies = make(map[string]PendingReply)
 		}

@@ -18,8 +18,8 @@ import (
 //
 // Any attempt to transition an unknown/missing transaction, or to perform an
 // illegal transition (e.g., TxCreated directly to TxCompleted, or calling
-// Fail() on a transaction that is already in a terminal state) must be
-// rejected by the API returning an error, and logged as an internal assertion failure.
+// MarkInFlight twice) must be rejected by the API returning an error.
+// (Note: logging of these assertion failures will be added in a future PR).
 type TransactionState int
 
 const (

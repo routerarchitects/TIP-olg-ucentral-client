@@ -49,17 +49,8 @@ func TestTCRM001_StateMachineTransitions(t *testing.T) {
 		t.Fatalf("failed to transition to TxPreparingDispatch: %v", err)
 	}
 
-	// Verify illegal jump: TxPreparingDispatch -> TxCompleted
-	err = m.Complete(tx.RPCID, []byte("success"))
-	if err != ErrInvalidStateTransition {
-		t.Fatalf("expected ErrInvalidStateTransition for Complete from TxPreparingDispatch, got %v", err)
-	}
-
-	// Verify illegal jump: TxPreparingDispatch -> TxTimedOut
-	err = m.Timeout(tx.RPCID)
-	if err != ErrInvalidStateTransition {
-		t.Fatalf("expected ErrInvalidStateTransition for Timeout from TxPreparingDispatch, got %v", err)
-	}
+	// Note: Illegal jumps to Complete/Timeout from TxPreparingDispatch are now buffered
+	// rather than returning ErrInvalidStateTransition, so we don't test rejection here.
 
 	if tx.State != TxPreparingDispatch {
 		t.Fatalf("expected state TxPreparingDispatch, got %v", tx.State)
@@ -117,8 +108,8 @@ func TestTCRM002_ConcurrencyRejection(t *testing.T) {
 		t.Fatalf("expected ErrBusy for concurrent state-changing tx, got %v", err)
 	}
 
-	// Fail tx1 to release the lock (Fail is valid from TxCreated)
-	err = m.Fail(tx1.RPCID, []byte("failed"))
+	// Fail tx1 to release the lock (internal failure)
+	err = m.terminalTransition(tx1.RPCID, TxFailed)
 	if err != nil {
 		t.Fatalf("failed to fail tx1: %v", err)
 	}
@@ -396,28 +387,27 @@ func TestTCRM007_CanonicalRequestKey(t *testing.T) {
 	tests := []struct {
 		name      string
 		sessionID string
-		method    string
 		id        json.RawMessage
 		wantKey   string // leave empty if expecting an error
 		wantErr   bool
 	}{
-		{"String ID", "sess", "get", json.RawMessage(`"123"`), "sess:get:s:123", false},
-		{"Number ID", "sess", "get", json.RawMessage(`123`), "sess:get:n:123", false},
-		{"Float ID", "sess", "get", json.RawMessage(`123.0`), "sess:get:n:123", false},
-		{"Exponential ID", "sess", "get", json.RawMessage(`1.23e2`), "sess:get:n:123", false},
-		{"Large Int 1", "sess", "get", json.RawMessage(`9007199254740992`), "sess:get:n:9007199254740992", false},
-		{"Large Int 2", "sess", "get", json.RawMessage(`9007199254740993`), "sess:get:n:9007199254740993", false},
-		{"Null ID", "sess", "get", json.RawMessage(`null`), "", false}, // generates UUID
-		{"Empty ID", "sess", "get", json.RawMessage(``), "", false},    // generates UUID
-		{"Object ID", "sess", "get", json.RawMessage(`{}`), "", true},
-		{"Array ID", "sess", "get", json.RawMessage(`[]`), "", true},
-		{"Boolean ID", "sess", "get", json.RawMessage(`true`), "", true},
-		{"Invalid JSON", "sess", "get", json.RawMessage(`{bad`), "", true},
+		{"String ID", "sess", json.RawMessage(`"123"`), "sess:s:123", false},
+		{"Number ID", "sess", json.RawMessage(`123`), "sess:n:123", false},
+		{"Float ID", "sess", json.RawMessage(`123.0`), "sess:n:123", false},
+		{"Exponential ID", "sess", json.RawMessage(`1.23e2`), "sess:n:123", false},
+		{"Large Int 1", "sess", json.RawMessage(`9007199254740992`), "sess:n:9007199254740992", false},
+		{"Large Int 2", "sess", json.RawMessage(`9007199254740993`), "sess:n:9007199254740993", false},
+		{"Null ID", "sess", json.RawMessage(`null`), "", false}, // generates UUID
+		{"Empty ID", "sess", json.RawMessage(``), "", false},    // generates UUID
+		{"Object ID", "sess", json.RawMessage(`{}`), "", true},
+		{"Array ID", "sess", json.RawMessage(`[]`), "", true},
+		{"Boolean ID", "sess", json.RawMessage(`true`), "", true},
+		{"Invalid JSON", "sess", json.RawMessage(`{bad`), "", true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := CanonicalRequestKey(tt.sessionID, tt.method, tt.id)
+			got, err := CanonicalRequestKey(tt.sessionID, tt.id)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("CanonicalRequestKey() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -451,12 +441,86 @@ func TestTCRM008_NullIDBypass(t *testing.T) {
 		t.Fatalf("expected error for state-changing command with empty ID, got nil")
 	}
 
-	// Test 3: non-state-changing command with null ID (should succeed)
+	// Test 3: non-state-changing command with null ID (should succeed, but respondToCloud must be false)
 	tx, err := m.CreateTransaction("sess", json.RawMessage(`null`), true, "status.get", 10*time.Second, false)
 	if err != nil {
 		t.Fatalf("expected non-state-changing command with null ID to succeed, got %v", err)
 	}
 	if tx == nil {
 		t.Fatalf("expected transaction, got nil")
+	}
+	if tx.RespondToCloud {
+		t.Fatalf("expected RespondToCloud to be overridden to false for notification")
+	}
+}
+
+func TestTCRM009_FastReplyBeforeInFlight(t *testing.T) {
+	cases := []struct {
+		name       string
+		terminalOp string
+		wantState  TransactionState
+	}{
+		{"Complete before InFlight", "complete", TxCompleted},
+		{"Fail before InFlight", "fail", TxFailed},
+		{"Timeout before InFlight", "timeout", TxTimedOut},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cache := NewTransactionCache()
+			config := CacheTTLConfig{}
+			scheduler := queues.NewPriorityScheduler(10, 10)
+			store := &mockStore{}
+			m := NewRequestManager(10*time.Second, config, cache, scheduler, store)
+
+			tx, err := m.CreateTransaction("sess", json.RawMessage(`123`), true, "configure", 10*time.Second, true)
+			if err != nil {
+				t.Fatalf("failed to create tx: %v", err)
+			}
+
+			m.MarkPreparingDispatch(tx.RPCID)
+			m.MarkPendingPublish(tx.RPCID)
+
+			// Simulate a fast reply arriving before MarkInFlight
+			switch tc.terminalOp {
+			case "complete":
+				err = m.Complete(tx.RPCID, []byte("success"))
+			case "fail":
+				err = m.Fail(tx.RPCID, []byte("fail"))
+			case "timeout":
+				err = m.Timeout(tx.RPCID)
+			}
+			if err != nil {
+				t.Fatalf("%s failed concurrently: %v", tc.terminalOp, err)
+			}
+
+			// Verify transaction is still technically alive but buffered
+			m.mu.Lock()
+			if _, exists := m.transactionsByRPCID[tx.RPCID]; !exists {
+				t.Fatalf("expected transaction to still exist in map")
+			}
+			if len(m.pendingReplies) != 1 {
+				t.Fatalf("expected 1 pending reply, got %d", len(m.pendingReplies))
+			}
+			m.mu.Unlock()
+
+			// Call MarkInFlight which should drain the pending reply and delete the transaction
+			err = m.MarkInFlight(tx.RPCID)
+			if err != nil {
+				t.Fatalf("MarkInFlight failed: %v", err)
+			}
+
+			m.mu.Lock()
+			if len(m.pendingReplies) != 0 {
+				t.Fatalf("expected pending reply to be drained")
+			}
+			if _, exists := m.transactionsByRPCID[tx.RPCID]; exists {
+				t.Fatalf("expected transaction to be deleted")
+			}
+			if m.activeStateTx != "" {
+				t.Fatalf("expected lock to be released")
+			}
+			m.mu.Unlock()
+		})
 	}
 }

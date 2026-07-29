@@ -351,7 +351,7 @@ func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) 
 	// If a buffered reply exists, process it with its proper state
 	if pending, ok := m.pendingReplies[rpcID]; ok {
 		delete(m.pendingReplies, rpcID)
-		
+
 		// If we are processing a buffered reply AFTER a successful save,
 		// the lock is currently held by operationID, not rpcID.
 		// We must explicitly release it since terminalTransition only releases rpcID locks.
@@ -359,7 +359,7 @@ func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) 
 			m.activeStateTx = ""
 			m.stateLock.Unlock()
 		}
-		
+
 		return m.terminalTransition(rpcID, pending.State)
 	}
 

@@ -372,7 +372,7 @@ func TestTCUPG006_RespondAndRetainConcurrentTerminalEvent(t *testing.T) {
 
 			// Get the RespondAndRetain result
 			err = <-errCh
-			
+
 			// If Save succeeded, RespondAndRetain should succeed (nil).
 			// If Save failed, RespondAndRetain should still succeed (nil) because the buffered terminal event satisfies the state machine!
 			if err != nil {

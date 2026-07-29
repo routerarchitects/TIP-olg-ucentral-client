@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"sync"
 	"time"
@@ -72,6 +73,10 @@ func CanonicalRequestKey(sessionID string, id json.RawMessage) (string, error) {
 	var parsed interface{}
 	if err := decoder.Decode(&parsed); err != nil {
 		return "", fmt.Errorf("invalid json-rpc id: %w", err)
+	}
+
+	if err := decoder.Decode(new(interface{})); err != io.EOF {
+		return "", errors.New("invalid json-rpc id: trailing content")
 	}
 
 	switch v := parsed.(type) {
@@ -406,7 +411,7 @@ func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) 
 				delete(m.pendingReplies, rpcID)
 				_ = m.terminalTransition(rpcID, pending.State, pending.Payload)
 
-				return "", fmt.Errorf("failed to delete terminal operation: %w", errDelete)
+				return operationID, fmt.Errorf("failed to delete terminal operation: %w", errDelete)
 			}
 
 			// Double-unlock race fix: ensure the lock wasn't released concurrently

@@ -112,24 +112,40 @@ func (m *DefaultRequestManager) CreateTransaction(sessionID string, cloudRPCID j
 
 	// Setup DispatchTimer
 	tx.DispatchTimer = time.AfterFunc(m.dispatchTimeout, func() {
-		m.Fail(rpcID, []byte(`{"error":{"code":-32603,"message":"dispatch timeout"}}`))
+		m.dispatchTimeoutFail(rpcID)
 	})
 
 	return tx, nil
+}
+
+func (m *DefaultRequestManager) dispatchTimeoutFail(rpcID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	tx, exists := m.transactionsByRPCID[rpcID]
+	if !exists {
+		return
+	}
+
+	// Only fail if it is still in a pre-flight state (not TxInFlight)
+	if tx.State == TxCreated || tx.State == TxPreparingDispatch || tx.State == TxPendingPublish {
+		m.terminalTransition(rpcID, TxFailed)
+	}
 }
 
 func (m *DefaultRequestManager) MarkPreparingDispatch(rpcID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	tx, ok := m.transactionsByRPCID[rpcID]
-	if !ok {
-		return errors.New("transaction not found")
+	tx, exists := m.transactionsByRPCID[rpcID]
+	if !exists {
+		return ErrAlreadyTerminal
 	}
 
 	if tx.State != TxCreated {
 		return ErrInvalidStateTransition
 	}
+
 	tx.State = TxPreparingDispatch
 	return nil
 }
@@ -138,14 +154,15 @@ func (m *DefaultRequestManager) MarkPendingPublish(rpcID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	tx, ok := m.transactionsByRPCID[rpcID]
-	if !ok {
-		return errors.New("transaction not found")
+	tx, exists := m.transactionsByRPCID[rpcID]
+	if !exists {
+		return ErrAlreadyTerminal
 	}
 
 	if tx.State != TxPreparingDispatch {
 		return ErrInvalidStateTransition
 	}
+
 	tx.State = TxPendingPublish
 	return nil
 }
@@ -154,12 +171,8 @@ func (m *DefaultRequestManager) MarkInFlight(rpcID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	tx, ok := m.transactionsByRPCID[rpcID]
-	if !ok {
-		return errors.New("transaction not found")
-	}
-
-	if tx.State == TxFailed || tx.State == TxTimedOut || tx.State == TxCompleted {
+	tx, exists := m.transactionsByRPCID[rpcID]
+	if !exists {
 		return ErrAlreadyTerminal
 	}
 
@@ -224,12 +237,22 @@ func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) 
 		return ErrInvalidStateTransition
 	}
 
+	if m.activeStateTx != rpcID {
+		m.mu.Unlock()
+		return errors.New("transaction does not own the state lock")
+	}
+
 	// 1. Pause response timer to prevent timeouts during disk I/O
 	if tx.DispatchTimer != nil {
 		tx.DispatchTimer.Stop()
 	}
 
-	// 2. Pre-transfer lock ownership to prevent fast-replies from unlocking it
+	// 2. Temporarily hide the transaction from active maps to protect it from concurrent
+	//    terminal method calls (like Complete/Fail) while we are unlocked.
+	delete(m.transactionsByRPCID, rpcID)
+	delete(m.activeCloudRequests, tx.RequestKey)
+
+	// Pre-transfer lock ownership to prevent fast-replies from unlocking it
 	operationID := uuid.New().String()
 	m.activeStateTx = operationID
 	m.mu.Unlock()
@@ -260,13 +283,19 @@ func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) 
 		tx.DispatchTimer = time.AfterFunc(tx.TimeoutDuration, func() {
 			m.Timeout(rpcID)
 		})
-		m.mu.Unlock()
 		return fmt.Errorf("failed to persist operation: %w", err)
 	}
 
 	// Cache logic would go here in PR 3.2
 
 	// 4. Safely clean up via the standard terminal transition
+	// We MUST restore the transaction to the active maps so that terminalTransition
+	// can find it and execute the standard deletion and cleanup sequence!
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.transactionsByRPCID[rpcID] = tx
+	m.activeCloudRequests[tx.RequestKey] = rpcID
+
 	return m.terminalTransition(rpcID, TxCompleted)
 }
 

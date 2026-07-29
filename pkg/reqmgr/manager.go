@@ -285,13 +285,27 @@ func (m *DefaultRequestManager) Complete(rpcID string, response []byte) error {
 func (m *DefaultRequestManager) ReleaseOperationLock(ctx context.Context, operationID string) error {
 	m.mu.Lock()
 	if m.activeStateTx != operationID {
+		// If another worker is already deleting it, we can safely consider our job done!
+		if m.activeStateTx == "deleting:"+operationID {
+			m.mu.Unlock()
+			return nil
+		}
 		m.mu.Unlock()
 		return ErrOperationNotActive
 	}
+	
+	// Mark it as actively being deleted so concurrent workers return early with success
+	m.activeStateTx = "deleting:" + operationID
 	m.mu.Unlock()
 
 	// Perform disk I/O outside lock
 	if err := m.store.Delete(ctx, operationID); err != nil {
+		m.mu.Lock()
+		// Roll back the state if deletion failed so it can be retried later
+		if m.activeStateTx == "deleting:"+operationID {
+			m.activeStateTx = operationID
+		}
+		m.mu.Unlock()
 		return fmt.Errorf("failed to delete persistent operation: %w", err)
 	}
 
@@ -299,7 +313,7 @@ func (m *DefaultRequestManager) ReleaseOperationLock(ctx context.Context, operat
 	defer m.mu.Unlock()
 
 	// Re-check after I/O
-	if m.activeStateTx == operationID {
+	if m.activeStateTx == "deleting:"+operationID {
 		m.activeStateTx = ""
 		m.stateLock.Unlock()
 	}
@@ -379,8 +393,12 @@ func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) 
 			return "", m.terminalTransition(rpcID, pending.State, pending.Payload)
 		}
 
-		// Restart timer
-		tx.DispatchTimer = time.AfterFunc(tx.TimeoutDuration, func() {
+		// Restart timer with the remaining time, NOT the full duration
+		remaining := time.Until(tx.CreatedAt.Add(tx.TimeoutDuration))
+		if remaining <= 0 {
+			remaining = 0 // Run immediately
+		}
+		tx.DispatchTimer = time.AfterFunc(remaining, func() {
 			m.Timeout(rpcID)
 		})
 		return "", fmt.Errorf("failed to persist operation: %w", err)

@@ -332,6 +332,7 @@ func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) 
 	m.mu.Unlock()
 
 	// 3. Perform disk I/O outside the lock
+	now := time.Now().UTC().Format(time.RFC3339)
 	op := &PersistentOperation{
 		OperationID: operationID,
 		RPCID:       rpcID,
@@ -341,6 +342,8 @@ func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) 
 		Stage:       "started",
 		Status:      "started",
 		Active:      true,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -374,19 +377,27 @@ func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) 
 	// 4. Safely clean up via the standard terminal transition
 	// If a buffered reply exists, process it with its proper state
 	if pending, ok := m.pendingReplies[rpcID]; ok {
-		delete(m.pendingReplies, rpcID)
-
 		// If we are processing a buffered reply AFTER a successful save,
 		// the lock is currently held by operationID, not rpcID.
 		// We must explicitly release it since terminalTransition only releases rpcID locks.
 		if m.activeStateTx == operationID {
-			// Delete the active record from persistent storage since the operation is already terminal
-			_ = m.store.Delete(context.Background(), operationID)
+			m.mu.Unlock()
+
+			ctxDelete, cancelDelete := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancelDelete()
+			errDelete := m.store.Delete(ctxDelete, operationID)
+
+			m.mu.Lock()
+
+			if errDelete != nil {
+				return "", fmt.Errorf("failed to delete terminal operation: %w", errDelete)
+			}
 
 			m.activeStateTx = ""
 			m.stateLock.Unlock()
 		}
 
+		delete(m.pendingReplies, rpcID)
 		return "", m.terminalTransition(rpcID, pending.State)
 	}
 

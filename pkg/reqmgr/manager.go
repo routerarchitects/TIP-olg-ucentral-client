@@ -390,11 +390,25 @@ func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) 
 			m.mu.Lock()
 
 			if errDelete != nil {
+				// The active record was NOT deleted from the database!
+				// Provide a recoverable policy: restore the RPC transaction lock and timer
+				// so the system doesn't permanently stall. The timer will eventually fire
+				// and cleanly process the buffered reply.
+				if m.activeStateTx == operationID {
+					m.activeStateTx = rpcID
+				}
+				tx.DispatchTimer = time.AfterFunc(tx.TimeoutDuration, func() {
+					m.Timeout(rpcID)
+				})
 				return "", fmt.Errorf("failed to delete terminal operation: %w", errDelete)
 			}
 
-			m.activeStateTx = ""
-			m.stateLock.Unlock()
+			// Double-unlock race fix: ensure the lock wasn't released concurrently
+			// by ReleaseOperationLock while we were yielding the mutex for I/O.
+			if m.activeStateTx == operationID {
+				m.activeStateTx = ""
+				m.stateLock.Unlock()
+			}
 		}
 
 		delete(m.pendingReplies, rpcID)

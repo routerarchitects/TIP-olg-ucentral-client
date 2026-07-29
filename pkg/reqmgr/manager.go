@@ -18,6 +18,7 @@ var (
 	ErrInvalidStateTransition = errors.New("invalid state transition")
 	ErrAlreadyTerminal        = errors.New("transaction already in terminal state")
 	ErrBusy                   = errors.New("system busy or transaction active")
+	ErrOperationNotActive     = errors.New("operation is not active")
 )
 
 type PendingReply struct {
@@ -280,7 +281,7 @@ func (m *DefaultRequestManager) ReleaseOperationLock(ctx context.Context, operat
 	m.mu.Lock()
 	if m.activeStateTx != operationID {
 		m.mu.Unlock()
-		return nil
+		return ErrOperationNotActive
 	}
 	m.mu.Unlock()
 

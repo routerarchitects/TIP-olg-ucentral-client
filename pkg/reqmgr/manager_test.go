@@ -47,6 +47,19 @@ func TestTCRM001_StateMachineTransitions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to transition to TxPreparingDispatch: %v", err)
 	}
+
+	// Verify illegal jump: TxPreparingDispatch -> TxCompleted
+	err = m.Complete(tx.RPCID, []byte("success"))
+	if err != ErrInvalidStateTransition {
+		t.Fatalf("expected ErrInvalidStateTransition for Complete from TxPreparingDispatch, got %v", err)
+	}
+
+	// Verify illegal jump: TxPreparingDispatch -> TxTimedOut
+	err = m.Timeout(tx.RPCID)
+	if err != ErrInvalidStateTransition {
+		t.Fatalf("expected ErrInvalidStateTransition for Timeout from TxPreparingDispatch, got %v", err)
+	}
+
 	if tx.State != TxPreparingDispatch {
 		t.Fatalf("expected state TxPreparingDispatch, got %v", tx.State)
 	}
@@ -103,10 +116,10 @@ func TestTCRM002_ConcurrencyRejection(t *testing.T) {
 		t.Fatalf("expected ErrBusy for concurrent state-changing tx, got %v", err)
 	}
 
-	// Complete tx1 to release the lock
-	err = m.Complete(tx1.RPCID, []byte("success"))
+	// Fail tx1 to release the lock (Fail is valid from TxCreated)
+	err = m.Fail(tx1.RPCID, []byte("failed"))
 	if err != nil {
-		t.Fatalf("failed to complete tx1: %v", err)
+		t.Fatalf("failed to fail tx1: %v", err)
 	}
 
 	// Now we should be able to create tx2
@@ -159,6 +172,17 @@ func TestTCUPG004_UpgradeAsynchronousLockHandoff(t *testing.T) {
 		t.Fatalf("expected state lock to be held by RPCID %s, got %s", tx.RPCID, m.activeStateTx)
 	}
 	m.mu.Unlock()
+
+	// Verify illegal jump: calling RespondAndRetain from TxCreated
+	err = m.RespondAndRetain(tx.RPCID, []byte(`{"status": {"error": 0}}`))
+	if err != ErrInvalidStateTransition {
+		t.Fatalf("expected ErrInvalidStateTransition for RespondAndRetain from TxCreated, got %v", err)
+	}
+
+	// Advance transaction to TxInFlight
+	m.MarkPreparingDispatch(tx.RPCID)
+	m.MarkPendingPublish(tx.RPCID)
+	m.MarkInFlight(tx.RPCID)
 
 	// Call RespondAndRetain
 	err = m.RespondAndRetain(tx.RPCID, []byte(`{"status": {"error": 0}}`))

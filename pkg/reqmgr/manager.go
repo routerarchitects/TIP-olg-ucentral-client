@@ -112,7 +112,7 @@ func (m *DefaultRequestManager) CreateTransaction(sessionID string, cloudRPCID j
 
 	// Setup DispatchTimer
 	tx.DispatchTimer = time.AfterFunc(m.dispatchTimeout, func() {
-		m.Timeout(rpcID) // simplified for now
+		m.Fail(rpcID, []byte(`{"error":{"code":-32603,"message":"dispatch timeout"}}`))
 	})
 
 	return tx, nil
@@ -172,7 +172,11 @@ func (m *DefaultRequestManager) MarkInFlight(rpcID string) error {
 		tx.DispatchTimer.Stop()
 	}
 
-	// For PR 3.1, this is a basic stub of MarkInFlight
+	// Start the downstream response timer
+	tx.DispatchTimer = time.AfterFunc(tx.TimeoutDuration, func() {
+		m.Timeout(rpcID)
+	})
+
 	return nil
 }
 
@@ -194,6 +198,10 @@ func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) 
 
 	if tx.Method != "upgrade" {
 		return errors.New("only upgrade operations can be retained")
+	}
+
+	if tx.State != TxInFlight {
+		return ErrInvalidStateTransition
 	}
 
 	operationID := uuid.New().String()
@@ -247,6 +255,13 @@ func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState Tran
 
 	if tx.State == TxCompleted || tx.State == TxFailed || tx.State == TxTimedOut {
 		return ErrAlreadyTerminal
+	}
+
+	// Enforce strict state machine transitions for terminal states
+	if finalState == TxCompleted || finalState == TxTimedOut {
+		if tx.State != TxInFlight {
+			return ErrInvalidStateTransition
+		}
 	}
 
 	tx.State = finalState

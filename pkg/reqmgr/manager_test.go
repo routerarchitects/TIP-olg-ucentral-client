@@ -223,6 +223,7 @@ func TestTCUPG004_UpgradeAsynchronousLockHandoff(t *testing.T) {
 	}
 	m.Fail(tx2.RPCID, []byte("cleanup"))
 }
+
 // errorMockStore for testing persistence failures
 type errorMockStore struct {
 	mockStore

@@ -21,6 +21,7 @@ var (
 	ErrBusy                       = errors.New("system busy or transaction active")
 	ErrOperationNotActive         = errors.New("operation is not active")
 	ErrOperationReleaseInProgress = errors.New("operation release already in progress")
+	ErrOperationOwnershipChanged  = errors.New("operation ownership changed during release")
 )
 
 type PendingReply struct {
@@ -264,6 +265,9 @@ func (m *DefaultRequestManager) MarkInFlight(rpcID string) error {
 }
 
 // Complete marks a transaction as successfully completed.
+// STRICT CONTRACT: Complete MUST NOT be called for the intermediate acknowledgement of an
+// asynchronous state-changing operation (e.g. upgrade). Those must be handled exclusively by
+// RespondAndRetain. Complete must only be called for the final terminal result.
 // If Complete is called during a pre-flight state (before MarkInFlight),
 // it assumes it is a downstream fast-reply and buffers the success.
 func (m *DefaultRequestManager) Complete(rpcID string, response []byte) error {
@@ -328,17 +332,18 @@ func (m *DefaultRequestManager) ReleaseOperationLock(ctx context.Context, operat
 	defer m.mu.Unlock()
 
 	// Re-check after I/O
-	if m.activeStateTx == "deleting:"+operationID {
-		m.activeStateTx = ""
-		m.stateLock.Unlock()
+	if m.activeStateTx != "deleting:"+operationID {
+		return ErrOperationOwnershipChanged
 	}
+	m.activeStateTx = ""
+	m.stateLock.Unlock()
 	return nil
 }
 
 // RespondAndRetain transfers stateLock ownership to a background operation and cleans up the transaction.
 // Note: The `response` argument is currently unused. It is reserved for
 // the TransactionCache implementation in Epic 3 (PR 3.2), which will cache this payload.
-func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) (string, error) {
+func (m *DefaultRequestManager) RespondAndRetain(ctx context.Context, rpcID string, response []byte) (string, error) {
 	m.mu.Lock()
 
 	tx, exists := m.transactionsByRPCID[rpcID]
@@ -390,9 +395,9 @@ func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) 
 		UpdatedAt:   now,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	saveCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	err := m.store.Save(ctx, op)
+	err := m.store.Save(saveCtx, op)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -520,6 +525,12 @@ func (m *DefaultRequestManager) Timeout(rpcID string) error {
 }
 
 func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState TransactionState, payload []byte) error {
+	switch finalState {
+	case TxCompleted, TxFailed, TxTimedOut:
+	default:
+		return ErrInvalidStateTransition
+	}
+
 	tx, ok := m.transactionsByRPCID[rpcID]
 	if !ok {
 		// Since RPCIDs are internally generated UUIDs, a missing transaction

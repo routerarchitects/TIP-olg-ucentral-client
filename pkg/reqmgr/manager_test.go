@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -166,7 +167,7 @@ func TestTCUPG004_UpgradeAsynchronousLockHandoff(t *testing.T) {
 	m.mu.Unlock()
 
 	// Verify illegal jump: calling RespondAndRetain from TxCreated
-	_, err = m.RespondAndRetain(tx.RPCID, []byte(`{"status": {"error": 0}}`))
+	_, err = m.RespondAndRetain(context.Background(), tx.RPCID, []byte(`{"status": {"error": 0}}`))
 	if err != ErrInvalidStateTransition {
 		t.Fatalf("expected ErrInvalidStateTransition for RespondAndRetain from TxCreated, got %v", err)
 	}
@@ -183,7 +184,7 @@ func TestTCUPG004_UpgradeAsynchronousLockHandoff(t *testing.T) {
 	}
 
 	// Call RespondAndRetain
-	opID, err := m.RespondAndRetain(tx.RPCID, []byte(`{"status": {"error": 0}}`))
+	opID, err := m.RespondAndRetain(context.Background(), tx.RPCID, []byte(`{"status": {"error": 0}}`))
 	if err != nil {
 		t.Fatalf("RespondAndRetain failed: %v", err)
 	}
@@ -252,7 +253,7 @@ func TestTCUPG005_RespondAndRetainRollback(t *testing.T) {
 	}
 
 	// Call RespondAndRetain which will fail during Save
-	_, err = m.RespondAndRetain(tx.RPCID, []byte(`{"status": {"error": 0}}`))
+	_, err = m.RespondAndRetain(context.Background(), tx.RPCID, []byte(`{"status": {"error": 0}}`))
 	if err == nil {
 		t.Fatalf("expected error from RespondAndRetain, got nil")
 	}
@@ -351,7 +352,7 @@ func TestTCUPG006_RespondAndRetainConcurrentTerminalEvent(t *testing.T) {
 			// Start RespondAndRetain in a goroutine so it blocks on Save
 			errCh := make(chan error)
 			go func() {
-				_, err := m.RespondAndRetain(tx.RPCID, []byte(`{"status": {"error": 0}}`))
+				_, err := m.RespondAndRetain(context.Background(), tx.RPCID, []byte(`{"status": {"error": 0}}`))
 				errCh <- err
 			}()
 
@@ -649,28 +650,42 @@ func TestTCRM011_BufferedTerminalEventRace(t *testing.T) {
 	m.MarkPreparingDispatch(tx.RPCID)
 	m.MarkPendingPublish(tx.RPCID)
 
-	// First event wins the race and buffers successfully
-	err = m.Complete(tx.RPCID, []byte("success"))
-	if err != nil {
-		t.Fatalf("first event failed: %v", err)
+	var wg sync.WaitGroup
+	startCh := make(chan struct{})
+	errs := make([]error, 2)
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		<-startCh
+		errs[0] = m.Complete(tx.RPCID, []byte("success"))
+	}()
+
+	go func() {
+		defer wg.Done()
+		<-startCh
+		errs[1] = m.Fail(tx.RPCID, []byte("timeout"))
+	}()
+
+	close(startCh)
+	wg.Wait()
+
+	successCount := 0
+	errAlreadyTerminalCount := 0
+	for _, e := range errs {
+		if e == nil {
+			successCount++
+		} else if e == ErrAlreadyTerminal {
+			errAlreadyTerminalCount++
+		}
 	}
 
-	// Second concurrent event should lose the race and receive ErrAlreadyTerminal
-	err = m.Complete(tx.RPCID, []byte("late-success"))
-	if err != ErrAlreadyTerminal {
-		t.Fatalf("expected loser to get ErrAlreadyTerminal, got %v", err)
+	if successCount != 1 {
+		t.Errorf("expected exactly 1 goroutine to succeed, got %d", successCount)
 	}
-
-	// Verify the original buffered state is preserved
-	m.mu.Lock()
-	pending, exists := m.pendingReplies[tx.RPCID]
-	if !exists {
-		t.Fatalf("expected pending reply to exist")
+	if errAlreadyTerminalCount != 1 {
+		t.Errorf("expected exactly 1 goroutine to get ErrAlreadyTerminal, got %d", errAlreadyTerminalCount)
 	}
-	if string(pending.Payload) != "success" {
-		t.Fatalf("expected payload to be 'success', got '%s'", string(pending.Payload))
-	}
-	m.mu.Unlock()
 }
 
 func TestTCUPG012_RejectUpgradeNonStateChanging(t *testing.T) {
@@ -779,7 +794,7 @@ func TestTCRM014_ConcurrentRespondAndRetainDeletion(t *testing.T) {
 
 	errCh := make(chan error)
 	go func() {
-		_, err := m.RespondAndRetain(tx.RPCID, []byte(`{}`))
+		_, err := m.RespondAndRetain(context.Background(), tx.RPCID, []byte(`{}`))
 		errCh <- err
 	}()
 

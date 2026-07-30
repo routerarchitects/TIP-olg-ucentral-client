@@ -410,6 +410,75 @@ func TestTCUPG006_RespondAndRetainConcurrentTerminalEvent(t *testing.T) {
 	}
 }
 
+func TestTCUPG015_HandoffMultipleTerminalEventsRace(t *testing.T) {
+	for _, loserEvent := range []string{"timeout", "fail"} {
+		t.Run(loserEvent, func(t *testing.T) {
+			cache := NewTransactionCache()
+			config := CacheTTLConfig{}
+			scheduler := queues.NewPriorityScheduler(10, 10)
+
+			store := &blockingMockStore{
+				entered:   make(chan struct{}),
+				release:   make(chan struct{}),
+				err:       nil,
+				deleteErr: nil,
+			}
+
+			m := NewRequestManager(10*time.Second, config, cache, scheduler, store)
+			tx, _ := m.CreateTransaction("sess", json.RawMessage(`123`), true, "upgrade", 10*time.Second, true)
+			m.MarkPreparingDispatch(tx.RPCID)
+			m.MarkPendingPublish(tx.RPCID)
+			m.MarkInFlight(tx.RPCID)
+
+			errCh := make(chan error)
+			go func() {
+				_, err := m.RespondAndRetain(context.Background(), tx.RPCID, []byte(`{}`))
+				errCh <- err
+			}()
+
+			<-store.entered
+
+			// First event buffers successfully
+			err := m.Complete(tx.RPCID, []byte("success"))
+			if err != nil {
+				t.Fatalf("first event failed: %v", err)
+			}
+
+			// Second concurrent event should lose and receive ErrAlreadyTerminal
+			if loserEvent == "timeout" {
+				err = m.Timeout(tx.RPCID)
+			} else {
+				err = m.Fail(tx.RPCID, []byte("fail"))
+			}
+			if err != ErrAlreadyTerminal {
+				t.Fatalf("expected loser to get ErrAlreadyTerminal, got %v", err)
+			}
+
+			// Unblock the Save
+			close(store.release)
+			err = <-errCh
+			if err != nil {
+				t.Fatalf("expected RespondAndRetain to successfully return nil due to buffered reply, got %v", err)
+			}
+
+			m.mu.Lock()
+			defer m.mu.Unlock()
+
+			if m.activeStateTx != "" {
+				t.Fatalf("expected state lock to be released, got %s", m.activeStateTx)
+			}
+
+			if _, exists := m.transactionsByRPCID[tx.RPCID]; exists {
+				t.Fatalf("expected transaction to be removed")
+			}
+
+			if _, exists := m.pendingReplies[tx.RPCID]; exists {
+				t.Fatalf("expected pending reply to be removed")
+			}
+		})
+	}
+}
+
 func TestTCRM007_CanonicalRequestKey(t *testing.T) {
 	tests := []struct {
 		name      string

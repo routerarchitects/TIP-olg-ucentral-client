@@ -479,15 +479,17 @@ func (m *DefaultRequestManager) Fail(rpcID string, errResponse []byte) error {
 		return ErrAlreadyTerminal
 	}
 
-	// Check if a terminal reply was already buffered
-	if pending, ok := m.pendingReplies[rpcID]; ok {
-		delete(m.pendingReplies, rpcID)
-		tx.State = TxInFlight
-		_ = m.terminalTransition(rpcID, pending.State, pending.Payload)
-		return ErrAlreadyTerminal
-	}
-
 	isHandoff := tx.HandoffInProgress
+
+	if !isHandoff {
+		// Check if a terminal reply was already buffered
+		if pending, ok := m.pendingReplies[rpcID]; ok {
+			delete(m.pendingReplies, rpcID)
+			tx.State = TxInFlight
+			_ = m.terminalTransition(rpcID, pending.State, pending.Payload)
+			return ErrAlreadyTerminal
+		}
+	}
 
 	// Buffer fast replies that arrive during lock handoff disk I/O
 	if isHandoff {
@@ -516,15 +518,17 @@ func (m *DefaultRequestManager) Timeout(rpcID string) error {
 		return ErrAlreadyTerminal
 	}
 
-	// Check if a terminal reply was already buffered
-	if pending, ok := m.pendingReplies[rpcID]; ok {
-		delete(m.pendingReplies, rpcID)
-		tx.State = TxInFlight
-		_ = m.terminalTransition(rpcID, pending.State, pending.Payload)
-		return ErrAlreadyTerminal
-	}
-
 	isHandoff := tx.HandoffInProgress
+
+	if !isHandoff {
+		// Check if a terminal reply was already buffered
+		if pending, ok := m.pendingReplies[rpcID]; ok {
+			delete(m.pendingReplies, rpcID)
+			tx.State = TxInFlight
+			_ = m.terminalTransition(rpcID, pending.State, pending.Payload)
+			return ErrAlreadyTerminal
+		}
+	}
 
 	// Buffer timeout that arrives during lock handoff disk I/O
 	if isHandoff {

@@ -438,7 +438,7 @@ func (m *DefaultRequestManager) RespondAndRetain(ctx context.Context, rpcID stri
 		if m.activeStateTx == operationID {
 			m.mu.Unlock()
 
-			ctxDelete, cancelDelete := context.WithTimeout(context.Background(), 5*time.Second)
+			ctxDelete, cancelDelete := context.WithTimeout(ctx, 5*time.Second)
 			defer cancelDelete()
 			errDelete := m.ReleaseOperationLock(ctxDelete, operationID)
 
@@ -479,6 +479,14 @@ func (m *DefaultRequestManager) Fail(rpcID string, errResponse []byte) error {
 		return ErrAlreadyTerminal
 	}
 
+	// Check if a terminal reply was already buffered
+	if pending, ok := m.pendingReplies[rpcID]; ok {
+		delete(m.pendingReplies, rpcID)
+		tx.State = TxInFlight
+		_ = m.terminalTransition(rpcID, pending.State, pending.Payload)
+		return ErrAlreadyTerminal
+	}
+
 	isHandoff := tx.HandoffInProgress
 
 	// Buffer fast replies that arrive during lock handoff disk I/O
@@ -505,6 +513,14 @@ func (m *DefaultRequestManager) Timeout(rpcID string) error {
 
 	tx, exists := m.transactionsByRPCID[rpcID]
 	if !exists {
+		return ErrAlreadyTerminal
+	}
+
+	// Check if a terminal reply was already buffered
+	if pending, ok := m.pendingReplies[rpcID]; ok {
+		delete(m.pendingReplies, rpcID)
+		tx.State = TxInFlight
+		_ = m.terminalTransition(rpcID, pending.State, pending.Payload)
 		return ErrAlreadyTerminal
 	}
 

@@ -926,10 +926,13 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     // by a NATS subscriber, or by the timeout timer.
     func (m *DefaultRequestManager) Complete(rpcID string, response []byte) error
     // RespondAndRetain separates the synchronous JSON-RPC transaction from a persistent background operation (e.g. upgrade).
-    // It MUST follow this sequence under the Request Manager mutex: (1) Validate the transaction is valid for retention (e.g. upgrade).
-    // (2) Persist the OperationStore record. (3) Transfer state-changing reservation ownership from RPCID to OperationID.
-    // (4) Cancel the ordinary response timer. (5) Cache the initial "started" response. (6) Remove the JSON-RPC transaction from active maps and mark it completed. (7) Release mutex and enqueue response.
-    func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) error
+    // It MUST follow this sequence: (1) Lock mutex and validate the transaction is valid for retention (e.g. upgrade).
+    // (2) Cancel the ordinary response timer and pre-transfer state-changing reservation ownership to a new OperationID.
+    // (3) Unlock mutex and persist the OperationStore record (disk I/O) with a bounded context.
+    // (4) Re-lock mutex. If persistence fails, roll back the lock transfer. If successful, remove the JSON-RPC transaction
+    // from active maps and mark it completed via terminal transition.
+    // Note: The `response` argument caching and enqueuing is deferred to Epic 3 (PR 3.2).
+    func (m *DefaultRequestManager) RespondAndRetain(ctx context.Context, rpcID string, response []byte) (string, error)
 
     func (m *DefaultRequestManager) Fail(rpcID string, errResponse []byte) error
     func (m *DefaultRequestManager) Timeout(rpcID string) error

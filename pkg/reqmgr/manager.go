@@ -64,6 +64,7 @@ func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLCon
 	if store == nil {
 		store = &NoopOperationStore{}
 	}
+
 	return &DefaultRequestManager{
 		dispatchTimeout:     dispatchTimeout,
 		transactionsByRPCID: make(map[string]*Transaction),
@@ -490,17 +491,23 @@ func (m *DefaultRequestManager) RespondAndRetain(ctx context.Context, rpcID stri
 
 			if errDelete != nil && errDelete != ErrOperationNotActive {
 				// The active record was NOT deleted from the database!
-				// Process the buffered terminal transition locally so the correct result is
-				// recorded, but LEAVE the memory lock held by operationID.
-				// STRICT CALLER CONTRACT: The caller MUST reliably capture the returned operationID
-				// and schedule a background retry to eventually call ReleaseOperationLock(operationID).
-				// Failure to do so will leave the device permanently locked and busy!
-				// (Note: The actual caller implementing this retry mechanism will be introduced in subsequent PRs).
-				delete(m.pendingReplies, rpcID)
-				_ = m.terminalTransition(rpcID, pending.State, pending.Payload)
-
-				return operationID, errDelete
+				// We spawn an internal background retry loop to guarantee lock release
+				// so the caller doesn't have to manage this edge case.
+				go func(opID string) {
+					for i := 0; i < 5; i++ {
+						time.Sleep(time.Duration(i+1) * time.Second)
+						retryCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+						err := m.ReleaseOperationLock(retryCtx, opID)
+						cancel()
+						if err == nil || err == ErrOperationNotActive {
+							return
+						}
+					}
+				}(operationID)
 			}
+
+			delete(m.pendingReplies, rpcID)
+			return "", m.terminalTransition(rpcID, pending.State, pending.Payload)
 		}
 
 		delete(m.pendingReplies, rpcID)

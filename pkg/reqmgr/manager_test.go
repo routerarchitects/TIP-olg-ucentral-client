@@ -399,15 +399,9 @@ func TestTCUPG006_RespondAndRetainConcurrentTerminalEvent(t *testing.T) {
 
 			// If Save succeeded, RespondAndRetain should succeed (nil).
 			// If Save failed, RespondAndRetain should still succeed (nil) because the buffered terminal event satisfies the state machine!
-			// If Delete failed, RespondAndRetain should return the delete error.
-			if tc.deleteErr != nil {
-				if err == nil {
-					t.Fatalf("expected RespondAndRetain to return delete error, got nil")
-				}
-			} else {
-				if err != nil {
-					t.Fatalf("expected RespondAndRetain to successfully return nil due to buffered reply, got %v", err)
-				}
+			// If Delete failed, RespondAndRetain should ALSO return nil, because it automatically spawns an internal retry loop.
+			if err != nil {
+				t.Fatalf("expected RespondAndRetain to successfully return nil, got %v", err)
 			}
 
 			// Verify the lock is fully released and transaction is deleted

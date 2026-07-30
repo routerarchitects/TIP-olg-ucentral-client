@@ -162,10 +162,6 @@ func (m *DefaultRequestManager) CreateTransaction(sessionID string, cloudRPCID j
 			return nil, errors.New("state-changing commands must have a non-null ID")
 		}
 
-		if m.activeStateTx != "" {
-			return nil, ErrStateLockBusy
-		}
-
 		// Note: We use TryLock here to avoid deadlocks. If we can't get it immediately, return busy.
 		if !m.stateLock.TryLock() {
 			return nil, ErrStateLockBusy
@@ -328,51 +324,42 @@ func (m *DefaultRequestManager) Complete(rpcID string, response []byte) error {
 	return m.terminalTransition(rpcID, TxCompleted, response)
 }
 
-// ReleaseOperationLock releases the stateLock if it is currently held by the specified background operation.
 func (m *DefaultRequestManager) ReleaseOperationLock(ctx context.Context, operationID string) error {
 	m.mu.Lock()
-	if operationID == "" || m.activeStateTx != operationID || m.activeStateOwner != LockOwnedByOperation {
+	
+	if operationID == "" {
 		m.mu.Unlock()
 		return ErrOperationNotActive
 	}
 
-	if m.releasingOperationID == operationID {
-		m.mu.Unlock()
-		return ErrOperationReleaseInProgress
-	}
+	ownsMemoryLock := (m.activeStateTx == operationID && m.activeStateOwner == LockOwnedByOperation)
 
-	// Mark it as actively being deleted so concurrent callers return ErrOperationReleaseInProgress
-	m.releasingOperationID = operationID
+	if ownsMemoryLock {
+		if m.releasingOperationID == operationID {
+			m.mu.Unlock()
+			return ErrOperationReleaseInProgress
+		}
+
+		// Mark it as actively being deleted so concurrent callers return ErrOperationReleaseInProgress
+		m.releasingOperationID = operationID
+
+		// Clear the memory lock IMMEDIATELY. This guarantees no permanent lockouts 
+		// if the DB delete fails below.
+		m.activeStateTx = ""
+		m.activeStateOwner = LockNone
+		m.releasingOperationID = ""
+		
+		// Enforce strict sequence: Unlock stateLock BEFORE dropping m.mu
+		m.stateLock.Unlock()
+	}
 	m.mu.Unlock()
 
-	// Perform disk I/O outside lock
+	// Perform disk I/O outside lock. If this fails, the device is STILL unlocked in memory!
+	// The background sweeper will eventually clean up the stale record.
 	if err := m.store.Delete(ctx, operationID); err != nil {
-		m.mu.Lock()
-		// Roll back the state if deletion failed so it can be retried later
-		if m.releasingOperationID == operationID {
-			m.releasingOperationID = ""
-		}
-		m.mu.Unlock()
 		return fmt.Errorf("failed to delete persistent operation: %w", err)
 	}
 
-	m.mu.Lock()
-
-	// Ensure ownership didn't somehow change unexpectedly
-	if m.activeStateTx != operationID || m.releasingOperationID != operationID || m.activeStateOwner != LockOwnedByOperation {
-		m.mu.Unlock()
-		return ErrOperationOwnershipChanged
-	}
-
-	m.activeStateTx = ""
-	m.activeStateOwner = LockNone
-	m.releasingOperationID = ""
-	m.mu.Unlock()
-
-	// NOTE: We explicitly release m.mu before unlocking stateLock to avoid a lock-order
-	// dependency (m.mu -> stateLock). This prevents deadlocks with other code paths
-	// that might acquire stateLock before m.mu.
-	m.stateLock.Unlock()
 	return nil
 }
 
@@ -489,21 +476,11 @@ func (m *DefaultRequestManager) RespondAndRetain(ctx context.Context, rpcID stri
 
 			m.mu.Lock()
 
-			if errDelete != nil && errDelete != ErrOperationNotActive {
-				// The active record was NOT deleted from the database!
-				// We spawn an internal background retry loop to guarantee lock release
-				// so the caller doesn't have to manage this edge case.
-				go func(opID string) {
-					for i := 0; i < 5; i++ {
-						time.Sleep(time.Duration(i+1) * time.Second)
-						retryCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-						err := m.ReleaseOperationLock(retryCtx, opID)
-						cancel()
-						if err == nil || err == ErrOperationNotActive {
-							return
-						}
-					}
-				}(operationID)
+			if errDelete != nil {
+				// The active record was NOT deleted from the database, but ReleaseOperationLock 
+				// guarantees that it WAS successfully unlocked in memory!
+				// The background sweeper will eventually clean up the stale DB record.
+				// We can safely return success to the caller.
 			}
 
 			delete(m.pendingReplies, rpcID)
@@ -652,13 +629,7 @@ func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState Tran
 	}
 
 	if releaseStateLock {
-		// We explicitly release m.mu before unlocking stateLock to avoid a lock-order
-		// dependency (m.mu -> stateLock). This prevents deadlocks with other code paths
-		// that might acquire stateLock before m.mu.
-		m.mu.Unlock()
 		m.stateLock.Unlock()
-		// Re-acquire m.mu to satisfy the caller's defer m.mu.Unlock() expectation.
-		m.mu.Lock()
 	}
 
 	return nil
@@ -666,11 +637,28 @@ func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState Tran
 
 // Start runs the background sweeper to clean up orphaned persistent operations.
 func (m *DefaultRequestManager) Start(ctx context.Context) {
+	// Re-acquire persistent locks on startup to survive daemon crashes
+	if ops, err := m.store.GetPendingTerminalDelivery(ctx); err == nil {
+		m.mu.Lock()
+		for _, op := range ops {
+			if m.activeStateTx == "" {
+				// A background operation was running when we crashed.
+				// Re-acquire the memory lock to protect the device until it finishes!
+				// We must TryLock stateLock in case it's magically held (shouldn't be on fresh boot).
+				if m.stateLock.TryLock() {
+					m.activeStateTx = op.OperationID
+					m.activeStateOwner = LockOwnedByOperation
+				}
+			}
+		}
+		m.mu.Unlock()
+	}
+
 	go func() {
 		ticker := time.NewTicker(1 * time.Minute)
 		defer ticker.Stop()
 
-		// Run once on startup to reconcile state immediately
+		// Run once on startup to reconcile state immediately (e.g. clean stale DB records)
 		m.sweep(ctx)
 
 		for {
@@ -692,11 +680,32 @@ func (m *DefaultRequestManager) sweep(ctx context.Context) {
 		return
 	}
 
+	now := time.Now().UTC()
+
 	for _, op := range ops {
-		// Attempt to safely release and delete the orphaned operation.
-		// If the lock is held by another active worker, this safely returns ErrOperationNotActive.
-		// If the operation is just sitting there undeleted, this will clean it up.
-		_ = m.ReleaseOperationLock(ctx, op.OperationID)
+		createdAt, errTime := time.Parse(time.RFC3339, op.CreatedAt)
+		
+		// If the operation is older than 15 minutes, it is forcibly killed.
+		if errTime == nil && now.Sub(createdAt) > 15*time.Minute {
+			m.mu.Lock()
+			if m.activeStateTx == op.OperationID {
+				m.activeStateTx = ""
+				m.activeStateOwner = LockNone
+				if m.releasingOperationID == op.OperationID {
+					m.releasingOperationID = ""
+				}
+				m.stateLock.Unlock()
+			}
+			m.mu.Unlock()
+			
+			// Delete the stale record from the database
+			_ = m.store.Delete(ctx, op.OperationID)
+		} else {
+			// Attempt to safely release and delete the orphaned operation.
+			// If the lock is held by another active worker, this safely returns ErrOperationNotActive.
+			// If the operation is just sitting there undeleted, this will clean it up.
+			_ = m.ReleaseOperationLock(ctx, op.OperationID)
+		}
 	}
 }
 

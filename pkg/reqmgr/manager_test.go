@@ -404,16 +404,10 @@ func TestTCUPG006_RespondAndRetainConcurrentTerminalEvent(t *testing.T) {
 				t.Fatalf("expected RespondAndRetain to successfully return nil, got %v", err)
 			}
 
-			// Verify the lock is fully released and transaction is deleted
+			// Verify the lock is ALWAYS fully released, regardless of Save or Delete failures!
 			m.mu.Lock()
-			if tc.deleteErr != nil {
-				if m.activeStateTx == "" || m.activeStateTx == tx.RPCID {
-					t.Fatalf("expected lock to be held by operationID when delete fails, got %s", m.activeStateTx)
-				}
-			} else {
-				if m.activeStateTx != "" {
-					t.Fatalf("expected lock to be fully released, got %s", m.activeStateTx)
-				}
+			if m.activeStateTx != "" {
+				t.Fatalf("expected lock to be fully released even if delete fails, got %s", m.activeStateTx)
 			}
 			if _, exists := m.transactionsByRPCID[tx.RPCID]; exists {
 				t.Fatalf("expected transaction to be deleted by the buffered event")
@@ -805,6 +799,7 @@ func TestTCRM013_ConcurrentReleaseOperationLock(t *testing.T) {
 	cache := NewTransactionCache()
 	config := CacheTTLConfig{}
 	scheduler := queues.NewPriorityScheduler(10, 10)
+	// We no longer expect ErrOperationReleaseInProgress. Both callers should safely hit Delete.
 	store := &blockDeleteMockStore{
 		block:   make(chan struct{}),
 		release: make(chan struct{}),
@@ -818,30 +813,35 @@ func TestTCRM013_ConcurrentReleaseOperationLock(t *testing.T) {
 	m.stateLock.Lock()
 	m.mu.Unlock()
 
-	errCh := make(chan error)
+	errCh1 := make(chan error)
 	go func() {
-		err := m.ReleaseOperationLock(context.Background(), "op-1")
-		if err != nil {
-			t.Logf("ReleaseOperationLock early exit: %v", err)
-		}
-		errCh <- err
+		errCh1 <- m.ReleaseOperationLock(context.Background(), "op-1")
 	}()
 
 	// Wait for first caller to enter Delete
 	<-store.block
 
+	errCh2 := make(chan error)
 	// Second concurrent caller
-	err2 := m.ReleaseOperationLock(context.Background(), "op-1")
-	if err2 != ErrOperationReleaseInProgress {
-		t.Fatalf("expected ErrOperationReleaseInProgress, got %v", err2)
-	}
+	go func() {
+		errCh2 <- m.ReleaseOperationLock(context.Background(), "op-1")
+	}()
 
-	// release first caller
+	// Wait for second caller to also enter Delete
+	<-store.block
+
+	// release BOTH callers
+	store.release <- struct{}{}
 	store.release <- struct{}{}
 
-	err1 := <-errCh
+	err1 := <-errCh1
 	if err1 == nil {
-		t.Fatalf("expected delete to fail")
+		t.Fatalf("expected delete to fail for caller 1")
+	}
+	
+	err2 := <-errCh2
+	if err2 == nil {
+		t.Fatalf("expected delete to fail for caller 2")
 	}
 }
 
@@ -906,22 +906,14 @@ func TestTCRM014_ConcurrentRespondAndRetainDeletion(t *testing.T) {
 	// Wait for RespondAndRetain to enter Delete
 	<-store.blockDelete
 
-	// Get the active operation ID
+	// Under the new architecture, the memory lock is instantly cleared!
 	m.mu.Lock()
-	active := m.activeStateTx
-	releasingID := m.releasingOperationID
+	if m.activeStateTx != "" {
+		t.Fatalf("expected lock to be instantly cleared, got %s", m.activeStateTx)
+	}
 	m.mu.Unlock()
 
-	if releasingID != active {
-		t.Fatalf("expected releasingOperationID to be active op, got %s", releasingID)
-	}
-	opID := active
 
-	// Concurrently call ReleaseOperationLock
-	errRel := m.ReleaseOperationLock(context.Background(), opID)
-	if errRel != ErrOperationReleaseInProgress {
-		t.Fatalf("expected ErrOperationReleaseInProgress, got %v", errRel)
-	}
 
 	// Release Delete
 	store.releaseDelete <- struct{}{}

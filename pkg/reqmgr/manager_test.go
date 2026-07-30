@@ -732,3 +732,91 @@ func TestTCRM013_ConcurrentReleaseOperationLock(t *testing.T) {
 		t.Fatalf("expected delete to fail")
 	}
 }
+
+type dualBlockMockStore struct {
+	mockStore
+	blockSave     chan struct{}
+	releaseSave   chan struct{}
+	blockDelete   chan struct{}
+	releaseDelete chan struct{}
+}
+
+func (s *dualBlockMockStore) Save(ctx context.Context, op *PersistentOperation) error {
+	s.blockSave <- struct{}{}
+	<-s.releaseSave
+	return nil
+}
+
+func (s *dualBlockMockStore) Delete(ctx context.Context, opID string) error {
+	s.blockDelete <- struct{}{}
+	<-s.releaseDelete
+	return nil
+}
+
+func TestTCRM014_ConcurrentRespondAndRetainDeletion(t *testing.T) {
+	cache := NewTransactionCache()
+	config := CacheTTLConfig{}
+	scheduler := queues.NewPriorityScheduler(10, 10)
+	store := &dualBlockMockStore{
+		blockSave:     make(chan struct{}),
+		releaseSave:   make(chan struct{}),
+		blockDelete:   make(chan struct{}),
+		releaseDelete: make(chan struct{}),
+	}
+	m := NewRequestManager(10*time.Second, config, cache, scheduler, store)
+
+	tx, err := m.CreateTransaction("sess", json.RawMessage(`"concurrent-del"`), true, "upgrade", 10*time.Second, true)
+	if err != nil {
+		t.Fatalf("failed to create upgrade tx: %v", err)
+	}
+
+	m.MarkPreparingDispatch(tx.RPCID)
+	m.MarkPendingPublish(tx.RPCID)
+	m.MarkInFlight(tx.RPCID)
+
+	errCh := make(chan error)
+	go func() {
+		_, err := m.RespondAndRetain(tx.RPCID, []byte(`{}`))
+		errCh <- err
+	}()
+
+	// Wait for RespondAndRetain to enter Save
+	<-store.blockSave
+
+	// Buffer a terminal reply during Save
+	if err := m.Complete(tx.RPCID, []byte("success")); err != nil {
+		t.Fatalf("failed to buffer complete: %v", err)
+	}
+
+	// Release Save so RespondAndRetain proceeds to Delete
+	store.releaseSave <- struct{}{}
+
+	// Wait for RespondAndRetain to enter Delete
+	<-store.blockDelete
+
+	// Get the active operation ID
+	m.mu.Lock()
+	active := m.activeStateTx
+	m.mu.Unlock()
+
+	// It should be deleting:<operationID>
+	if len(active) < 10 || active[:9] != "deleting:" {
+		t.Fatalf("expected state lock to be 'deleting:<opID>', got '%s'", active)
+	}
+	opID := active[9:]
+
+	// Concurrently call ReleaseOperationLock
+	errRel := m.ReleaseOperationLock(context.Background(), opID)
+	if errRel != ErrOperationReleaseInProgress {
+		t.Fatalf("expected ErrOperationReleaseInProgress, got %v", errRel)
+	}
+
+	// Release Delete
+	store.releaseDelete <- struct{}{}
+
+	// Wait for RespondAndRetain to finish
+	errRetain := <-errCh
+	if errRetain != nil {
+		t.Fatalf("RespondAndRetain failed: %v", errRetain)
+	}
+}

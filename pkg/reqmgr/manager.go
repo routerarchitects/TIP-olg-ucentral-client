@@ -314,7 +314,9 @@ func (m *DefaultRequestManager) ReleaseOperationLock(ctx context.Context, operat
 		m.mu.Lock()
 		// Roll back the state if deletion failed so it can be retried later
 		// Update local state to point to the new background operation ID
-		m.activeStateTx = operationID
+		if m.activeStateTx == "deleting:"+operationID {
+			m.activeStateTx = operationID
+		}
 		m.mu.Unlock()
 		return fmt.Errorf("failed to delete persistent operation: %w", err)
 	}
@@ -430,11 +432,11 @@ func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) 
 
 			ctxDelete, cancelDelete := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancelDelete()
-			errDelete := m.store.Delete(ctxDelete, operationID)
+			errDelete := m.ReleaseOperationLock(ctxDelete, operationID)
 
 			m.mu.Lock()
 
-			if errDelete != nil {
+			if errDelete != nil && errDelete != ErrOperationNotActive {
 				// The active record was NOT deleted from the database!
 				// Process the buffered terminal transition locally so the correct result is
 				// recorded, but LEAVE the memory lock held by operationID. This forces a
@@ -442,14 +444,7 @@ func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) 
 				delete(m.pendingReplies, rpcID)
 				_ = m.terminalTransition(rpcID, pending.State, pending.Payload)
 
-				return operationID, fmt.Errorf("failed to delete terminal operation: %w", errDelete)
-			}
-
-			// Double-unlock race fix: ensure the lock wasn't released concurrently
-			// by ReleaseOperationLock while we were yielding the mutex for I/O.
-			if m.activeStateTx == operationID {
-				m.activeStateTx = ""
-				m.stateLock.Unlock()
+				return operationID, errDelete
 			}
 		}
 

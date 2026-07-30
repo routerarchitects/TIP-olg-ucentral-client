@@ -102,7 +102,9 @@ func CanonicalRequestKey(sessionID string, id json.RawMessage) (string, error) {
 
 func (m *DefaultRequestManager) CreateTransaction(sessionID string, cloudRPCID json.RawMessage, respondToCloud bool, method string, timeout time.Duration, isStateChanging bool) (*Transaction, error) {
 	isNotification := len(cloudRPCID) == 0 || string(cloudRPCID) == "null"
-	respondToCloud = respondToCloud && !isNotification
+	if isNotification && respondToCloud {
+		return nil, errors.New("cannot request response for a notification (null/empty ID)")
+	}
 
 	if method == "upgrade" && !isStateChanging {
 		return nil, errors.New("upgrade must be state-changing")
@@ -132,7 +134,7 @@ func (m *DefaultRequestManager) CreateTransaction(sessionID string, cloudRPCID j
 
 	// 3. Check state-changing rules
 	if isStateChanging {
-		if !respondToCloud || len(cloudRPCID) == 0 || string(cloudRPCID) == "null" {
+		if !respondToCloud || isNotification {
 			return nil, errors.New("state-changing commands must have a non-null ID")
 		}
 
@@ -160,7 +162,8 @@ func (m *DefaultRequestManager) CreateTransaction(sessionID string, cloudRPCID j
 		DispatchDeadline: time.Now().Add(m.dispatchTimeout),
 	}
 
-	if respondToCloud {
+	hasValidID := !isNotification && reqKey != ""
+	if hasValidID {
 		m.activeCloudRequests[reqKey] = rpcID
 	}
 	m.transactionsByRPCID[rpcID] = tx
@@ -187,9 +190,11 @@ func (m *DefaultRequestManager) dispatchTimeoutFail(rpcID string) {
 		if pending, ok := m.pendingReplies[rpcID]; ok {
 			delete(m.pendingReplies, rpcID)
 			// The hardware successfully responded, which proves the command was published.
-			// Catch up the local state machine so terminalTransition accepts it.
-			tx.State = TxInFlight
-			m.terminalTransition(rpcID, pending.State, pending.Payload)
+			if err := m.recoverToInFlight(tx); err == nil {
+				m.terminalTransition(rpcID, pending.State, pending.Payload)
+			} else {
+				m.terminalTransition(rpcID, TxFailed, nil)
+			}
 		} else {
 			m.terminalTransition(rpcID, TxFailed, nil)
 		}
@@ -290,7 +295,7 @@ func (m *DefaultRequestManager) Complete(rpcID string, response []byte) error {
 		} else if _, exists := m.pendingReplies[rpcID]; exists {
 			return ErrAlreadyTerminal
 		}
-		m.pendingReplies[rpcID] = PendingReply{Payload: response, State: TxCompleted}
+		m.pendingReplies[rpcID] = PendingReply{Payload: bytes.Clone(response), State: TxCompleted}
 		return nil
 	}
 
@@ -485,9 +490,12 @@ func (m *DefaultRequestManager) Fail(rpcID string, errResponse []byte) error {
 		// Check if a terminal reply was already buffered
 		if pending, ok := m.pendingReplies[rpcID]; ok {
 			delete(m.pendingReplies, rpcID)
-			tx.State = TxInFlight
-			_ = m.terminalTransition(rpcID, pending.State, pending.Payload)
-			return ErrAlreadyTerminal
+			if err := m.recoverToInFlight(tx); err == nil {
+				_ = m.terminalTransition(rpcID, pending.State, pending.Payload)
+				return ErrAlreadyTerminal
+			}
+			// If recovery fails (e.g. TxCreated), discard the invalid fast-reply
+			// and fall through to native failure.
 		}
 	}
 
@@ -498,11 +506,11 @@ func (m *DefaultRequestManager) Fail(rpcID string, errResponse []byte) error {
 		} else if _, exists := m.pendingReplies[rpcID]; exists {
 			return ErrAlreadyTerminal
 		}
-		m.pendingReplies[rpcID] = PendingReply{Payload: errResponse, State: TxFailed}
+		m.pendingReplies[rpcID] = PendingReply{Payload: bytes.Clone(errResponse), State: TxFailed}
 		return nil
 	}
 
-	return m.terminalTransition(rpcID, TxFailed, errResponse)
+	return m.terminalTransition(rpcID, TxFailed, bytes.Clone(errResponse))
 }
 
 // Timeout marks a transaction as timed out.
@@ -524,9 +532,12 @@ func (m *DefaultRequestManager) Timeout(rpcID string) error {
 		// Check if a terminal reply was already buffered
 		if pending, ok := m.pendingReplies[rpcID]; ok {
 			delete(m.pendingReplies, rpcID)
-			tx.State = TxInFlight
-			_ = m.terminalTransition(rpcID, pending.State, pending.Payload)
-			return ErrAlreadyTerminal
+			if err := m.recoverToInFlight(tx); err == nil {
+				_ = m.terminalTransition(rpcID, pending.State, pending.Payload)
+				return ErrAlreadyTerminal
+			}
+			// If recovery fails (e.g. TxCreated), discard the invalid fast-reply
+			// and fall through to native timeout.
 		}
 	}
 
@@ -580,7 +591,8 @@ func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState Tran
 		delete(m.pendingReplies, rpcID)
 	}
 
-	if tx.RespondToCloud {
+	hasValidID := tx.RequestKey != ""
+	if hasValidID {
 		delete(m.activeCloudRequests, tx.RequestKey)
 	}
 	delete(m.transactionsByRPCID, rpcID)
@@ -591,4 +603,15 @@ func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState Tran
 	}
 
 	return nil
+}
+
+// recoverToInFlight explicitly promotes a pre-flight transaction to TxInFlight
+// if a downstream fast-reply proves it was published. It strictly rejects TxCreated
+// because a response for an unprepared transaction indicates an invalid dispatch sequence.
+func (m *DefaultRequestManager) recoverToInFlight(tx *Transaction) error {
+	if tx.State == TxPreparingDispatch || tx.State == TxPendingPublish {
+		tx.State = TxInFlight
+		return nil
+	}
+	return ErrInvalidStateTransition
 }

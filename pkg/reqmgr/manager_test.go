@@ -538,16 +538,22 @@ func TestTCRM008_NullIDBypass(t *testing.T) {
 		t.Fatalf("expected error for state-changing command with empty ID, got nil")
 	}
 
-	// Test 3: non-state-changing command with null ID (should succeed, but respondToCloud must be false)
-	tx, err := m.CreateTransaction("sess", json.RawMessage(`null`), true, "status.get", 10*time.Second, false)
+	// Test 3: non-state-changing command with null ID, respondToCloud = true (should fail)
+	_, err = m.CreateTransaction("sess", json.RawMessage(`null`), true, "status.get", 10*time.Second, false)
+	if err == nil {
+		t.Fatalf("expected error for non-state-changing command requesting response but having null ID")
+	}
+
+	// Test 4: non-state-changing command with null ID, respondToCloud = false (should succeed)
+	tx, err := m.CreateTransaction("sess", json.RawMessage(`null`), false, "status.get", 10*time.Second, false)
 	if err != nil {
-		t.Fatalf("expected non-state-changing command with null ID to succeed, got %v", err)
+		t.Fatalf("expected command with null ID and respondToCloud=false to succeed, got %v", err)
 	}
 	if tx == nil {
 		t.Fatalf("expected transaction, got nil")
 	}
 	if tx.RespondToCloud {
-		t.Fatalf("expected RespondToCloud to be overridden to false for notification")
+		t.Fatalf("expected RespondToCloud to remain false")
 	}
 }
 

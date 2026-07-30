@@ -55,6 +55,7 @@ func (s TransactionState) String() string {
 
 type Transaction struct {
 	RPCID             string
+	OperationID       string
 	CloudSessionID    string
 	CloudRPCID        json.RawMessage
 	RequestKey        string // sessionID:typedCanonicalID, e.g. "session-uuid:n:42"

@@ -124,8 +124,11 @@ func TestTCRM002_ConcurrencyRejection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create tx2 after lock released: %v", err)
 	}
-	if tx2.State != TxCreated {
-		t.Fatalf("expected state TxCreated, got %v", tx2.State)
+	m.mu.Lock()
+	state := tx2.State
+	m.mu.Unlock()
+	if state != TxCreated {
+		t.Fatalf("expected state TxCreated, got %v", state)
 	}
 }
 
@@ -147,8 +150,13 @@ func TestTCRM003_ParallelReadOperations(t *testing.T) {
 		t.Fatalf("failed to create parallel query: %v", err)
 	}
 
-	if tx1.State != TxCreated || queryTx.State != TxCreated {
-		t.Fatalf("both transactions should be active in TxCreated")
+	m.mu.Lock()
+	state1 := tx1.State
+	state2 := queryTx.State
+	m.mu.Unlock()
+
+	if state1 != TxCreated || state2 != TxCreated {
+		t.Fatalf("expected both read operations to be created, got %v and %v", state1, state2)
 	}
 }
 
@@ -809,9 +817,11 @@ func TestTCRM013_ConcurrentReleaseOperationLock(t *testing.T) {
 	}
 	m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store)
 
-	// manually set active state tx
 	m.mu.Lock()
 	m.activeStateTx = "op-1"
+	m.activeStateOwner = LockOwnedByOperation
+	// Also acquire stateLock since it's supposed to be held by the operation
+	m.stateLock.Lock()
 	m.mu.Unlock()
 
 	errCh := make(chan error)
@@ -901,11 +911,11 @@ func TestTCRM014_ConcurrentRespondAndRetainDeletion(t *testing.T) {
 	// Get the active operation ID
 	m.mu.Lock()
 	active := m.activeStateTx
-	releaseInProgress := m.operationReleaseInProgress
+	releasingID := m.releasingOperationID
 	m.mu.Unlock()
 
-	if !releaseInProgress {
-		t.Fatalf("expected operationReleaseInProgress to be true, got false")
+	if releasingID != active {
+		t.Fatalf("expected releasingOperationID to be active op, got %s", releasingID)
 	}
 	opID := active
 
@@ -1148,3 +1158,89 @@ func TestTCRM020_DuplicateIDRejectedAfterCompletion(t *testing.T) {
 		t.Fatalf("expected ErrCachedRequest for duplicate completed ID, got %v", err)
 	}
 }
+
+func TestTCRM021_NumericDuplicateNormalization(t *testing.T) {
+	cache := NewTransactionCache()
+	config := CacheTTLConfig{}
+	scheduler := queues.NewPriorityScheduler(10, 10)
+	store := &mockStore{}
+	m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store)
+
+	// 1. Create first request with integer ID
+	tx1, err := m.CreateTransaction("session-1", json.RawMessage(`1`), true, "configure", 10*time.Second, false)
+	if err != nil {
+		t.Fatalf("failed to create first tx: %v", err)
+	}
+
+	// 2. Try to create second request with float ID (1.0)
+	_, err = m.CreateTransaction("session-1", json.RawMessage(`1.0`), true, "ping", 10*time.Second, false)
+	if err != ErrDuplicateRequest {
+		t.Fatalf("expected ErrDuplicateRequest for mathematically equivalent ID '1.0', got %v", err)
+	}
+
+	// 3. Try to create third request with exponential ID (1e0)
+	_, err = m.CreateTransaction("session-1", json.RawMessage(`1e0`), true, "reboot", 10*time.Second, false)
+	if err != ErrDuplicateRequest {
+		t.Fatalf("expected ErrDuplicateRequest for mathematically equivalent ID '1e0', got %v", err)
+	}
+
+	_ = tx1 // avoid unused variable
+}
+
+func TestTCRM022_ReleaseOperationLockFailureRetry(t *testing.T) {
+	cache := NewTransactionCache()
+	config := CacheTTLConfig{}
+	scheduler := queues.NewPriorityScheduler(10, 10)
+	store := &blockDeleteMockStore{
+		block:   make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store)
+
+	// manually setup a fake operation lock
+	m.mu.Lock()
+	m.activeStateTx = "op-retry"
+	m.activeStateOwner = LockOwnedByOperation
+	m.stateLock.Lock()
+	m.mu.Unlock()
+
+	errCh := make(chan error)
+	go func() {
+		errCh <- m.ReleaseOperationLock(context.Background(), "op-retry")
+	}()
+
+	// Wait for ReleaseOperationLock to block on store.Delete
+	<-store.block
+	store.release <- struct{}{}
+
+	err1 := <-errCh
+	if err1 == nil {
+		t.Fatalf("expected first ReleaseOperationLock to fail")
+	}
+
+	// Because it failed, the releasingOperationID flag should have been cleared, allowing a retry.
+	m.mu.Lock()
+	if m.releasingOperationID != "" {
+		m.mu.Unlock()
+		t.Fatalf("expected releasingOperationID to be cleared after failure")
+	}
+	m.mu.Unlock()
+
+	// Replace the mock store with one that will succeed
+	m.store = &mockStore{}
+
+	// Retry should succeed
+	err2 := m.ReleaseOperationLock(context.Background(), "op-retry")
+	if err2 != nil {
+		t.Fatalf("expected retry of ReleaseOperationLock to succeed, got %v", err2)
+	}
+
+	// Lock should be released completely
+	m.mu.Lock()
+	if m.activeStateTx != "" || m.activeStateOwner != LockNone {
+		m.mu.Unlock()
+		t.Fatalf("expected lock to be fully released")
+	}
+	m.mu.Unlock()
+}
+

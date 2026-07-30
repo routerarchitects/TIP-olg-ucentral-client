@@ -32,19 +32,29 @@ type PendingReply struct {
 	State   TransactionState
 }
 
+type LockOwnerState int
+
+const (
+	LockNone LockOwnerState = iota
+	LockOwnedByRPC
+	LockTransferPending
+	LockOwnedByOperation
+)
+
 type DefaultRequestManager struct {
-	mu                         sync.Mutex
-	dispatchTimeout            time.Duration
-	transactionsByRPCID        map[string]*Transaction
-	activeCloudRequests        map[string]string // Key: RequestKey, Value: RPCID
-	stateLock                  sync.Mutex
-	activeStateTx              string // RPCID or OperationID holding the state lock
-	operationReleaseInProgress bool
-	cache                      *TransactionCache
-	cacheTTLConfig             CacheTTLConfig
-	scheduler                  *queues.PriorityScheduler
-	store                      OperationStore
-	pendingReplies             map[string]PendingReply
+	mu                   sync.Mutex
+	dispatchTimeout      time.Duration
+	transactionsByRPCID  map[string]*Transaction
+	activeCloudRequests  map[string]string // Key: RequestKey, Value: RPCID
+	stateLock            sync.Mutex
+	activeStateTx        string         // RPCID or OperationID holding the state lock
+	activeStateOwner     LockOwnerState // Explicitly tracks ownership phase
+	releasingOperationID string         // Operation ID currently being deleted
+	cache                *TransactionCache
+	cacheTTLConfig       CacheTTLConfig
+	scheduler            *queues.PriorityScheduler
+	store                OperationStore
+	pendingReplies       map[string]PendingReply
 }
 
 func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLConfig, cache *TransactionCache, scheduler *queues.PriorityScheduler, store OperationStore) (*DefaultRequestManager, error) {
@@ -160,6 +170,7 @@ func (m *DefaultRequestManager) CreateTransaction(sessionID string, cloudRPCID j
 			return nil, ErrStateLockBusy
 		}
 		m.activeStateTx = rpcID
+		m.activeStateOwner = LockOwnedByRPC
 	}
 
 	tx := &Transaction{
@@ -319,25 +330,27 @@ func (m *DefaultRequestManager) Complete(rpcID string, response []byte) error {
 // ReleaseOperationLock releases the stateLock if it is currently held by the specified background operation.
 func (m *DefaultRequestManager) ReleaseOperationLock(ctx context.Context, operationID string) error {
 	m.mu.Lock()
-	if operationID == "" || m.activeStateTx != operationID {
+	if operationID == "" || m.activeStateTx != operationID || m.activeStateOwner != LockOwnedByOperation {
 		m.mu.Unlock()
 		return ErrOperationNotActive
 	}
 
-	if m.operationReleaseInProgress {
+	if m.releasingOperationID == operationID {
 		m.mu.Unlock()
 		return ErrOperationReleaseInProgress
 	}
 
 	// Mark it as actively being deleted so concurrent callers return ErrOperationReleaseInProgress
-	m.operationReleaseInProgress = true
+	m.releasingOperationID = operationID
 	m.mu.Unlock()
 
 	// Perform disk I/O outside lock
 	if err := m.store.Delete(ctx, operationID); err != nil {
 		m.mu.Lock()
 		// Roll back the state if deletion failed so it can be retried later
-		m.operationReleaseInProgress = false
+		if m.releasingOperationID == operationID {
+			m.releasingOperationID = ""
+		}
 		m.mu.Unlock()
 		return fmt.Errorf("failed to delete persistent operation: %w", err)
 	}
@@ -345,13 +358,14 @@ func (m *DefaultRequestManager) ReleaseOperationLock(ctx context.Context, operat
 	m.mu.Lock()
 
 	// Ensure ownership didn't somehow change unexpectedly
-	if m.activeStateTx != operationID || !m.operationReleaseInProgress {
+	if m.activeStateTx != operationID || m.releasingOperationID != operationID || m.activeStateOwner != LockOwnedByOperation {
 		m.mu.Unlock()
 		return ErrOperationOwnershipChanged
 	}
 
 	m.activeStateTx = ""
-	m.operationReleaseInProgress = false
+	m.activeStateOwner = LockNone
+	m.releasingOperationID = ""
 	m.mu.Unlock()
 
 	// NOTE: We explicitly release m.mu before unlocking stateLock to avoid a lock-order
@@ -396,6 +410,7 @@ func (m *DefaultRequestManager) RespondAndRetain(ctx context.Context, rpcID stri
 	// 2. Mark handoff pending to buffer concurrent terminal replies
 	operationID := uuid.New().String()
 	tx.HandoffInProgress = true
+	m.activeStateOwner = LockTransferPending
 	m.mu.Unlock()
 
 	// 3. Perform disk I/O outside the lock
@@ -426,6 +441,11 @@ func (m *DefaultRequestManager) RespondAndRetain(ctx context.Context, rpcID stri
 		// RespondAndRetain process or failing the upgrade). The robust retry logic
 		// for the caller will be introduced by us in a subsequent PR.
 
+		// Ensure no concurrent terminal transition mutated state while we were saving
+		if m.activeStateTx == rpcID {
+			m.activeStateOwner = LockOwnedByRPC
+		}
+		
 		// If a terminal event arrived while we were writing to disk, process it now!
 		if pending, ok := m.pendingReplies[rpcID]; ok {
 			delete(m.pendingReplies, rpcID)
@@ -435,18 +455,20 @@ func (m *DefaultRequestManager) RespondAndRetain(ctx context.Context, rpcID stri
 		// Restart timer
 		remaining := time.Until(tx.ResponseDeadline)
 		if remaining <= 0 {
-			return "", m.terminalTransition(rpcID, TxTimedOut, nil)
+			_ = m.terminalTransition(rpcID, TxTimedOut, nil)
+			return "", ErrAlreadyTerminal
 		}
-
 		tx.ResponseTimer = time.AfterFunc(remaining, func() {
-			_ = m.Timeout(rpcID)
+			m.Timeout(rpcID)
 		})
-		return "", fmt.Errorf("failed to persist operation: %w", err)
+
+		return "", fmt.Errorf("failed to persist background operation: %w", err)
 	}
 
-	// 4. Atomically transfer lock ownership now that persistence succeeded
+	// 4. Persistence succeeded. Complete the transfer.
 	if m.activeStateTx == rpcID {
 		m.activeStateTx = operationID
+		m.activeStateOwner = LockOwnedByOperation
 	}
 
 	// Cache logic would go here in PR 3.2
@@ -617,6 +639,7 @@ func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState Tran
 
 	if m.activeStateTx == rpcID {
 		m.activeStateTx = ""
+		m.activeStateOwner = LockNone
 		m.stateLock.Unlock()
 	}
 

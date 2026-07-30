@@ -664,7 +664,7 @@ func TestTCRM011_BufferedTerminalEventRace(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		<-startCh
-		errs[1] = m.Fail(tx.RPCID, []byte("timeout"))
+		errs[1] = m.Complete(tx.RPCID, []byte("late-success"))
 	}()
 
 	close(startCh)

@@ -826,7 +826,11 @@ func TestTCRM013_ConcurrentReleaseOperationLock(t *testing.T) {
 
 	errCh := make(chan error)
 	go func() {
-		errCh <- m.ReleaseOperationLock(context.Background(), "op-1")
+		err := m.ReleaseOperationLock(context.Background(), "op-1")
+		if err != nil {
+			t.Logf("ReleaseOperationLock early exit: %v", err)
+		}
+		errCh <- err
 	}()
 
 	// Wait for first caller to enter Delete
@@ -996,12 +1000,15 @@ func TestTCUPG017_RespondAndRetain_FastCompletionRace(t *testing.T) {
 	_ = m.MarkPendingPublish(tx.RPCID)
 	_ = m.MarkInFlight(tx.RPCID)
 
+	completeDone := make(chan struct{})
+
 	go func() {
 		// Wait until RespondAndRetain is blocking in Save
 		<-saveDone
 
 		// Simulate fast NATS completion
 		_ = m.Complete(tx.RPCID, []byte("success"))
+		close(completeDone)
 
 		// Unblock Save
 		close(blockSave)
@@ -1012,8 +1019,8 @@ func TestTCUPG017_RespondAndRetain_FastCompletionRace(t *testing.T) {
 		t.Fatalf("RespondAndRetain failed: %v", err)
 	}
 
-	// Wait for Complete to finish if it hasn't
-	time.Sleep(50 * time.Millisecond)
+	// Wait for Complete to finish deterministically
+	<-completeDone
 
 	m.mu.Lock()
 	if len(m.pendingReplies) != 0 {

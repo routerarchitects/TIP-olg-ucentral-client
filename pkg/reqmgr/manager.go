@@ -62,7 +62,7 @@ func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLCon
 		return nil, errors.New("cache cannot be nil")
 	}
 	if store == nil {
-		return nil, errors.New("store cannot be nil")
+		store = &NoopOperationStore{}
 	}
 	return &DefaultRequestManager{
 		dispatchTimeout:     dispatchTimeout,
@@ -637,10 +637,21 @@ func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState Tran
 	}
 	delete(m.transactionsByRPCID, rpcID)
 
+	releaseStateLock := false
 	if m.activeStateTx == rpcID {
 		m.activeStateTx = ""
 		m.activeStateOwner = LockNone
+		releaseStateLock = true
+	}
+
+	if releaseStateLock {
+		// We explicitly release m.mu before unlocking stateLock to avoid a lock-order
+		// dependency (m.mu -> stateLock). This prevents deadlocks with other code paths
+		// that might acquire stateLock before m.mu.
+		m.mu.Unlock()
 		m.stateLock.Unlock()
+		// Re-acquire m.mu to satisfy the caller's defer m.mu.Unlock() expectation.
+		m.mu.Lock()
 	}
 
 	return nil

@@ -25,3 +25,13 @@ type OperationStore interface {
 	GetPendingTerminalDelivery(ctx context.Context) ([]*PersistentOperation, error)
 	Delete(ctx context.Context, operationID string) error
 }
+
+// NoopOperationStore provides a dummy store that does nothing, useful for environments
+// that do not require persistence.
+type NoopOperationStore struct{}
+
+func (s *NoopOperationStore) Save(ctx context.Context, operation *PersistentOperation) error { return nil }
+func (s *NoopOperationStore) Get(ctx context.Context, operationID string) (*PersistentOperation, error) { return nil, nil }
+func (s *NoopOperationStore) GetActive(ctx context.Context) (*PersistentOperation, error) { return nil, nil }
+func (s *NoopOperationStore) GetPendingTerminalDelivery(ctx context.Context) ([]*PersistentOperation, error) { return nil, nil }
+func (s *NoopOperationStore) Delete(ctx context.Context, operationID string) error { return nil }

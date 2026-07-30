@@ -39,7 +39,7 @@ func validateTransition(from, to TransactionState) error {
 			return nil
 		}
 	case TxPreparingDispatch:
-		if to == TxPendingPublish || to == TxFailed || to == TxInFlight {
+		if to == TxPendingPublish || to == TxFailed {
 			return nil
 		}
 	case TxPendingPublish:

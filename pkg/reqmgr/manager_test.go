@@ -29,7 +29,11 @@ func setupTestManager() *DefaultRequestManager {
 	config := CacheTTLConfig{}
 	scheduler := queues.NewPriorityScheduler(10, 10)
 	store := &mockStore{}
-	return NewRequestManager(10*time.Second, config, cache, scheduler, store)
+	m, err := NewRequestManager(10*time.Second, config, cache, scheduler, store)
+	if err != nil {
+		panic(err)
+	}
+	return m
 }
 
 func TestTCRM001_StateMachineTransitions(t *testing.T) {
@@ -232,7 +236,7 @@ func TestTCUPG005_RespondAndRetainRollback(t *testing.T) {
 	config := CacheTTLConfig{}
 	scheduler := queues.NewPriorityScheduler(10, 10)
 	store := &errorMockStore{}
-	m := NewRequestManager(10*time.Second, config, cache, scheduler, store)
+	m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store)
 
 	cloudRPCID := json.RawMessage(`"upg-rollback"`)
 	tx, err := m.CreateTransaction("session-err", cloudRPCID, true, "upgrade", 10*time.Second, true)
@@ -337,7 +341,7 @@ func TestTCUPG006_RespondAndRetainConcurrentTerminalEvent(t *testing.T) {
 				err:       tc.saveErr,
 				deleteErr: tc.deleteErr,
 			}
-			m := NewRequestManager(10*time.Second, config, cache, scheduler, store)
+			m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store)
 
 			cloudRPCID := json.RawMessage(`"upg-concurrent"`)
 			tx, err := m.CreateTransaction("session-err", cloudRPCID, true, "upgrade", 10*time.Second, true)
@@ -424,7 +428,7 @@ func TestTCUPG015_HandoffMultipleTerminalEventsRace(t *testing.T) {
 				deleteErr: nil,
 			}
 
-			m := NewRequestManager(10*time.Second, config, cache, scheduler, store)
+			m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store)
 			tx, _ := m.CreateTransaction("sess", json.RawMessage(`123`), true, "upgrade", 10*time.Second, true)
 			m.MarkPreparingDispatch(tx.RPCID)
 			m.MarkPendingPublish(tx.RPCID)
@@ -512,8 +516,8 @@ func TestTCRM007_CanonicalRequestKey(t *testing.T) {
 			if !tt.wantErr && tt.wantKey != "" && got != tt.wantKey {
 				t.Errorf("CanonicalRequestKey() got = %v, want %v", got, tt.wantKey)
 			}
-			if !tt.wantErr && tt.wantKey == "" && len(got) < 36 {
-				t.Errorf("CanonicalRequestKey() for null/empty should generate UUID, got = %v", got)
+			if !tt.wantErr && tt.wantKey == "" && got != "" {
+				t.Errorf("CanonicalRequestKey() for null/empty should return empty string, got = %v", got)
 			}
 		})
 	}
@@ -524,7 +528,7 @@ func TestTCRM008_NullIDBypass(t *testing.T) {
 	config := CacheTTLConfig{}
 	scheduler := queues.NewPriorityScheduler(10, 10)
 	store := &mockStore{}
-	m := NewRequestManager(10*time.Second, config, cache, scheduler, store)
+	m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store)
 
 	// Test 1: respondToCloud = true, but id = null
 	_, err := m.CreateTransaction("sess", json.RawMessage(`null`), true, "configure", 10*time.Second, true)
@@ -574,7 +578,7 @@ func TestTCRM009_FastReplyBeforeInFlight(t *testing.T) {
 			config := CacheTTLConfig{}
 			scheduler := queues.NewPriorityScheduler(10, 10)
 			store := &mockStore{}
-			m := NewRequestManager(10*time.Second, config, cache, scheduler, store)
+			m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store)
 
 			tx, err := m.CreateTransaction("sess", json.RawMessage(`123`), true, "configure", 10*time.Second, true)
 			if err != nil {
@@ -668,7 +672,7 @@ func TestTCRM010_DispatchTimeoutProcessesBufferedReply(t *testing.T) {
 	config := CacheTTLConfig{}
 	scheduler := queues.NewPriorityScheduler(10, 10)
 	store := &mockStore{}
-	m := NewRequestManager(10*time.Second, config, cache, scheduler, store)
+	m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store)
 
 	tx, err := m.CreateTransaction("sess", json.RawMessage(`123`), true, "configure", 10*time.Second, true)
 	if err != nil {
@@ -715,7 +719,7 @@ func TestTCRM011_BufferedTerminalEventRace(t *testing.T) {
 	config := CacheTTLConfig{}
 	scheduler := queues.NewPriorityScheduler(10, 10)
 	store := &mockStore{}
-	m := NewRequestManager(10*time.Second, config, cache, scheduler, store)
+	m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store)
 
 	tx, err := m.CreateTransaction("sess", json.RawMessage(`123`), true, "configure", 10*time.Second, true)
 	if err != nil {
@@ -768,7 +772,7 @@ func TestTCUPG012_RejectUpgradeNonStateChanging(t *testing.T) {
 	config := CacheTTLConfig{}
 	scheduler := queues.NewPriorityScheduler(10, 10)
 	store := &mockStore{}
-	m := NewRequestManager(10*time.Second, config, cache, scheduler, store)
+	m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store)
 
 	_, err := m.CreateTransaction("sess", json.RawMessage(`"upg-err"`), true, "upgrade", 10*time.Second, false)
 	if err == nil {
@@ -796,7 +800,7 @@ func TestTCRM013_ConcurrentReleaseOperationLock(t *testing.T) {
 		block:   make(chan struct{}),
 		release: make(chan struct{}),
 	}
-	m := NewRequestManager(10*time.Second, config, cache, scheduler, store)
+	m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store)
 
 	// manually set active state tx
 	m.mu.Lock()
@@ -856,7 +860,7 @@ func TestTCRM014_ConcurrentRespondAndRetainDeletion(t *testing.T) {
 		blockDelete:   make(chan struct{}),
 		releaseDelete: make(chan struct{}),
 	}
-	m := NewRequestManager(10*time.Second, config, cache, scheduler, store)
+	m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store)
 
 	tx, err := m.CreateTransaction("sess", json.RawMessage(`"concurrent-del"`), true, "upgrade", 10*time.Second, true)
 	if err != nil {
@@ -919,7 +923,7 @@ func TestTCRM016_DuplicateRequestRejection(t *testing.T) {
 	config := CacheTTLConfig{}
 	scheduler := queues.NewPriorityScheduler(10, 10)
 	store := &mockStore{}
-	m := NewRequestManager(10*time.Second, config, cache, scheduler, store)
+	m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store)
 
 	cloudRPCID := json.RawMessage(`42`)
 

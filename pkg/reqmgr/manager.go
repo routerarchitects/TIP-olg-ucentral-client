@@ -43,12 +43,12 @@ type DefaultRequestManager struct {
 	pendingReplies      map[string]PendingReply
 }
 
-func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLConfig, cache *TransactionCache, scheduler *queues.PriorityScheduler, store OperationStore) *DefaultRequestManager {
+func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLConfig, cache *TransactionCache, scheduler *queues.PriorityScheduler, store OperationStore) (*DefaultRequestManager, error) {
 	if cache == nil {
-		panic("cache cannot be nil")
+		return nil, errors.New("cache cannot be nil")
 	}
 	if store == nil {
-		panic("store cannot be nil")
+		return nil, errors.New("store cannot be nil")
 	}
 	return &DefaultRequestManager{
 		dispatchTimeout:     dispatchTimeout,
@@ -59,7 +59,7 @@ func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLCon
 		scheduler:           scheduler,
 		store:               store,
 		pendingReplies:      make(map[string]PendingReply),
-	}
+	}, nil
 }
 
 // CanonicalRequestKey formats the session ID and raw JSON-RPC ID into a strongly-typed string.
@@ -69,8 +69,7 @@ func CanonicalRequestKey(sessionID string, id json.RawMessage) (string, error) {
 	}
 
 	if len(id) == 0 || string(id) == "null" {
-		// For notifications, use a generated UUID
-		return fmt.Sprintf("%s:%s", sessionID, uuid.New().String()), nil
+		return "", nil
 	}
 
 	decoder := json.NewDecoder(bytes.NewReader(id))

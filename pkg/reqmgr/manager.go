@@ -19,7 +19,9 @@ var (
 	ErrInvalidStateTransition     = errors.New("invalid state transition")
 	ErrAlreadyTerminal            = errors.New("transaction already in terminal state")
 	ErrTransactionNotFound        = errors.New("transaction not found")
-	ErrBusy                       = errors.New("system busy or transaction active")
+	ErrDuplicateRequest           = errors.New("duplicate request already in progress")
+	ErrCachedRequest              = errors.New("request already completed and cached")
+	ErrStateLockBusy              = errors.New("device is currently executing a state-changing operation")
 	ErrOperationNotActive         = errors.New("operation is not active")
 	ErrOperationReleaseInProgress = errors.New("operation release already in progress")
 	ErrOperationOwnershipChanged  = errors.New("operation ownership changed during release")
@@ -132,12 +134,12 @@ func (m *DefaultRequestManager) CreateTransaction(sessionID string, cloudRPCID j
 	// 1. Check cache (simplified for now, full impl in PR 3.2)
 	if _, ok := m.cache.Get(reqKey); ok {
 		// Should replay, but for PR 3.1 we just return busy for now
-		return nil, ErrBusy
+		return nil, ErrCachedRequest
 	}
 
 	// 2. Check active map
 	if _, active := m.activeCloudRequests[reqKey]; active {
-		return nil, ErrBusy
+		return nil, ErrDuplicateRequest
 	}
 
 	// 4. Create transaction
@@ -150,12 +152,12 @@ func (m *DefaultRequestManager) CreateTransaction(sessionID string, cloudRPCID j
 		}
 
 		if m.activeStateTx != "" {
-			return nil, ErrBusy
+			return nil, ErrStateLockBusy
 		}
 
 		// Note: We use TryLock here to avoid deadlocks. If we can't get it immediately, return busy.
 		if !m.stateLock.TryLock() {
-			return nil, ErrBusy
+			return nil, ErrStateLockBusy
 		}
 		m.activeStateTx = rpcID
 	}
@@ -341,15 +343,20 @@ func (m *DefaultRequestManager) ReleaseOperationLock(ctx context.Context, operat
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	// Ensure ownership didn't somehow change unexpectedly
 	if m.activeStateTx != operationID || !m.operationReleaseInProgress {
+		m.mu.Unlock()
 		return ErrOperationOwnershipChanged
 	}
 
 	m.activeStateTx = ""
 	m.operationReleaseInProgress = false
+	m.mu.Unlock()
+
+	// NOTE: We explicitly release m.mu before unlocking stateLock to avoid a lock-order
+	// dependency (m.mu -> stateLock). This prevents deadlocks with other code paths
+	// that might acquire stateLock before m.mu.
 	m.stateLock.Unlock()
 	return nil
 }
@@ -588,9 +595,11 @@ func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState Tran
 
 	if tx.DispatchTimer != nil {
 		tx.DispatchTimer.Stop()
+		tx.DispatchTimer = nil
 	}
 	if tx.ResponseTimer != nil {
 		tx.ResponseTimer.Stop()
+		tx.ResponseTimer = nil
 	}
 
 	if m.pendingReplies != nil {
@@ -599,6 +608,9 @@ func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState Tran
 
 	hasValidID := tx.RequestKey != ""
 	if hasValidID {
+		if finalState == TxCompleted {
+			m.cache.Set(tx.RequestKey, payload, m.cacheTTLConfig.TTLForMethod(tx.Method))
+		}
 		delete(m.activeCloudRequests, tx.RequestKey)
 	}
 	delete(m.transactionsByRPCID, rpcID)

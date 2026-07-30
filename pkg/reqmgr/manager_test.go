@@ -109,8 +109,8 @@ func TestTCRM002_ConcurrencyRejection(t *testing.T) {
 
 	// Try to start another state-changing transaction while tx1 holds the lock
 	_, err = m.CreateTransaction("session-1", cloudRPCID2, true, "action", 10*time.Second, true)
-	if err != ErrBusy {
-		t.Fatalf("expected ErrBusy for concurrent state-changing tx, got %v", err)
+	if err != ErrStateLockBusy {
+		t.Fatalf("expected ErrStateLockBusy for concurrent state-changing tx, got %v", err)
 	}
 
 	// Fail tx1 to release the lock (Fail is valid from TxCreated)
@@ -940,10 +940,10 @@ func TestTCRM016_DuplicateRequestRejection(t *testing.T) {
 		t.Fatalf("failed to create first tx: %v", err)
 	}
 
-	// 2. Try to create tx2 (session-1, id=42, method=ping) -> should fail with ErrBusy
+	// 2. Try to create tx2 (session-1, id=42, method=ping) -> should fail with ErrDuplicateRequest
 	_, err = m.CreateTransaction("session-1", cloudRPCID, true, "ping", 10*time.Second, false)
-	if err != ErrBusy {
-		t.Fatalf("expected ErrBusy for same-session, same-ID, different-method, got %v", err)
+	if err != ErrDuplicateRequest {
+		t.Fatalf("expected ErrDuplicateRequest for same-session, same-ID, different-method, got %v", err)
 	}
 
 	// 3. Create tx3 (session-2, id=42, method=ping) -> should succeed
@@ -1083,5 +1083,68 @@ func TestTCRM018_DispatchTimer_StopVsFireRace(t *testing.T) {
 	}
 	if txAfter.State != TxInFlight {
 		t.Fatalf("transaction state was altered by timer callback: got %v", txAfter.State)
+	}
+}
+
+func TestTCRM019_PendingReplyCleanupOnDispatchTimeout(t *testing.T) {
+	cache := NewTransactionCache()
+	config := CacheTTLConfig{}
+	scheduler := queues.NewPriorityScheduler(10, 10)
+	store := &mockStore{}
+	m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store)
+
+	tx, err := m.CreateTransaction("session-1", json.RawMessage(`123`), true, "configure", 10*time.Second, false)
+	if err != nil {
+		t.Fatalf("failed to create tx: %v", err)
+	}
+
+	m.MarkPreparingDispatch(tx.RPCID)
+	
+	// Simulate a fast reply arriving before it is dispatched
+	_ = m.Complete(tx.RPCID, []byte("success"))
+	
+	m.mu.Lock()
+	if _, ok := m.pendingReplies[tx.RPCID]; !ok {
+		m.mu.Unlock()
+		t.Fatalf("expected pending reply to be buffered")
+	}
+	m.mu.Unlock()
+
+	// Simulate dispatch timeout firing (MarkInFlight never called)
+	m.dispatchTimeoutFail(tx.RPCID)
+
+	m.mu.Lock()
+	if _, ok := m.pendingReplies[tx.RPCID]; ok {
+		m.mu.Unlock()
+		t.Fatalf("expected pending reply to be cleaned up after dispatch timeout")
+	}
+	m.mu.Unlock()
+}
+
+func TestTCRM020_DuplicateIDRejectedAfterCompletion(t *testing.T) {
+	cache := NewTransactionCache()
+	config := CacheTTLConfig{}
+	scheduler := queues.NewPriorityScheduler(10, 10)
+	store := &mockStore{}
+	m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store)
+
+	cloudRPCID := json.RawMessage(`42`)
+
+	// 1. Create first request
+	tx1, err := m.CreateTransaction("session-1", cloudRPCID, true, "configure", 10*time.Second, false)
+	if err != nil {
+		t.Fatalf("failed to create first tx: %v", err)
+	}
+
+	// 2. Complete it successfully
+	m.MarkPreparingDispatch(tx1.RPCID)
+	m.MarkPendingPublish(tx1.RPCID)
+	m.MarkInFlight(tx1.RPCID)
+	_ = m.Complete(tx1.RPCID, []byte(`{"status": "ok"}`))
+
+	// 3. Try to create a second request with same ID, different method
+	_, err = m.CreateTransaction("session-1", cloudRPCID, true, "ping", 10*time.Second, false)
+	if err != ErrCachedRequest {
+		t.Fatalf("expected ErrCachedRequest for duplicate completed ID, got %v", err)
 	}
 }

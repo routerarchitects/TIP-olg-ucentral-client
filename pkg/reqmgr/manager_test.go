@@ -855,4 +855,3 @@ func TestTCRM016_DuplicateRequestRejection(t *testing.T) {
 	m.Fail(tx1.RPCID, nil)
 	m.Fail(tx3.RPCID, nil)
 }
-

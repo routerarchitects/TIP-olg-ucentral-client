@@ -957,20 +957,20 @@ func TestTCUPG017_RespondAndRetain_FastCompletionRace(t *testing.T) {
 	cache := NewTransactionCache()
 	config := CacheTTLConfig{}
 	scheduler := queues.NewPriorityScheduler(10, 10)
-	
+
 	blockSave := make(chan struct{})
 	saveDone := make(chan struct{})
-	
+
 	store := &blockingStore{
 		blockSave: blockSave,
 		saveDone:  saveDone,
 	}
-	
+
 	m, err := NewRequestManager(10*time.Second, config, cache, scheduler, store)
 	if err != nil {
 		t.Fatalf("failed to create manager: %v", err)
 	}
-	
+
 	tx, err := m.CreateTransaction("sess", json.RawMessage(`"tx-race"`), true, "upgrade", 10*time.Second, true)
 	if err != nil {
 		t.Fatalf("failed to create: %v", err)
@@ -982,10 +982,10 @@ func TestTCUPG017_RespondAndRetain_FastCompletionRace(t *testing.T) {
 	go func() {
 		// Wait until RespondAndRetain is blocking in Save
 		<-saveDone
-		
+
 		// Simulate fast NATS completion
 		_ = m.Complete(tx.RPCID, []byte("success"))
-		
+
 		// Unblock Save
 		close(blockSave)
 	}()
@@ -994,7 +994,7 @@ func TestTCUPG017_RespondAndRetain_FastCompletionRace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RespondAndRetain failed: %v", err)
 	}
-	
+
 	// Wait for Complete to finish if it hasn't
 	time.Sleep(50 * time.Millisecond)
 
@@ -1008,7 +1008,7 @@ func TestTCUPG017_RespondAndRetain_FastCompletionRace(t *testing.T) {
 		t.Fatalf("lock not released correctly, activeStateTx = %q", m.activeStateTx)
 	}
 	m.mu.Unlock()
-	
+
 	_ = opID
 }
 
@@ -1016,12 +1016,17 @@ type blockingStore struct {
 	blockSave chan struct{}
 	saveDone  chan struct{}
 }
+
 func (b *blockingStore) Save(ctx context.Context, op *PersistentOperation) error {
 	close(b.saveDone)
 	<-b.blockSave
 	return nil
 }
 func (b *blockingStore) GetActive(ctx context.Context) (*PersistentOperation, error) { return nil, nil }
-func (b *blockingStore) GetPendingTerminalDelivery(ctx context.Context) ([]*PersistentOperation, error) { return nil, nil }
+func (b *blockingStore) GetPendingTerminalDelivery(ctx context.Context) ([]*PersistentOperation, error) {
+	return nil, nil
+}
 func (b *blockingStore) Delete(ctx context.Context, opID string) error { return nil }
-func (b *blockingStore) Get(ctx context.Context, opID string) (*PersistentOperation, error) { return nil, nil }
+func (b *blockingStore) Get(ctx context.Context, opID string) (*PersistentOperation, error) {
+	return nil, nil
+}

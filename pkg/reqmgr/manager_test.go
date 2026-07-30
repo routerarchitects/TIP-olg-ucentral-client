@@ -183,9 +183,12 @@ func TestTCUPG004_UpgradeAsynchronousLockHandoff(t *testing.T) {
 	}
 
 	// Call RespondAndRetain
-	_, err = m.RespondAndRetain(tx.RPCID, []byte(`{"status": {"error": 0}}`))
+	opID, err := m.RespondAndRetain(tx.RPCID, []byte(`{"status": {"error": 0}}`))
 	if err != nil {
 		t.Fatalf("RespondAndRetain failed: %v", err)
+	}
+	if opID == "" || opID == tx.RPCID {
+		t.Fatalf("expected RespondAndRetain to return a new OperationID, got %s", opID)
 	}
 
 	// Verify transaction is terminal
@@ -194,10 +197,9 @@ func TestTCUPG004_UpgradeAsynchronousLockHandoff(t *testing.T) {
 		t.Fatalf("transaction should be removed from active map")
 	}
 
-	// Verify lock was transferred to a persistent operation ID
-	opID := m.activeStateTx
-	if opID == "" || opID == tx.RPCID {
-		t.Fatalf("expected state lock to be transferred to an OperationID, got %s", opID)
+	// Verify lock was transferred to the returned persistent operation ID
+	if m.activeStateTx != opID {
+		t.Fatalf("expected state lock to be transferred to returned OperationID %s, got %s", opID, m.activeStateTx)
 	}
 	m.mu.Unlock()
 
@@ -427,6 +429,7 @@ func TestTCRM007_CanonicalRequestKey(t *testing.T) {
 		{"Array ID", "sess", json.RawMessage(`[]`), "", true},
 		{"Boolean ID", "sess", json.RawMessage(`true`), "", true},
 		{"Invalid JSON", "sess", json.RawMessage(`{bad`), "", true},
+		{"Oversized ID", "sess", json.RawMessage(make([]byte, 257)), "", true},
 	}
 
 	for _, tt := range tests {

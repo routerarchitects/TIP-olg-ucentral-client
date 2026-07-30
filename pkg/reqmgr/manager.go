@@ -63,6 +63,10 @@ func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLCon
 
 // CanonicalRequestKey formats the session ID and raw JSON-RPC ID into a strongly-typed string.
 func CanonicalRequestKey(sessionID string, id json.RawMessage) (string, error) {
+	if len(id) > 256 {
+		return "", errors.New("json-rpc id exceeds maximum length")
+	}
+
 	if len(id) == 0 || string(id) == "null" {
 		// For notifications, use a generated UUID
 		return fmt.Sprintf("%s:%s", sessionID, uuid.New().String()), nil
@@ -99,6 +103,10 @@ func (m *DefaultRequestManager) CreateTransaction(sessionID string, cloudRPCID j
 	isNotification := len(cloudRPCID) == 0 || string(cloudRPCID) == "null"
 	respondToCloud = respondToCloud && !isNotification
 
+	if method == "upgrade" && !isStateChanging {
+		return nil, errors.New("upgrade must be state-changing")
+	}
+
 	reqKey, err := CanonicalRequestKey(sessionID, cloudRPCID)
 	if err != nil {
 		return nil, err
@@ -118,20 +126,26 @@ func (m *DefaultRequestManager) CreateTransaction(sessionID string, cloudRPCID j
 		return nil, ErrBusy
 	}
 
+	// 4. Create transaction
+	rpcID := uuid.New().String()
+
 	// 3. Check state-changing rules
 	if isStateChanging {
 		if !respondToCloud || len(cloudRPCID) == 0 || string(cloudRPCID) == "null" {
 			return nil, errors.New("state-changing commands must have a non-null ID")
 		}
 
+		if m.activeStateTx != "" {
+			return nil, ErrBusy
+		}
+
 		// Note: We use TryLock here to avoid deadlocks. If we can't get it immediately, return busy.
 		if !m.stateLock.TryLock() {
 			return nil, ErrBusy
 		}
+		m.activeStateTx = rpcID
 	}
 
-	// 4. Create transaction
-	rpcID := uuid.New().String()
 	tx := &Transaction{
 		RPCID:            rpcID,
 		CloudSessionID:   sessionID,
@@ -143,17 +157,6 @@ func (m *DefaultRequestManager) CreateTransaction(sessionID string, cloudRPCID j
 		CreatedAt:        time.Now(),
 		TimeoutDuration:  timeout,
 		DispatchDeadline: time.Now().Add(m.dispatchTimeout),
-	}
-
-	if method == "upgrade" && !isStateChanging {
-		return nil, errors.New("upgrade must be state-changing")
-	}
-
-	if isStateChanging {
-		if m.activeStateTx != "" {
-			return nil, ErrBusy
-		}
-		m.activeStateTx = rpcID
 	}
 
 	if respondToCloud {
@@ -439,8 +442,11 @@ func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) 
 			if errDelete != nil && errDelete != ErrOperationNotActive {
 				// The active record was NOT deleted from the database!
 				// Process the buffered terminal transition locally so the correct result is
-				// recorded, but LEAVE the memory lock held by operationID. This forces a
-				// background sweeper to eventually retry the deletion and clear the lock.
+				// recorded, but LEAVE the memory lock held by operationID.
+				// STRICT CALLER CONTRACT: The caller MUST reliably capture the returned operationID
+				// and schedule a background retry to eventually call ReleaseOperationLock(operationID).
+				// Failure to do so will leave the device permanently locked and busy!
+				// (Note: The actual caller implementing this retry mechanism will be introduced in subsequent PRs).
 				delete(m.pendingReplies, rpcID)
 				_ = m.terminalTransition(rpcID, pending.State, pending.Payload)
 

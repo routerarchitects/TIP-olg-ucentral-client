@@ -93,6 +93,7 @@ type Transaction struct {
 	DispatchDeadline  time.Time
 	ResponseDeadline  time.Time
 	DispatchTimer     *time.Timer
+	ResponseTimer     *time.Timer
 	Cancel            context.CancelFunc
 }
 

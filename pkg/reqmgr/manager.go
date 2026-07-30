@@ -261,7 +261,7 @@ func (m *DefaultRequestManager) MarkInFlight(rpcID string) error {
 
 	// Start the downstream response timer
 	tx.ResponseDeadline = time.Now().Add(tx.TimeoutDuration)
-	tx.DispatchTimer = time.AfterFunc(tx.TimeoutDuration, func() {
+	tx.ResponseTimer = time.AfterFunc(tx.TimeoutDuration, func() {
 		m.Timeout(rpcID)
 	})
 
@@ -305,10 +305,10 @@ func (m *DefaultRequestManager) Complete(rpcID string, response []byte) error {
 // ReleaseOperationLock releases the stateLock if it is currently held by the specified background operation.
 func (m *DefaultRequestManager) ReleaseOperationLock(ctx context.Context, operationID string) error {
 	m.mu.Lock()
-	if m.activeStateTx != operationID {
+	if operationID == "" || m.activeStateTx != operationID {
 		// If another worker is already deleting it, we cannot return success yet because
 		// their deletion might fail. Return a distinct error so the caller knows it is pending.
-		if m.activeStateTx == "deleting:"+operationID {
+		if m.activeStateTx == "deleting:"+operationID && operationID != "" {
 			m.mu.Unlock()
 			return ErrOperationReleaseInProgress
 		}
@@ -372,8 +372,8 @@ func (m *DefaultRequestManager) RespondAndRetain(ctx context.Context, rpcID stri
 	}
 
 	// 1. Pause response timer to prevent timeouts during disk I/O
-	if tx.DispatchTimer != nil {
-		tx.DispatchTimer.Stop()
+	if tx.ResponseTimer != nil {
+		tx.ResponseTimer.Stop()
 	}
 
 	// 2. Pre-transfer lock ownership to prevent fast-replies from unlocking it
@@ -425,7 +425,7 @@ func (m *DefaultRequestManager) RespondAndRetain(ctx context.Context, rpcID stri
 			return "", m.terminalTransition(rpcID, TxTimedOut, nil)
 		}
 
-		tx.DispatchTimer = time.AfterFunc(remaining, func() {
+		tx.ResponseTimer = time.AfterFunc(remaining, func() {
 			_ = m.Timeout(rpcID)
 		})
 		return "", fmt.Errorf("failed to persist operation: %w", err)
@@ -577,6 +577,9 @@ func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState Tran
 
 	if tx.DispatchTimer != nil {
 		tx.DispatchTimer.Stop()
+	}
+	if tx.ResponseTimer != nil {
+		tx.ResponseTimer.Stop()
 	}
 
 	if m.pendingReplies != nil {

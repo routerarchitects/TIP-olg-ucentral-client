@@ -1030,3 +1030,51 @@ func (b *blockingStore) Delete(ctx context.Context, opID string) error { return 
 func (b *blockingStore) Get(ctx context.Context, opID string) (*PersistentOperation, error) {
 	return nil, nil
 }
+
+func TestTCRM018_DispatchTimer_StopVsFireRace(t *testing.T) {
+	cache := NewTransactionCache()
+	config := CacheTTLConfig{}
+	scheduler := queues.NewPriorityScheduler(10, 10)
+	store := &mockStore{}
+
+	// Use a very long dispatch timeout so it doesn't fire naturally
+	m, _ := NewRequestManager(1*time.Hour, config, cache, scheduler, store)
+
+	tx, err := m.CreateTransaction("sess", json.RawMessage(`"tx-timer-race"`), true, "ping", 10*time.Second, false)
+	if err != nil {
+		t.Fatalf("failed to create: %v", err)
+	}
+
+	_ = m.MarkPreparingDispatch(tx.RPCID)
+	_ = m.MarkPendingPublish(tx.RPCID)
+
+	// Manually trigger the timer callback concurrently while calling MarkInFlight
+	done := make(chan struct{})
+	go func() {
+		// This simulates the timer firing exactly as MarkInFlight is executing.
+		// Since it locks the mutex, it will either execute before MarkInFlight,
+		// or block until MarkInFlight finishes.
+		m.dispatchTimeoutFail(tx.RPCID)
+		close(done)
+	}()
+
+	// We want to simulate the race where the timer callback starts but blocks
+	// on the mutex, while we call MarkInFlight.
+	err = m.MarkInFlight(tx.RPCID)
+	if err != nil {
+		t.Fatalf("MarkInFlight failed: %v", err)
+	}
+
+	<-done
+
+	m.mu.Lock()
+	txAfter, exists := m.transactionsByRPCID[tx.RPCID]
+	m.mu.Unlock()
+
+	if !exists {
+		t.Fatalf("transaction was incorrectly cleaned up by timer callback")
+	}
+	if txAfter.State != TxInFlight {
+		t.Fatalf("transaction state was altered by timer callback: got %v", txAfter.State)
+	}
+}

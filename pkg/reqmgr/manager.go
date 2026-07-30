@@ -63,6 +63,9 @@ func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLCon
 }
 
 // CanonicalRequestKey formats the session ID and raw JSON-RPC ID into a strongly-typed string.
+// Note: This explicitly omits the method name to enforce a strict design constraint:
+// A JSON-RPC ID must be globally unique for the lifetime of a cloud session, regardless of method.
+// Attempting to reuse an ID with a different method will intentionally trigger duplicate rejection.
 func CanonicalRequestKey(sessionID string, id json.RawMessage) (string, error) {
 	if len(id) > 256 {
 		return "", errors.New("json-rpc id exceeds maximum length")
@@ -408,7 +411,10 @@ func (m *DefaultRequestManager) RespondAndRetain(ctx context.Context, rpcID stri
 
 	if err != nil {
 		tx.HandoffInProgress = false
-		// Rollback lock ownership if disk fails
+		// Rollback lock ownership if disk fails.
+		// NOTE: The caller is expected to handle this failure (e.g., by retrying the
+		// RespondAndRetain process or failing the upgrade). The robust retry logic
+		// for the caller will be introduced by us in a subsequent PR.
 		if m.activeStateTx == operationID {
 			m.activeStateTx = rpcID
 		}

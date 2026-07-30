@@ -18,6 +18,7 @@ import (
 var (
 	ErrInvalidStateTransition     = errors.New("invalid state transition")
 	ErrAlreadyTerminal            = errors.New("transaction already in terminal state")
+	ErrTransactionNotFound        = errors.New("transaction not found")
 	ErrBusy                       = errors.New("system busy or transaction active")
 	ErrOperationNotActive         = errors.New("operation is not active")
 	ErrOperationReleaseInProgress = errors.New("operation release already in progress")
@@ -62,10 +63,17 @@ func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLCon
 	}, nil
 }
 
-// CanonicalRequestKey formats the session ID and raw JSON-RPC ID into a strongly-typed string.
-// Note: This explicitly omits the method name to enforce a strict design constraint:
+// CanonicalRequestKey generates a normalized, deterministic string key for a transaction
+// based solely on the Cloud RPC ID and the Cloud Session ID.
+//
+// NOTE: This explicitly omits the method name to enforce a strict design constraint:
 // A JSON-RPC ID must be globally unique for the lifetime of a cloud session, regardless of method.
 // Attempting to reuse an ID with a different method will intentionally trigger duplicate rejection.
+//
+// NOTE: Numeric IDs are mathematically normalized (e.g., 1, 1.0, 1e0 all become 1)
+// to ensure duplicate tracking correctly handles visually different but mathematically
+// identical inputs. The JSON-RPC specification requires IDs to be matched exactly, but
+// some legacy controllers may mutate representations. This normalization prevents duplicates.
 func CanonicalRequestKey(sessionID string, id json.RawMessage) (string, error) {
 	if len(id) > 256 {
 		return "", errors.New("json-rpc id exceeds maximum length")
@@ -209,7 +217,7 @@ func (m *DefaultRequestManager) MarkPreparingDispatch(rpcID string) error {
 
 	tx, exists := m.transactionsByRPCID[rpcID]
 	if !exists {
-		return ErrAlreadyTerminal
+		return ErrTransactionNotFound
 	}
 
 	if err := validateTransition(tx.State, TxPreparingDispatch); err != nil {
@@ -226,7 +234,7 @@ func (m *DefaultRequestManager) MarkPendingPublish(rpcID string) error {
 
 	tx, exists := m.transactionsByRPCID[rpcID]
 	if !exists {
-		return ErrAlreadyTerminal
+		return ErrTransactionNotFound
 	}
 
 	if err := validateTransition(tx.State, TxPendingPublish); err != nil {
@@ -243,7 +251,7 @@ func (m *DefaultRequestManager) MarkInFlight(rpcID string) error {
 
 	tx, exists := m.transactionsByRPCID[rpcID]
 	if !exists {
-		return ErrAlreadyTerminal
+		return ErrTransactionNotFound
 	}
 
 	if err := validateTransition(tx.State, TxInFlight); err != nil {
@@ -282,7 +290,7 @@ func (m *DefaultRequestManager) Complete(rpcID string, response []byte) error {
 	defer m.mu.Unlock()
 	tx, exists := m.transactionsByRPCID[rpcID]
 	if !exists {
-		return ErrAlreadyTerminal
+		return ErrTransactionNotFound
 	}
 
 	isPreFlight := tx.State == TxCreated || tx.State == TxPreparingDispatch || tx.State == TxPendingPublish
@@ -356,7 +364,7 @@ func (m *DefaultRequestManager) RespondAndRetain(ctx context.Context, rpcID stri
 	tx, exists := m.transactionsByRPCID[rpcID]
 	if !exists {
 		m.mu.Unlock()
-		return "", ErrAlreadyTerminal
+		return "", ErrTransactionNotFound
 	}
 
 	if tx.Method != "upgrade" {
@@ -486,7 +494,7 @@ func (m *DefaultRequestManager) Fail(rpcID string, errResponse []byte) error {
 	defer m.mu.Unlock()
 	tx, exists := m.transactionsByRPCID[rpcID]
 	if !exists {
-		return ErrAlreadyTerminal
+		return ErrTransactionNotFound
 	}
 
 	isHandoff := tx.HandoffInProgress
@@ -528,7 +536,7 @@ func (m *DefaultRequestManager) Timeout(rpcID string) error {
 
 	tx, exists := m.transactionsByRPCID[rpcID]
 	if !exists {
-		return ErrAlreadyTerminal
+		return ErrTransactionNotFound
 	}
 
 	isHandoff := tx.HandoffInProgress
@@ -571,7 +579,7 @@ func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState Tran
 	if !ok {
 		// Since RPCIDs are internally generated UUIDs, a missing transaction
 		// in a terminal call means it was already completed and removed.
-		return ErrAlreadyTerminal
+		return ErrTransactionNotFound
 	}
 
 	if err := validateTransition(tx.State, finalState); err != nil {
@@ -604,6 +612,42 @@ func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState Tran
 	}
 
 	return nil
+}
+
+// Start runs the background sweeper to clean up orphaned persistent operations.
+func (m *DefaultRequestManager) Start(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+
+		// Run once on startup to reconcile state immediately
+		m.sweep(ctx)
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				m.sweep(ctx)
+			}
+		}
+	}()
+}
+
+// sweep periodically attempts to clean up operations that failed to delete.
+func (m *DefaultRequestManager) sweep(ctx context.Context) {
+	// Look for operations that are pending terminal delivery (or cleanup)
+	ops, err := m.store.GetPendingTerminalDelivery(ctx)
+	if err != nil {
+		return
+	}
+
+	for _, op := range ops {
+		// Attempt to safely release and delete the orphaned operation.
+		// If the lock is held by another active worker, this safely returns ErrOperationNotActive.
+		// If the operation is just sitting there undeleted, this will clean it up.
+		_ = m.ReleaseOperationLock(ctx, op.OperationID)
+	}
 }
 
 // recoverToInFlight explicitly promotes a pre-flight transaction to TxInFlight

@@ -87,8 +87,8 @@ func TestTCRM001_StateMachineTransitions(t *testing.T) {
 
 	// Try an illegal transition
 	err = m.Fail(tx.RPCID, []byte("fail"))
-	if err != ErrAlreadyTerminal {
-		t.Fatalf("expected ErrAlreadyTerminal, got %v", err)
+	if err != ErrTransactionNotFound {
+		t.Fatalf("expected ErrTransactionNotFound, got %v", err)
 	}
 }
 
@@ -287,6 +287,13 @@ func TestTCUPG005_RespondAndRetainRollback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to cleanup restored transaction: %v", err)
 	}
+
+	// Verify another configure command is not blocked forever
+	tx2, err := m.CreateTransaction("session-err-2", json.RawMessage(`"configure"`), true, "configure", 10*time.Second, true)
+	if err != nil {
+		t.Fatalf("failed to create subsequent configure tx, device is still blocked: %v", err)
+	}
+	_ = m.Fail(tx2.RPCID, nil)
 }
 
 // blockingMockStore blocks Save until a channel is closed, then returns a configurable error
@@ -448,12 +455,12 @@ func TestTCUPG015_HandoffMultipleTerminalEventsRace(t *testing.T) {
 				t.Fatalf("first event failed: %v", err)
 			}
 
-			// Second concurrent event should lose and receive ErrAlreadyTerminal
 			if loserEvent == "timeout" {
 				err = m.Timeout(tx.RPCID)
 			} else {
 				err = m.Fail(tx.RPCID, []byte("fail"))
 			}
+			// Second concurrent event should lose and receive ErrAlreadyTerminal
 			if err != ErrAlreadyTerminal {
 				t.Fatalf("expected loser to get ErrAlreadyTerminal, got %v", err)
 			}
@@ -636,8 +643,8 @@ func TestTCRM009_FastReplyBeforeInFlight(t *testing.T) {
 					t.Fatalf("MarkInFlight failed: %v", err)
 				}
 			} else if tc.terminalOp == "fail" {
-				if err != ErrAlreadyTerminal {
-					t.Fatalf("expected ErrAlreadyTerminal for MarkInFlight after immediate termination, got %v", err)
+				if err != ErrTransactionNotFound {
+					t.Fatalf("expected ErrTransactionNotFound for MarkInFlight after immediate termination, got %v", err)
 				}
 			}
 
@@ -750,20 +757,20 @@ func TestTCRM011_BufferedTerminalEventRace(t *testing.T) {
 	wg.Wait()
 
 	successCount := 0
-	errAlreadyTerminalCount := 0
+	errTerminalCount := 0
 	for _, e := range errs {
 		if e == nil {
 			successCount++
-		} else if e == ErrAlreadyTerminal {
-			errAlreadyTerminalCount++
+		} else if e == ErrAlreadyTerminal || e == ErrTransactionNotFound {
+			errTerminalCount++
 		}
 	}
 
 	if successCount != 1 {
-		t.Errorf("expected exactly 1 goroutine to succeed, got %d", successCount)
+		t.Errorf("expected exactly 1 goroutine to succeed, got %d. Errors: %v", successCount, errs)
 	}
-	if errAlreadyTerminalCount != 1 {
-		t.Errorf("expected exactly 1 goroutine to get ErrAlreadyTerminal, got %d", errAlreadyTerminalCount)
+	if errTerminalCount != 1 {
+		t.Errorf("expected exactly 1 goroutines to get terminal errors, got %d", errTerminalCount)
 	}
 }
 

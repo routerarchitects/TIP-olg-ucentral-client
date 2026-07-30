@@ -838,7 +838,7 @@ func TestTCRM013_ConcurrentReleaseOperationLock(t *testing.T) {
 	if err1 == nil {
 		t.Fatalf("expected delete to fail for caller 1")
 	}
-	
+
 	err2 := <-errCh2
 	if err2 == nil {
 		t.Fatalf("expected delete to fail for caller 2")
@@ -912,8 +912,6 @@ func TestTCRM014_ConcurrentRespondAndRetainDeletion(t *testing.T) {
 		t.Fatalf("expected lock to be instantly cleared, got %s", m.activeStateTx)
 	}
 	m.mu.Unlock()
-
-
 
 	// Release Delete
 	store.releaseDelete <- struct{}{}

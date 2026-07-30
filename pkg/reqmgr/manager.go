@@ -326,7 +326,7 @@ func (m *DefaultRequestManager) Complete(rpcID string, response []byte) error {
 
 func (m *DefaultRequestManager) ReleaseOperationLock(ctx context.Context, operationID string) error {
 	m.mu.Lock()
-	
+
 	if operationID == "" {
 		m.mu.Unlock()
 		return ErrOperationNotActive
@@ -343,12 +343,12 @@ func (m *DefaultRequestManager) ReleaseOperationLock(ctx context.Context, operat
 		// Mark it as actively being deleted so concurrent callers return ErrOperationReleaseInProgress
 		m.releasingOperationID = operationID
 
-		// Clear the memory lock IMMEDIATELY. This guarantees no permanent lockouts 
+		// Clear the memory lock IMMEDIATELY. This guarantees no permanent lockouts
 		// if the DB delete fails below.
 		m.activeStateTx = ""
 		m.activeStateOwner = LockNone
 		m.releasingOperationID = ""
-		
+
 		// Enforce strict sequence: Unlock stateLock BEFORE dropping m.mu
 		m.stateLock.Unlock()
 	}
@@ -477,7 +477,7 @@ func (m *DefaultRequestManager) RespondAndRetain(ctx context.Context, rpcID stri
 			m.mu.Lock()
 
 			if errDelete != nil {
-				// The active record was NOT deleted from the database, but ReleaseOperationLock 
+				// The active record was NOT deleted from the database, but ReleaseOperationLock
 				// guarantees that it WAS successfully unlocked in memory!
 				// The background sweeper will eventually clean up the stale DB record.
 				// We can safely return success to the caller.
@@ -684,7 +684,7 @@ func (m *DefaultRequestManager) sweep(ctx context.Context) {
 
 	for _, op := range ops {
 		createdAt, errTime := time.Parse(time.RFC3339, op.CreatedAt)
-		
+
 		// If the operation is older than 15 minutes, it is forcibly killed.
 		if errTime == nil && now.Sub(createdAt) > 15*time.Minute {
 			m.mu.Lock()
@@ -697,7 +697,7 @@ func (m *DefaultRequestManager) sweep(ctx context.Context) {
 				m.stateLock.Unlock()
 			}
 			m.mu.Unlock()
-			
+
 			// Delete the stale record from the database
 			_ = m.store.Delete(ctx, op.OperationID)
 		} else {

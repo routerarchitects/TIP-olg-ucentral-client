@@ -445,7 +445,7 @@ func (m *DefaultRequestManager) RespondAndRetain(ctx context.Context, rpcID stri
 		if m.activeStateTx == rpcID {
 			m.activeStateOwner = LockOwnedByRPC
 		}
-		
+
 		// If a terminal event arrived while we were writing to disk, process it now!
 		if pending, ok := m.pendingReplies[rpcID]; ok {
 			delete(m.pendingReplies, rpcID)

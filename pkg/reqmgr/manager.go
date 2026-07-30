@@ -305,7 +305,7 @@ func (m *DefaultRequestManager) ReleaseOperationLock(ctx context.Context, operat
 		return ErrOperationNotActive
 	}
 
-	// Mark it as actively being deleted so concurrent workers return early with success
+	// Mark it as actively being deleted so concurrent callers return ErrOperationReleaseInProgress
 	m.activeStateTx = "deleting:" + operationID
 	m.mu.Unlock()
 

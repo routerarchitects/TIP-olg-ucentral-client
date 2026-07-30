@@ -876,10 +876,11 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     	pendingReplies              map[string][]byte       // Key: RPCID
     }
 
-    // CanonicalRequestKey formats the session ID, method, and raw JSON-RPC ID into a strongly-typed string (e.g., "session-uuid:configure:number:42", or "session-uuid:notification:<generated-uuid>" for notifications)
-    // to strictly prevent collisions across methods, numeric/string IDs, and different Cloud sessions. This key MUST be used by
+    // CanonicalRequestKey formats the session ID and raw JSON-RPC ID into a strongly-typed string (e.g., "session-uuid:n:42", or "session-uuid:<generated-uuid>" for notifications)
+    // to strictly prevent collisions across numeric/string IDs, and different Cloud sessions. The method is intentionally stripped, meaning
+    // duplicate IDs across different methods (e.g. configure id=42 and ping id=42) will be properly rejected. This key MUST be used by
     // activeCloudRequests, TransactionCache, duplicate-active detection, and completed-response replay.
-    func CanonicalRequestKey(sessionID string, method string, id json.RawMessage) (string, error)
+    func CanonicalRequestKey(sessionID string, id json.RawMessage) (string, error)
 
     func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLConfig, cache *TransactionCache, scheduler *PriorityScheduler, store OperationStore) *DefaultRequestManager
     

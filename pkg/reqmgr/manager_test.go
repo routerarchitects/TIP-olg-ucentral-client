@@ -820,3 +820,39 @@ func TestTCRM014_ConcurrentRespondAndRetainDeletion(t *testing.T) {
 		t.Fatalf("RespondAndRetain failed: %v", errRetain)
 	}
 }
+
+func TestTCRM016_DuplicateRequestRejection(t *testing.T) {
+	cache := NewTransactionCache()
+	config := CacheTTLConfig{}
+	scheduler := queues.NewPriorityScheduler(10, 10)
+	store := &mockStore{}
+	m := NewRequestManager(10*time.Second, config, cache, scheduler, store)
+
+	cloudRPCID := json.RawMessage(`42`)
+
+	// 1. Create tx1 (session-1, id=42, method=configure)
+	tx1, err := m.CreateTransaction("session-1", cloudRPCID, true, "configure", 10*time.Second, true)
+	if err != nil {
+		t.Fatalf("failed to create first tx: %v", err)
+	}
+
+	// 2. Try to create tx2 (session-1, id=42, method=ping) -> should fail with ErrBusy
+	_, err = m.CreateTransaction("session-1", cloudRPCID, true, "ping", 10*time.Second, false)
+	if err != ErrBusy {
+		t.Fatalf("expected ErrBusy for same-session, same-ID, different-method, got %v", err)
+	}
+
+	// 3. Create tx3 (session-2, id=42, method=ping) -> should succeed
+	tx3, err := m.CreateTransaction("session-2", cloudRPCID, true, "ping", 10*time.Second, false)
+	if err != nil {
+		t.Fatalf("failed to create same-ID different-session tx: %v", err)
+	}
+	if tx3 == nil || tx3.State != TxCreated {
+		t.Fatalf("expected tx3 to be created")
+	}
+
+	// Cleanup to leave state clean (optional)
+	m.Fail(tx1.RPCID, nil)
+	m.Fail(tx3.RPCID, nil)
+}
+

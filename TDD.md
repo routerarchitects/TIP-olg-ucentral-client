@@ -239,8 +239,8 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Setup:* Complete a transaction successfully. Fill the Priority-0 websocket queue to capacity so reservation fails.
     *   *Assert:* The transaction state remains `Completed` (the true device outcome). The exact success response is cached. The system triggers path recovery (WebSocket reconnect) rather than rewriting the transaction state to `Failed`.
 *   **TC-RM-015 (RequestKey Canonicalization):**
-    *   *Setup:* Submit `configure id=42` and complete it. Submit `ping id=42`.
-    *   *Assert:* The cache key must structurally combine the method and ID (e.g., `configure:number:42`). `ping id=42` must execute normally as a new transaction and MUST NOT replay the cached `configure` response.
+    *   *Setup:* Submit `configure id=42` and complete it. Submit `ping id=42` on the same session.
+    *   *Assert:* The cache key must structurally combine the session and ID (e.g., `session:n:42`), excluding the method. `ping id=42` must be rejected as a duplicate ID and MUST NOT execute normally.
 
 ### PR 3.4: Asynchronous Upgrade & Persistence Races
 *   **TC-UPG-004 (Upgrade Asynchronous Lock Handoff):**

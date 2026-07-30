@@ -901,13 +901,13 @@ func TestTCRM014_ConcurrentRespondAndRetainDeletion(t *testing.T) {
 	// Get the active operation ID
 	m.mu.Lock()
 	active := m.activeStateTx
+	releaseInProgress := m.operationReleaseInProgress
 	m.mu.Unlock()
 
-	// It should be deleting:<operationID>
-	if len(active) < 10 || active[:9] != "deleting:" {
-		t.Fatalf("expected state lock to be 'deleting:<opID>', got '%s'", active)
+	if !releaseInProgress {
+		t.Fatalf("expected operationReleaseInProgress to be true, got false")
 	}
-	opID := active[9:]
+	opID := active
 
 	// Concurrently call ReleaseOperationLock
 	errRel := m.ReleaseOperationLock(context.Background(), opID)

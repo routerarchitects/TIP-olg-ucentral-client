@@ -1099,10 +1099,10 @@ func TestTCRM019_PendingReplyCleanupOnDispatchTimeout(t *testing.T) {
 	}
 
 	m.MarkPreparingDispatch(tx.RPCID)
-	
+
 	// Simulate a fast reply arriving before it is dispatched
 	_ = m.Complete(tx.RPCID, []byte("success"))
-	
+
 	m.mu.Lock()
 	if _, ok := m.pendingReplies[tx.RPCID]; !ok {
 		m.mu.Unlock()

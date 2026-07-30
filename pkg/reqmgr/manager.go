@@ -693,13 +693,13 @@ func (m *DefaultRequestManager) sweep(ctx context.Context) {
 				m.stateLock.Unlock()
 			}
 			m.mu.Unlock()
-			
+
 			// Delete the stale record from the database
 			_ = m.store.Delete(ctx, op.OperationID)
 			continue
 		}
 
-		// 2. If it's NOT active in memory (meaning it successfully unlocked earlier but the DB delete failed), 
+		// 2. If it's NOT active in memory (meaning it successfully unlocked earlier but the DB delete failed),
 		// the sweeper directly cleans up the orphaned DB record.
 		if !isActive {
 			m.mu.Unlock()

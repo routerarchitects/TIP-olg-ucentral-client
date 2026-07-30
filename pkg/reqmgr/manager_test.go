@@ -14,10 +14,12 @@ import (
 // mockStore for testing
 type mockStore struct{}
 
-func (s *mockStore) Save(ctx context.Context, op *PersistentOperation) error               { return nil }
-func (s *mockStore) Get(ctx context.Context, opID string) (*PersistentOperation, error)      { return nil, nil }
-func (s *mockStore) GetActive(ctx context.Context) ([]*PersistentOperation, error)           { return nil, nil }
-func (s *mockStore) Delete(ctx context.Context, opID string) error                           { return nil }
+func (s *mockStore) Save(ctx context.Context, op *PersistentOperation) error { return nil }
+func (s *mockStore) Get(ctx context.Context, opID string) (*PersistentOperation, error) {
+	return nil, nil
+}
+func (s *mockStore) GetActive(ctx context.Context) ([]*PersistentOperation, error) { return nil, nil }
+func (s *mockStore) Delete(ctx context.Context, opID string) error                 { return nil }
 
 func setupTestManager() *DefaultRequestManager {
 	cache := NewTransactionCache()
@@ -1028,7 +1030,9 @@ func (b *blockingStore) Save(ctx context.Context, op *PersistentOperation) error
 	<-b.blockSave
 	return nil
 }
-func (b *blockingStore) GetActive(ctx context.Context) ([]*PersistentOperation, error) { return nil, nil }
+func (b *blockingStore) GetActive(ctx context.Context) ([]*PersistentOperation, error) {
+	return nil, nil
+}
 func (b *blockingStore) Delete(ctx context.Context, opID string) error { return nil }
 func (b *blockingStore) Get(ctx context.Context, opID string) (*PersistentOperation, error) {
 	return nil, nil
@@ -1172,5 +1176,3 @@ func TestTCRM021_NumericDuplicateNormalization(t *testing.T) {
 
 	_ = tx1 // avoid unused variable
 }
-
-

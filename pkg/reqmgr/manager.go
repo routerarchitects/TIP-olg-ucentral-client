@@ -210,8 +210,8 @@ func (m *DefaultRequestManager) MarkPreparingDispatch(rpcID string) error {
 		return ErrAlreadyTerminal
 	}
 
-	if tx.State != TxCreated {
-		return ErrInvalidStateTransition
+	if err := validateTransition(tx.State, TxPreparingDispatch); err != nil {
+		return err
 	}
 
 	tx.State = TxPreparingDispatch
@@ -227,8 +227,8 @@ func (m *DefaultRequestManager) MarkPendingPublish(rpcID string) error {
 		return ErrAlreadyTerminal
 	}
 
-	if tx.State != TxPreparingDispatch {
-		return ErrInvalidStateTransition
+	if err := validateTransition(tx.State, TxPendingPublish); err != nil {
+		return err
 	}
 
 	tx.State = TxPendingPublish
@@ -244,8 +244,8 @@ func (m *DefaultRequestManager) MarkInFlight(rpcID string) error {
 		return ErrAlreadyTerminal
 	}
 
-	if tx.State != TxPendingPublish {
-		return ErrInvalidStateTransition
+	if err := validateTransition(tx.State, TxInFlight); err != nil {
+		return err
 	}
 
 	tx.State = TxInFlight
@@ -569,15 +569,8 @@ func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState Tran
 		return ErrAlreadyTerminal
 	}
 
-	if tx.State == TxCompleted || tx.State == TxFailed || tx.State == TxTimedOut {
-		return ErrAlreadyTerminal
-	}
-
-	// Enforce strict state machine transitions for terminal states
-	if finalState == TxCompleted || finalState == TxTimedOut {
-		if tx.State != TxInFlight {
-			return ErrInvalidStateTransition
-		}
+	if err := validateTransition(tx.State, finalState); err != nil {
+		return err
 	}
 
 	tx.State = finalState
@@ -609,9 +602,9 @@ func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState Tran
 // if a downstream fast-reply proves it was published. It strictly rejects TxCreated
 // because a response for an unprepared transaction indicates an invalid dispatch sequence.
 func (m *DefaultRequestManager) recoverToInFlight(tx *Transaction) error {
-	if tx.State == TxPreparingDispatch || tx.State == TxPendingPublish {
-		tx.State = TxInFlight
-		return nil
+	if err := validateTransition(tx.State, TxInFlight); err != nil {
+		return err
 	}
-	return ErrInvalidStateTransition
+	tx.State = TxInFlight
+	return nil
 }

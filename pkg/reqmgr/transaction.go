@@ -32,6 +32,30 @@ const (
 	TxTimedOut
 )
 
+func validateTransition(from, to TransactionState) error {
+	switch from {
+	case TxCreated:
+		if to == TxPreparingDispatch || to == TxFailed {
+			return nil
+		}
+	case TxPreparingDispatch:
+		if to == TxPendingPublish || to == TxFailed || to == TxInFlight {
+			return nil
+		}
+	case TxPendingPublish:
+		if to == TxInFlight || to == TxFailed {
+			return nil
+		}
+	case TxInFlight:
+		if to == TxCompleted || to == TxFailed || to == TxTimedOut {
+			return nil
+		}
+	case TxCompleted, TxFailed, TxTimedOut:
+		return ErrAlreadyTerminal
+	}
+	return ErrInvalidStateTransition
+}
+
 func (s TransactionState) String() string {
 	switch s {
 	case TxCreated:

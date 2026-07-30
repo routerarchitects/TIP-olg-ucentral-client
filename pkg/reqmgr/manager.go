@@ -325,42 +325,37 @@ func (m *DefaultRequestManager) Complete(rpcID string, response []byte) error {
 }
 
 func (m *DefaultRequestManager) ReleaseOperationLock(ctx context.Context, operationID string) error {
+	if operationID == "" {
+		return ErrOperationNotActive
+	}
+
 	m.mu.Lock()
 
-	if operationID == "" {
+	if m.releasingOperationID == operationID {
+		m.mu.Unlock()
+		return ErrOperationReleaseInProgress
+	}
+
+	if m.activeStateTx != operationID || m.activeStateOwner != LockOwnedByOperation {
 		m.mu.Unlock()
 		return ErrOperationNotActive
 	}
 
-	ownsMemoryLock := (m.activeStateTx == operationID && m.activeStateOwner == LockOwnedByOperation)
+	m.releasingOperationID = operationID
+	m.activeStateTx = ""
+	m.activeStateOwner = LockNone
+	m.stateLock.Unlock()
+	m.mu.Unlock()
 
-	if ownsMemoryLock {
-		if m.releasingOperationID == operationID {
-			m.mu.Unlock()
-			return ErrOperationReleaseInProgress
-		}
+	err := m.store.Delete(ctx, operationID)
 
-		// Mark it as actively being deleted so concurrent callers return ErrOperationReleaseInProgress
-		m.releasingOperationID = operationID
-
-		// Clear the memory lock IMMEDIATELY. This guarantees no permanent lockouts
-		// if the DB delete fails below.
-		m.activeStateTx = ""
-		m.activeStateOwner = LockNone
+	m.mu.Lock()
+	if m.releasingOperationID == operationID {
 		m.releasingOperationID = ""
-
-		// Enforce strict sequence: Unlock stateLock BEFORE dropping m.mu
-		m.stateLock.Unlock()
 	}
 	m.mu.Unlock()
 
-	// Perform disk I/O outside lock. If this fails, the device is STILL unlocked in memory!
-	// The background sweeper will eventually clean up the stale record.
-	if err := m.store.Delete(ctx, operationID); err != nil {
-		return fmt.Errorf("failed to delete persistent operation: %w", err)
-	}
-
-	return nil
+	return err
 }
 
 // RespondAndRetain transfers stateLock ownership to a background operation and cleans up the transaction.
@@ -637,8 +632,7 @@ func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState Tran
 
 // Start runs the background sweeper to clean up orphaned persistent operations.
 func (m *DefaultRequestManager) Start(ctx context.Context) {
-	// Re-acquire persistent locks on startup to survive daemon crashes
-	if ops, err := m.store.GetPendingTerminalDelivery(ctx); err == nil {
+	if ops, err := m.store.GetActive(ctx); err == nil {
 		m.mu.Lock()
 		for _, op := range ops {
 			if m.activeStateTx == "" {
@@ -674,8 +668,7 @@ func (m *DefaultRequestManager) Start(ctx context.Context) {
 
 // sweep periodically attempts to clean up operations that failed to delete.
 func (m *DefaultRequestManager) sweep(ctx context.Context) {
-	// Look for operations that are pending terminal delivery (or cleanup)
-	ops, err := m.store.GetPendingTerminalDelivery(ctx)
+	ops, err := m.store.GetActive(ctx)
 	if err != nil {
 		return
 	}
@@ -684,11 +677,14 @@ func (m *DefaultRequestManager) sweep(ctx context.Context) {
 
 	for _, op := range ops {
 		createdAt, errTime := time.Parse(time.RFC3339, op.CreatedAt)
+		isExpired := errTime == nil && now.Sub(createdAt) > 15*time.Minute
 
-		// If the operation is older than 15 minutes, it is forcibly killed.
-		if errTime == nil && now.Sub(createdAt) > 15*time.Minute {
-			m.mu.Lock()
-			if m.activeStateTx == op.OperationID {
+		m.mu.Lock()
+		isActive := (m.activeStateTx == op.OperationID)
+
+		// 1. If the operation has exceeded the maximum 15-minute TTL, force kill it
+		if isExpired {
+			if isActive {
 				m.activeStateTx = ""
 				m.activeStateOwner = LockNone
 				if m.releasingOperationID == op.OperationID {
@@ -697,15 +693,22 @@ func (m *DefaultRequestManager) sweep(ctx context.Context) {
 				m.stateLock.Unlock()
 			}
 			m.mu.Unlock()
-
+			
 			// Delete the stale record from the database
 			_ = m.store.Delete(ctx, op.OperationID)
-		} else {
-			// Attempt to safely release and delete the orphaned operation.
-			// If the lock is held by another active worker, this safely returns ErrOperationNotActive.
-			// If the operation is just sitting there undeleted, this will clean it up.
-			_ = m.ReleaseOperationLock(ctx, op.OperationID)
+			continue
 		}
+
+		// 2. If it's NOT active in memory (meaning it successfully unlocked earlier but the DB delete failed), 
+		// the sweeper directly cleans up the orphaned DB record.
+		if !isActive {
+			m.mu.Unlock()
+			_ = m.store.Delete(ctx, op.OperationID)
+			continue
+		}
+
+		// 3. Otherwise, it is active and not expired. Leave it safely alone.
+		m.mu.Unlock()
 	}
 }
 

@@ -980,10 +980,11 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     // and host reboot. An in-memory-only implementation does not satisfy this interface contract.
     //
     // Terminal Lifecycle:
-    // When a terminal downstream status is received, the daemon first saves the operation
-    // with Active=false and its terminal Stage/Status. After the final Cloud response or progress
-    // notification has been successfully queued and the TransactionCache entry has been stored,
-    // the daemon deletes the OperationStore record. GetActive() must return only records where Active=true. On startup, the daemon must recover both Active=true records and Active=false records (via GetPendingTerminalDelivery) to resume Cloud delivery before deleting them.
+    // When a terminal downstream status is received, the operation is immediately completed
+    // in memory, the memory lock is released, and the OperationStore record is deleted.
+    // GetActive() must return the single active operation (if any) so the daemon can re-acquire
+    // the memory lock upon startup. GetPendingTerminalDelivery() is used by the background
+    // sweeper to locate and delete orphaned records if the daemon crashed before a deletion completed.
     type OperationStore interface {
     	Save(ctx context.Context, operation *PersistentOperation) error
     	Get(ctx context.Context, operationID string) (*PersistentOperation, error)

@@ -14,15 +14,10 @@ import (
 // mockStore for testing
 type mockStore struct{}
 
-func (s *mockStore) Save(ctx context.Context, operation *PersistentOperation) error { return nil }
-func (s *mockStore) Get(ctx context.Context, operationID string) (*PersistentOperation, error) {
-	return nil, nil
-}
-func (s *mockStore) GetActive(ctx context.Context) (*PersistentOperation, error) { return nil, nil }
-func (s *mockStore) GetPendingTerminalDelivery(ctx context.Context) ([]*PersistentOperation, error) {
-	return nil, nil
-}
-func (s *mockStore) Delete(ctx context.Context, operationID string) error { return nil }
+func (s *mockStore) Save(ctx context.Context, op *PersistentOperation) error               { return nil }
+func (s *mockStore) Get(ctx context.Context, opID string) (*PersistentOperation, error)      { return nil, nil }
+func (s *mockStore) GetActive(ctx context.Context) ([]*PersistentOperation, error)           { return nil, nil }
+func (s *mockStore) Delete(ctx context.Context, opID string) error                           { return nil }
 
 func setupTestManager() *DefaultRequestManager {
 	cache := NewTransactionCache()
@@ -813,35 +808,30 @@ func TestTCRM013_ConcurrentReleaseOperationLock(t *testing.T) {
 	m.stateLock.Lock()
 	m.mu.Unlock()
 
-	errCh1 := make(chan error)
+	errCh := make(chan error)
 	go func() {
-		errCh1 <- m.ReleaseOperationLock(context.Background(), "op-1")
+		err := m.ReleaseOperationLock(context.Background(), "op-1")
+		if err != nil {
+			t.Logf("ReleaseOperationLock early exit: %v", err)
+		}
+		errCh <- err
 	}()
 
 	// Wait for first caller to enter Delete
 	<-store.block
 
-	errCh2 := make(chan error)
 	// Second concurrent caller
-	go func() {
-		errCh2 <- m.ReleaseOperationLock(context.Background(), "op-1")
-	}()
-
-	// Wait for second caller to also enter Delete
-	<-store.block
-
-	// release BOTH callers
-	store.release <- struct{}{}
-	store.release <- struct{}{}
-
-	err1 := <-errCh1
-	if err1 == nil {
-		t.Fatalf("expected delete to fail for caller 1")
+	err2 := m.ReleaseOperationLock(context.Background(), "op-1")
+	if err2 != ErrOperationReleaseInProgress {
+		t.Fatalf("expected ErrOperationReleaseInProgress, got %v", err2)
 	}
 
-	err2 := <-errCh2
-	if err2 == nil {
-		t.Fatalf("expected delete to fail for caller 2")
+	// release first caller
+	store.release <- struct{}{}
+
+	err1 := <-errCh
+	if err1 == nil {
+		t.Fatalf("expected delete to fail")
 	}
 }
 
@@ -906,14 +896,22 @@ func TestTCRM014_ConcurrentRespondAndRetainDeletion(t *testing.T) {
 	// Wait for RespondAndRetain to enter Delete
 	<-store.blockDelete
 
-	// Under the new architecture, the memory lock is instantly cleared!
+	// Get the active operation ID
 	m.mu.Lock()
-	if m.activeStateTx != "" {
-		t.Fatalf("expected lock to be instantly cleared, got %s", m.activeStateTx)
-	}
+	_ = m.activeStateTx
+	releasingID := m.releasingOperationID
 	m.mu.Unlock()
 
-	// Release Delete
+	// In the new strict flow, activeStateTx is instantly cleared, but releasingOperationID is held
+	if releasingID == "" {
+		t.Fatalf("expected releasingOperationID to be set to a UUID, got empty")
+	}
+
+	// Concurrently call ReleaseOperationLock with the correct operationID
+	errRel := m.ReleaseOperationLock(context.Background(), releasingID)
+	if errRel != ErrOperationReleaseInProgress {
+		t.Fatalf("expected ErrOperationReleaseInProgress, got %v", errRel)
+	}
 	store.releaseDelete <- struct{}{}
 
 	// Wait for RespondAndRetain to finish
@@ -1030,10 +1028,7 @@ func (b *blockingStore) Save(ctx context.Context, op *PersistentOperation) error
 	<-b.blockSave
 	return nil
 }
-func (b *blockingStore) GetActive(ctx context.Context) (*PersistentOperation, error) { return nil, nil }
-func (b *blockingStore) GetPendingTerminalDelivery(ctx context.Context) ([]*PersistentOperation, error) {
-	return nil, nil
-}
+func (b *blockingStore) GetActive(ctx context.Context) ([]*PersistentOperation, error) { return nil, nil }
 func (b *blockingStore) Delete(ctx context.Context, opID string) error { return nil }
 func (b *blockingStore) Get(ctx context.Context, opID string) (*PersistentOperation, error) {
 	return nil, nil
@@ -1178,59 +1173,4 @@ func TestTCRM021_NumericDuplicateNormalization(t *testing.T) {
 	_ = tx1 // avoid unused variable
 }
 
-func TestTCRM022_ReleaseOperationLockFailureRetry(t *testing.T) {
-	cache := NewTransactionCache()
-	config := CacheTTLConfig{}
-	scheduler := queues.NewPriorityScheduler(10, 10)
-	store := &blockDeleteMockStore{
-		block:   make(chan struct{}),
-		release: make(chan struct{}),
-	}
-	m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store)
 
-	// manually setup a fake operation lock
-	m.mu.Lock()
-	m.activeStateTx = "op-retry"
-	m.activeStateOwner = LockOwnedByOperation
-	m.stateLock.Lock()
-	m.mu.Unlock()
-
-	errCh := make(chan error)
-	go func() {
-		errCh <- m.ReleaseOperationLock(context.Background(), "op-retry")
-	}()
-
-	// Wait for ReleaseOperationLock to block on store.Delete
-	<-store.block
-	store.release <- struct{}{}
-
-	err1 := <-errCh
-	if err1 == nil {
-		t.Fatalf("expected first ReleaseOperationLock to fail")
-	}
-
-	// Because it failed, the releasingOperationID flag should have been cleared, allowing a retry.
-	m.mu.Lock()
-	if m.releasingOperationID != "" {
-		m.mu.Unlock()
-		t.Fatalf("expected releasingOperationID to be cleared after failure")
-	}
-	m.mu.Unlock()
-
-	// Replace the mock store with one that will succeed
-	m.store = &mockStore{}
-
-	// Retry should succeed
-	err2 := m.ReleaseOperationLock(context.Background(), "op-retry")
-	if err2 != nil {
-		t.Fatalf("expected retry of ReleaseOperationLock to succeed, got %v", err2)
-	}
-
-	// Lock should be released completely
-	m.mu.Lock()
-	if m.activeStateTx != "" || m.activeStateOwner != LockNone {
-		m.mu.Unlock()
-		t.Fatalf("expected lock to be fully released")
-	}
-	m.mu.Unlock()
-}

@@ -252,6 +252,7 @@ func (m *DefaultRequestManager) MarkInFlight(rpcID string) error {
 	}
 
 	// Start the downstream response timer
+	tx.ResponseDeadline = time.Now().Add(tx.TimeoutDuration)
 	tx.DispatchTimer = time.AfterFunc(tx.TimeoutDuration, func() {
 		m.Timeout(rpcID)
 	})
@@ -405,8 +406,13 @@ func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) 
 		}
 
 		// Restart timer
-		tx.DispatchTimer = time.AfterFunc(tx.TimeoutDuration, func() {
-			m.Timeout(rpcID)
+		remaining := time.Until(tx.ResponseDeadline)
+		if remaining <= 0 {
+			return "", m.terminalTransition(rpcID, TxTimedOut, nil)
+		}
+
+		tx.DispatchTimer = time.AfterFunc(remaining, func() {
+			_ = m.Timeout(rpcID)
 		})
 		return "", fmt.Errorf("failed to persist operation: %w", err)
 	}

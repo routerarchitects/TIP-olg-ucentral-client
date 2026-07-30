@@ -66,6 +66,7 @@ type Transaction struct {
 	CreatedAt         time.Time
 	TimeoutDuration   time.Duration
 	DispatchDeadline  time.Time
+	ResponseDeadline  time.Time
 	DispatchTimer     *time.Timer
 	Cancel            context.CancelFunc
 }

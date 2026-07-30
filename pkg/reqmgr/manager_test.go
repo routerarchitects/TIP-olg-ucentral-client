@@ -669,3 +669,67 @@ func TestTCRM011_BufferedTerminalEventRace(t *testing.T) {
 	}
 	m.mu.Unlock()
 }
+
+func TestTCUPG012_RejectUpgradeNonStateChanging(t *testing.T) {
+	cache := NewTransactionCache()
+	config := CacheTTLConfig{}
+	scheduler := queues.NewPriorityScheduler(10, 10)
+	store := &mockStore{}
+	m := NewRequestManager(10*time.Second, config, cache, scheduler, store)
+
+	_, err := m.CreateTransaction("sess", json.RawMessage(`"upg-err"`), true, "upgrade", 10*time.Second, false)
+	if err == nil {
+		t.Fatalf("expected error when upgrade is not state-changing")
+	}
+}
+
+type blockDeleteMockStore struct {
+	mockStore
+	block   chan struct{}
+	release chan struct{}
+}
+
+func (s *blockDeleteMockStore) Delete(ctx context.Context, operationID string) error {
+	s.block <- struct{}{}
+	<-s.release
+	return errors.New("delete failed")
+}
+
+func TestTCRM013_ConcurrentReleaseOperationLock(t *testing.T) {
+	cache := NewTransactionCache()
+	config := CacheTTLConfig{}
+	scheduler := queues.NewPriorityScheduler(10, 10)
+	store := &blockDeleteMockStore{
+		block:   make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	m := NewRequestManager(10*time.Second, config, cache, scheduler, store)
+
+	// manually set active state tx
+	m.mu.Lock()
+	m.activeStateTx = "op-1"
+	m.mu.Unlock()
+
+	errCh := make(chan error)
+	go func() {
+		errCh <- m.ReleaseOperationLock(context.Background(), "op-1")
+	}()
+
+	// Wait for first caller to enter Delete
+	<-store.block
+
+	// Second concurrent caller
+	err2 := m.ReleaseOperationLock(context.Background(), "op-1")
+	if err2 != ErrOperationReleaseInProgress {
+		t.Fatalf("expected ErrOperationReleaseInProgress, got %v", err2)
+	}
+
+	// release first caller
+	store.release <- struct{}{}
+
+	err1 := <-errCh
+	if err1 == nil {
+		t.Fatalf("expected delete to fail")
+	}
+}
+

@@ -18,8 +18,10 @@ func (s *mockStore) Save(ctx context.Context, op *PersistentOperation) error { r
 func (s *mockStore) Get(ctx context.Context, opID string) (*PersistentOperation, error) {
 	return nil, nil
 }
-func (s *mockStore) GetActive(ctx context.Context, limit int) ([]*PersistentOperation, error) { return nil, nil }
-func (s *mockStore) Delete(ctx context.Context, opID string) error                 { return nil }
+func (s *mockStore) GetActive(ctx context.Context, limit int) ([]*PersistentOperation, error) {
+	return nil, nil
+}
+func (s *mockStore) Delete(ctx context.Context, opID string) error { return nil }
 
 func setupTestManager() *DefaultRequestManager {
 	cache := NewTransactionCache()
@@ -1030,7 +1032,9 @@ func (b *blockingStore) Save(ctx context.Context, op *PersistentOperation) error
 	<-b.blockSave
 	return nil
 }
-func (b *blockingStore) GetActive(ctx context.Context, limit int) ([]*PersistentOperation, error) { return nil, nil }
+func (b *blockingStore) GetActive(ctx context.Context, limit int) ([]*PersistentOperation, error) {
+	return nil, nil
+}
 func (b *blockingStore) Delete(ctx context.Context, opID string) error { return nil }
 func (b *blockingStore) Get(ctx context.Context, opID string) (*PersistentOperation, error) {
 	return nil, nil

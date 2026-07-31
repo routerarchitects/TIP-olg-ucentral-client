@@ -44,15 +44,39 @@ func (s *DiskOperationStore) Save(ctx context.Context, operation *PersistentOper
 	targetPath := s.getPath(operation.OperationID)
 	tempPath := targetPath + ".tmp"
 
-	if err := os.WriteFile(tempPath, data, 0640); err != nil {
+	f, err := os.OpenFile(tempPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0640)
+	if err != nil {
 		return err
 	}
 
-	// Atomic rename to ensure we never have a partially written JSON file
-	// that could crash the parser upon daemon restart.
-	if err := os.Rename(tempPath, targetPath); err != nil {
-		_ = os.Remove(tempPath)
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tempPath)
 		return err
+	}
+
+	// Force hardware durability before renaming
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tempPath)
+		return err
+	}
+
+	if err := f.Close(); err != nil {
+		os.Remove(tempPath)
+		return err
+	}
+
+	// Atomic rename for concurrent visibility
+	if err := os.Rename(tempPath, targetPath); err != nil {
+		os.Remove(tempPath)
+		return err
+	}
+
+	// Sync the parent directory to guarantee the rename survives power loss
+	if parentDir, err := os.Open(s.basePath); err == nil {
+		_ = parentDir.Sync()
+		_ = parentDir.Close()
 	}
 
 	return nil

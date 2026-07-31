@@ -1,6 +1,7 @@
 package reqmgr
 
 import (
+	"bytes"
 	"context"
 	"sync"
 	"time"
@@ -56,7 +57,7 @@ func (c *TransactionCache) Set(canonicalCloudID string, payload []byte, ttl time
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.items[canonicalCloudID] = CacheEntry{
-		Payload:   payload,
+		Payload:   bytes.Clone(payload),
 		ExpiresAt: time.Now().Add(ttl).UnixNano(),
 	}
 }
@@ -75,12 +76,15 @@ func (c *TransactionCache) Get(canonicalCloudID string) ([]byte, bool) {
 		return nil, false // Expired, will be cleaned up by sweeper
 	}
 
-	return entry.Payload, true
+	return bytes.Clone(entry.Payload), true
 }
 
 // StartCacheSweeper launches a background goroutine that periodically scans the cache
 // and deletes expired entries to prevent unbounded memory growth.
 func (c *TransactionCache) StartCacheSweeper(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = 1 * time.Minute
+	}
 	ticker := time.NewTicker(interval)
 	go func() {
 		defer ticker.Stop()

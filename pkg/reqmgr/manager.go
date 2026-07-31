@@ -658,7 +658,7 @@ func (m *DefaultRequestManager) Start(ctx context.Context) {
 		now := time.Now().UTC()
 		for _, op := range ops {
 			updatedAt, errTime := time.Parse(time.RFC3339, op.UpdatedAt)
-			
+
 			// If the timestamp is missing/malformed, treat it as expired to avoid deadlocks.
 			isExpired := true
 			if errTime == nil {

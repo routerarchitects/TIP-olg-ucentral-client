@@ -713,7 +713,7 @@ func (m *DefaultRequestManager) sweepOrphanedOperations(ctx context.Context) {
 
 	for _, op := range ops {
 		updatedAt, errTime := time.Parse(time.RFC3339, op.UpdatedAt)
-		
+
 		// If the timestamp is missing/malformed, treat it as expired to avoid deadlocks.
 		isExpired := true
 		if errTime == nil {

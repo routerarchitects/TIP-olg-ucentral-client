@@ -469,11 +469,6 @@ func (m *DefaultRequestManager) RespondAndRetain(ctx context.Context, rpcID stri
 		m.activeStateOwner = LockOwnedByOperation
 	}
 
-	if response != nil && tx.RespondToCloud {
-		ttl := m.cacheTTLConfig.TTLForMethod(tx.Method)
-		m.cache.Set(tx.RequestKey, response, ttl)
-	}
-
 	// 4. Safely clean up via the standard terminal transition
 	// If a buffered reply exists, process it with its proper state
 	if pending, ok := m.pendingReplies[rpcID]; ok {

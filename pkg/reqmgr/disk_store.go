@@ -44,42 +44,57 @@ func (s *DiskOperationStore) Save(ctx context.Context, operation *PersistentOper
 	targetPath := s.getPath(operation.OperationID)
 	tempPath := targetPath + ".tmp"
 
-	f, err := os.OpenFile(tempPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0640)
-	if err != nil {
+	errChan := make(chan error, 1)
+	go func() {
+		f, err := os.OpenFile(tempPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0640)
+		if err != nil {
+			errChan <- err
+			return
+		}
+
+		if _, err := f.Write(data); err != nil {
+			f.Close()
+			os.Remove(tempPath)
+			errChan <- err
+			return
+		}
+
+		// Force hardware durability before renaming
+		if err := f.Sync(); err != nil {
+			f.Close()
+			os.Remove(tempPath)
+			errChan <- err
+			return
+		}
+
+		if err := f.Close(); err != nil {
+			os.Remove(tempPath)
+			errChan <- err
+			return
+		}
+
+		// Atomic rename for concurrent visibility
+		if err := os.Rename(tempPath, targetPath); err != nil {
+			os.Remove(tempPath)
+			errChan <- err
+			return
+		}
+
+		// Sync the parent directory to guarantee the rename survives power loss
+		if parentDir, err := os.Open(s.basePath); err == nil {
+			_ = parentDir.Sync()
+			_ = parentDir.Close()
+		}
+
+		errChan <- nil
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-errChan:
 		return err
 	}
-
-	if _, err := f.Write(data); err != nil {
-		f.Close()
-		os.Remove(tempPath)
-		return err
-	}
-
-	// Force hardware durability before renaming
-	if err := f.Sync(); err != nil {
-		f.Close()
-		os.Remove(tempPath)
-		return err
-	}
-
-	if err := f.Close(); err != nil {
-		os.Remove(tempPath)
-		return err
-	}
-
-	// Atomic rename for concurrent visibility
-	if err := os.Rename(tempPath, targetPath); err != nil {
-		os.Remove(tempPath)
-		return err
-	}
-
-	// Sync the parent directory to guarantee the rename survives power loss
-	if parentDir, err := os.Open(s.basePath); err == nil {
-		_ = parentDir.Sync()
-		_ = parentDir.Close()
-	}
-
-	return nil
 }
 
 func (s *DiskOperationStore) Get(ctx context.Context, operationID string) (*PersistentOperation, error) {
@@ -144,6 +159,11 @@ func (s *DiskOperationStore) GetActive(ctx context.Context, limit int) ([]*Persi
 
 	var ops []*PersistentOperation
 	for _, f := range files {
+		// Respect context cancellation to abort loop if taking too long
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
 		if limit > 0 && len(ops) >= limit {
 			break
 		}

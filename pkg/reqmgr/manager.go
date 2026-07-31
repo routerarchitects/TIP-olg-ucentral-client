@@ -633,9 +633,6 @@ func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState Tran
 
 	hasValidID := tx.RequestKey != ""
 	if hasValidID {
-		if finalState == TxCompleted {
-			m.cache.Set(tx.RequestKey, payload, m.cacheTTLConfig.TTLForMethod(tx.Method))
-		}
 		delete(m.activeCloudRequests, tx.RequestKey)
 	}
 	delete(m.transactionsByRPCID, rpcID)
@@ -661,7 +658,14 @@ func (m *DefaultRequestManager) Start(ctx context.Context) {
 		now := time.Now().UTC()
 		for _, op := range ops {
 			updatedAt, errTime := time.Parse(time.RFC3339, op.UpdatedAt)
-			isExpired := errTime == nil && now.Sub(updatedAt) > m.sweeperTTL
+			
+			// If the timestamp is missing/malformed, treat it as expired to avoid deadlocks.
+			isExpired := true
+			if errTime == nil {
+				isExpired = now.Sub(updatedAt) > m.sweeperTTL
+			} else {
+				log.Printf("reqmgr: Start() encountered invalid timestamp for operation %s, treating as expired: %v", op.OperationID, errTime)
+			}
 
 			if m.activeStateTx == "" {
 				if !isExpired {

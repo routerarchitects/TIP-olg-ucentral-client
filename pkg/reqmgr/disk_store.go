@@ -164,7 +164,9 @@ func (s *DiskOperationStore) GetActive(ctx context.Context, limit int) ([]*Persi
 		var op PersistentOperation
 		if err := json.Unmarshal(data, &op); err != nil {
 			log.Printf("reqmgr: failed to parse active operation file %s, treating as corrupt and deleting: %v", f.path, err)
-			os.Remove(f.path)
+			if delErr := s.deletePathDurably(f.path); delErr != nil {
+				log.Printf("reqmgr: failed to durably delete corrupt file %s: %v", f.path, delErr)
+			}
 			continue // Skip corrupted files
 		}
 
@@ -175,7 +177,11 @@ func (s *DiskOperationStore) GetActive(ctx context.Context, limit int) ([]*Persi
 }
 
 func (s *DiskOperationStore) Delete(ctx context.Context, operationID string) error {
-	err := os.Remove(s.getPath(operationID))
+	return s.deletePathDurably(s.getPath(operationID))
+}
+
+func (s *DiskOperationStore) deletePathDurably(path string) error {
+	err := os.Remove(path)
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}

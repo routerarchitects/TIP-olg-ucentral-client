@@ -26,7 +26,7 @@ type CacheTTLConfig struct {
 // TTLForMethod returns the configured TTL for a given method, falling back to DefaultTTL.
 func (c *CacheTTLConfig) TTLForMethod(method string) time.Duration {
 	if c.MethodTTLs != nil {
-		if ttl, ok := c.MethodTTLs[method]; ok {
+		if ttl, ok := c.MethodTTLs[method]; ok && ttl > 0 {
 			return ttl
 		}
 	}

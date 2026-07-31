@@ -194,15 +194,34 @@ func (s *DiskOperationStore) GetActive(ctx context.Context, limit int) ([]*Persi
 }
 
 func (s *DiskOperationStore) Delete(ctx context.Context, operationID string) error {
+	errChan := make(chan error, 1)
+
+	go func() {
+		err := os.Remove(s.getPath(operationID))
+		if err != nil && !os.IsNotExist(err) {
+			errChan <- err
+			return
+		}
+
+		parentDir, err := os.Open(s.basePath)
+		if err != nil {
+			errChan <- fmt.Errorf("failed to open directory for sync: %w", err)
+			return
+		}
+		if err := parentDir.Sync(); err != nil {
+			parentDir.Close()
+			errChan <- fmt.Errorf("failed to sync directory: %w", err)
+			return
+		}
+		parentDir.Close()
+
+		errChan <- nil
+	}()
+
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	default:
-	}
-
-	err := os.Remove(s.getPath(operationID))
-	if err != nil && !os.IsNotExist(err) {
+	case err := <-errChan:
 		return err
 	}
-	return nil
 }

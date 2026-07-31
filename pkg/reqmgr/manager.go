@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"math/big"
 	"sync"
 	"time"
@@ -650,11 +649,6 @@ func (m *DefaultRequestManager) Start(ctx context.Context) {
 						m.activeStateOwner = LockOwnedByOperation
 					}
 				}
-			} else if !isExpired {
-				// We already acquired the lock for an active operation, but we found another one!
-				// This indicates an inconsistent persistent state (e.g., bug or crash mid-reconciliation).
-				// Log a warning so it's surfaced as a reconciliation failure rather than silently deleted.
-				log.Printf("Warning: Found conflicting active record %s on startup; sweeper will clean it", op.OperationID)
 			}
 		}
 		m.mu.Unlock()

@@ -78,9 +78,9 @@ func (c *TransactionCache) Get(canonicalCloudID string) ([]byte, bool) {
 	return entry.Payload, true
 }
 
-// StartSweeper launches a background goroutine that periodically scans the cache
+// StartCacheSweeper launches a background goroutine that periodically scans the cache
 // and deletes expired entries to prevent unbounded memory growth.
-func (c *TransactionCache) StartSweeper(ctx context.Context, interval time.Duration) {
+func (c *TransactionCache) StartCacheSweeper(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	go func() {
 		defer ticker.Stop()
@@ -89,13 +89,13 @@ func (c *TransactionCache) StartSweeper(ctx context.Context, interval time.Durat
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				c.sweep()
+				c.sweepCache()
 			}
 		}
 	}()
 }
 
-func (c *TransactionCache) sweep() {
+func (c *TransactionCache) sweepCache() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	

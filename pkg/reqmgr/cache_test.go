@@ -73,7 +73,7 @@ func TestTransactionCache_ExpirationAndSweep(t *testing.T) {
 	}
 
 	// Run manual sweep
-	cache.sweep()
+	cache.sweepCache()
 
 	// Verify physical removal
 	cache.mu.RLock()

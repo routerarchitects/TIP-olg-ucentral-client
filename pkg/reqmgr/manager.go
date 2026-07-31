@@ -684,21 +684,21 @@ func (m *DefaultRequestManager) Start(ctx context.Context) {
 		defer ticker.Stop()
 
 		// Run once on startup to reconcile state immediately (e.g. clean stale DB records)
-		m.sweep(ctx)
+		m.sweepOrphanedOperations(ctx)
 
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				m.sweep(ctx)
+				m.sweepOrphanedOperations(ctx)
 			}
 		}
 	}()
 }
 
-// sweep periodically attempts to clean up operations that failed to delete.
-func (m *DefaultRequestManager) sweep(ctx context.Context) {
+// sweepOrphanedOperations periodically attempts to clean up operations that failed to delete.
+func (m *DefaultRequestManager) sweepOrphanedOperations(ctx context.Context) {
 	ops, err := m.store.GetActive(ctx, m.activeRecordLimit)
 	if err != nil {
 		log.Printf("reqmgr: sweeper failed to read active operations: %v", err)

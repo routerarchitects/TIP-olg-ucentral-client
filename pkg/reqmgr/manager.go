@@ -113,7 +113,7 @@ func CanonicalRequestKey(sessionID string, id json.RawMessage) (string, error) {
 		return "", fmt.Errorf("invalid json-rpc id: %w", err)
 	}
 
-	if err := decoder.Decode(new(interface{})) ; err != io.EOF {
+	if err := decoder.Decode(new(interface{})); err != io.EOF {
 		return "", errors.New("invalid json-rpc id: trailing content")
 	}
 

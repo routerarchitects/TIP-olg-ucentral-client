@@ -58,9 +58,10 @@ type DefaultRequestManager struct {
 	pendingReplies        map[string]PendingReply
 	maxConcurrentRequests int
 	sweeperTTL            time.Duration
+	activeRecordLimit     int
 }
 
-func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLConfig, cache *TransactionCache, scheduler *queues.PriorityScheduler, store OperationStore, maxConcurrentRequests int, sweeperTTL time.Duration) (*DefaultRequestManager, error) {
+func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLConfig, cache *TransactionCache, scheduler *queues.PriorityScheduler, store OperationStore, maxConcurrentRequests int, sweeperTTL time.Duration, activeRecordLimit int) (*DefaultRequestManager, error) {
 	if cache == nil {
 		return nil, errors.New("cache cannot be nil")
 	}
@@ -79,6 +80,7 @@ func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLCon
 		pendingReplies:        make(map[string]PendingReply),
 		maxConcurrentRequests: maxConcurrentRequests,
 		sweeperTTL:            sweeperTTL,
+		activeRecordLimit:     activeRecordLimit,
 	}, nil
 }
 
@@ -642,7 +644,7 @@ func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState Tran
 
 // Start runs the background sweeper to clean up orphaned persistent operations.
 func (m *DefaultRequestManager) Start(ctx context.Context) {
-	if ops, err := m.store.GetActive(ctx); err == nil {
+	if ops, err := m.store.GetActive(ctx, m.activeRecordLimit); err == nil {
 		m.mu.Lock()
 		now := time.Now().UTC()
 		for _, op := range ops {
@@ -683,7 +685,7 @@ func (m *DefaultRequestManager) Start(ctx context.Context) {
 
 // sweep periodically attempts to clean up operations that failed to delete.
 func (m *DefaultRequestManager) sweep(ctx context.Context) {
-	ops, err := m.store.GetActive(ctx)
+	ops, err := m.store.GetActive(ctx, m.activeRecordLimit)
 	if err != nil {
 		return
 	}

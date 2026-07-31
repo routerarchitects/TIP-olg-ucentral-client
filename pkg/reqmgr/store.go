@@ -21,7 +21,9 @@ type PersistentOperation struct {
 type OperationStore interface {
 	Save(ctx context.Context, operation *PersistentOperation) error
 	Get(ctx context.Context, operationID string) (*PersistentOperation, error)
-	GetActive(ctx context.Context) ([]*PersistentOperation, error)
+	// GetActive returns up to 'limit' active operations.
+	// Contract: Implementations MUST return records sorted by UpdatedAt in descending order (newest first).
+	GetActive(ctx context.Context, limit int) ([]*PersistentOperation, error)
 	Delete(ctx context.Context, operationID string) error
 }
 
@@ -35,7 +37,7 @@ func (s *NoopOperationStore) Save(ctx context.Context, operation *PersistentOper
 func (s *NoopOperationStore) Get(ctx context.Context, operationID string) (*PersistentOperation, error) {
 	return nil, nil
 }
-func (s *NoopOperationStore) GetActive(ctx context.Context) ([]*PersistentOperation, error) {
+func (s *NoopOperationStore) GetActive(ctx context.Context, limit int) ([]*PersistentOperation, error) {
 	return nil, nil
 }
 func (s *NoopOperationStore) Delete(ctx context.Context, operationID string) error { return nil }

@@ -25,6 +25,7 @@ var (
 	ErrOperationNotActive         = errors.New("operation is not active")
 	ErrOperationReleaseInProgress = errors.New("operation release already in progress")
 	ErrOperationOwnershipChanged  = errors.New("operation ownership changed during release")
+	ErrCapacityExceeded           = errors.New("request manager capacity exceeded")
 )
 
 type PendingReply struct {
@@ -52,12 +53,14 @@ type DefaultRequestManager struct {
 	releasingOperationID string         // Operation ID currently being deleted
 	cache                *TransactionCache
 	cacheTTLConfig       CacheTTLConfig
-	scheduler            *queues.PriorityScheduler
-	store                OperationStore
-	pendingReplies       map[string]PendingReply
+	scheduler             *queues.PriorityScheduler
+	store                 OperationStore
+	pendingReplies        map[string]PendingReply
+	maxConcurrentRequests int
+	sweeperTTL            time.Duration
 }
 
-func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLConfig, cache *TransactionCache, scheduler *queues.PriorityScheduler, store OperationStore) (*DefaultRequestManager, error) {
+func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLConfig, cache *TransactionCache, scheduler *queues.PriorityScheduler, store OperationStore, maxConcurrentRequests int, sweeperTTL time.Duration) (*DefaultRequestManager, error) {
 	if cache == nil {
 		return nil, errors.New("cache cannot be nil")
 	}
@@ -71,9 +74,11 @@ func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLCon
 		activeCloudRequests: make(map[string]string),
 		cache:               cache,
 		cacheTTLConfig:      cacheTTLConfig,
-		scheduler:           scheduler,
-		store:               store,
-		pendingReplies:      make(map[string]PendingReply),
+		scheduler:             scheduler,
+		store:                 store,
+		pendingReplies:        make(map[string]PendingReply),
+		maxConcurrentRequests: maxConcurrentRequests,
+		sweeperTTL:            sweeperTTL,
 	}, nil
 }
 
@@ -151,6 +156,11 @@ func (m *DefaultRequestManager) CreateTransaction(sessionID string, cloudRPCID j
 	// 2. Check active map
 	if _, active := m.activeCloudRequests[reqKey]; active {
 		return nil, ErrDuplicateRequest
+	}
+
+	// 2.5 Check global concurrency capacity
+	if len(m.transactionsByRPCID) >= m.maxConcurrentRequests {
+		return nil, ErrCapacityExceeded
 	}
 
 	// 4. Create transaction
@@ -637,9 +647,8 @@ func (m *DefaultRequestManager) Start(ctx context.Context) {
 		now := time.Now().UTC()
 		for _, op := range ops {
 			updatedAt, errTime := time.Parse(time.RFC3339, op.UpdatedAt)
-			// TODO: Make this 15-minute TTL configurable via RequestManager options
-			isExpired := errTime == nil && now.Sub(updatedAt) > 15*time.Minute
-
+			isExpired := errTime == nil && now.Sub(updatedAt) > m.sweeperTTL
+			
 			if m.activeStateTx == "" {
 				if !isExpired {
 					// A background operation was running when we crashed.
@@ -683,8 +692,7 @@ func (m *DefaultRequestManager) sweep(ctx context.Context) {
 
 	for _, op := range ops {
 		updatedAt, errTime := time.Parse(time.RFC3339, op.UpdatedAt)
-		// TODO: Make this 15-minute TTL configurable via RequestManager options
-		isExpired := errTime == nil && now.Sub(updatedAt) > 15*time.Minute
+		isExpired := errTime == nil && now.Sub(updatedAt) > m.sweeperTTL
 
 		m.mu.Lock()
 		isActive := (m.activeStateTx == op.OperationID)

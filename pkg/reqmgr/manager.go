@@ -713,7 +713,14 @@ func (m *DefaultRequestManager) sweepOrphanedOperations(ctx context.Context) {
 
 	for _, op := range ops {
 		updatedAt, errTime := time.Parse(time.RFC3339, op.UpdatedAt)
-		isExpired := errTime == nil && now.Sub(updatedAt) > m.sweeperTTL
+		
+		// If the timestamp is missing/malformed, treat it as expired to avoid deadlocks.
+		isExpired := true
+		if errTime == nil {
+			isExpired = now.Sub(updatedAt) > m.sweeperTTL
+		} else {
+			log.Printf("reqmgr: sweeper encountered invalid timestamp for operation %s, treating as expired: %v", op.OperationID, errTime)
+		}
 
 		m.mu.Lock()
 		isActive := (m.activeStateTx == op.OperationID)

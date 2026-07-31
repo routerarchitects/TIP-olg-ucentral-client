@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 // DiskOperationStore provides a disk-backed implementation of OperationStore.
@@ -42,7 +44,7 @@ func (s *DiskOperationStore) Save(ctx context.Context, operation *PersistentOper
 	}
 
 	targetPath := s.getPath(operation.OperationID)
-	tempPath := targetPath + ".tmp"
+	tempPath := fmt.Sprintf("%s.tmp.%s", targetPath, uuid.New().String())
 
 	errChan := make(chan error, 1)
 	go func() {
@@ -81,10 +83,17 @@ func (s *DiskOperationStore) Save(ctx context.Context, operation *PersistentOper
 		}
 
 		// Sync the parent directory to guarantee the rename survives power loss
-		if parentDir, err := os.Open(s.basePath); err == nil {
-			_ = parentDir.Sync()
-			_ = parentDir.Close()
+		parentDir, err := os.Open(s.basePath)
+		if err != nil {
+			errChan <- fmt.Errorf("failed to open directory for sync: %w", err)
+			return
 		}
+		if err := parentDir.Sync(); err != nil {
+			parentDir.Close()
+			errChan <- fmt.Errorf("failed to sync directory: %w", err)
+			return
+		}
+		parentDir.Close()
 
 		errChan <- nil
 	}()

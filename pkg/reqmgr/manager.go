@@ -21,7 +21,6 @@ var (
 	ErrAlreadyTerminal            = errors.New("transaction already in terminal state")
 	ErrTransactionNotFound        = errors.New("transaction not found")
 	ErrDuplicateRequest           = errors.New("duplicate request already in progress")
-	ErrCachedRequest              = errors.New("request already completed and cached")
 	ErrStateLockBusy              = errors.New("device is currently executing a state-changing operation")
 	ErrOperationNotActive         = errors.New("operation is not active")
 	ErrOperationReleaseInProgress = errors.New("operation release already in progress")
@@ -150,10 +149,9 @@ func (m *DefaultRequestManager) CreateTransaction(sessionID string, cloudRPCID j
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// 1. Check cache (simplified for now, full impl in PR 3.2)
-	if _, ok := m.cache.Get(reqKey); ok {
-		// Should replay, but for PR 3.1 we just return busy for now
-		return nil, ErrCachedRequest
+	// 1. Check cache for duplicates of already completed requests
+	if cachedPayload, ok := m.cache.Get(reqKey); ok {
+		return nil, CachedResponseError{Payload: cachedPayload}
 	}
 
 	// 2. Check active map
@@ -471,7 +469,10 @@ func (m *DefaultRequestManager) RespondAndRetain(ctx context.Context, rpcID stri
 		m.activeStateOwner = LockOwnedByOperation
 	}
 
-	// Cache logic would go here in PR 3.2
+	if response != nil && tx.RespondToCloud {
+		ttl := m.cacheTTLConfig.TTLForMethod(tx.Method)
+		m.cache.Set(tx.RequestKey, response, ttl)
+	}
 
 	// 4. Safely clean up via the standard terminal transition
 	// If a buffered reply exists, process it with its proper state
@@ -611,6 +612,11 @@ func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState Tran
 
 	tx.State = finalState
 	tx.Payload = payload
+
+	if finalState == TxCompleted && tx.RespondToCloud && payload != nil {
+		ttl := m.cacheTTLConfig.TTLForMethod(tx.Method)
+		m.cache.Set(tx.RequestKey, payload, ttl)
+	}
 
 	if tx.DispatchTimer != nil {
 		tx.DispatchTimer.Stop()

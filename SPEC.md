@@ -940,7 +940,7 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
 #### PR 3.2: Duplicate Attachment, Cache TTL & Persistence Implementation
 *   **Target File:** `pkg/reqmgr/cache.go`, `pkg/reqmgr/store.go` (concrete implementation), `pkg/reqmgr/manager.go` (extensions)
 *   **Concrete Persistence:**
-    *   Implement a durable `FileOperationStore` (or equivalent) in `store.go` that satisfies the `OperationStore` interface.
+    *   Implement a durable `DiskOperationStore` (or equivalent) in `store.go` that satisfies the `OperationStore` interface.
     *   This implementation must guarantee that active operations are durably flushed to disk to survive host reboots.
 *   **Core Cache Structures:**
     ```go

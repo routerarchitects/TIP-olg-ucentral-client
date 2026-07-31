@@ -1146,8 +1146,8 @@ func TestTCRM020_DuplicateIDRejectedAfterCompletion(t *testing.T) {
 
 	// 3. Try to create a second request with same ID, different method
 	_, err = m.CreateTransaction("session-1", cloudRPCID, true, "ping", 10*time.Second, false)
-	if err != ErrCachedRequest {
-		t.Fatalf("expected ErrCachedRequest for duplicate completed ID, got %v", err)
+	if _, ok := err.(CachedResponseError); !ok {
+		t.Fatalf("expected CachedResponseError for duplicate completed ID, got %v", err)
 	}
 }
 

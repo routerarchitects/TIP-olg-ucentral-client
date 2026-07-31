@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math/big"
 	"sync"
 	"time"
@@ -359,8 +360,8 @@ func (m *DefaultRequestManager) ReleaseOperationLock(ctx context.Context, operat
 }
 
 // RespondAndRetain transfers stateLock ownership to a background operation and cleans up the transaction.
-// Note: The `response` argument is currently unused. It is reserved for
-// the TransactionCache implementation in Epic 3 (PR 3.2), which will cache this payload.
+// Note: The response payload is passed through the terminal transition and stored by the
+// transaction cache for completed requests.
 func (m *DefaultRequestManager) RespondAndRetain(ctx context.Context, rpcID string, response []byte) (string, error) {
 	m.mu.Lock()
 
@@ -634,15 +635,26 @@ func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState Tran
 func (m *DefaultRequestManager) Start(ctx context.Context) {
 	if ops, err := m.store.GetActive(ctx); err == nil {
 		m.mu.Lock()
+		now := time.Now().UTC()
 		for _, op := range ops {
+			updatedAt, errTime := time.Parse(time.RFC3339, op.UpdatedAt)
+			// TODO: Make this 15-minute TTL configurable via RequestManager options
+			isExpired := errTime == nil && now.Sub(updatedAt) > 15*time.Minute
+
 			if m.activeStateTx == "" {
-				// A background operation was running when we crashed.
-				// Re-acquire the memory lock to protect the device until it finishes!
-				// We must TryLock stateLock in case it's magically held (shouldn't be on fresh boot).
-				if m.stateLock.TryLock() {
-					m.activeStateTx = op.OperationID
-					m.activeStateOwner = LockOwnedByOperation
+				if !isExpired {
+					// A background operation was running when we crashed.
+					// Re-acquire the memory lock to protect the device until it finishes!
+					if m.stateLock.TryLock() {
+						m.activeStateTx = op.OperationID
+						m.activeStateOwner = LockOwnedByOperation
+					}
 				}
+			} else if !isExpired {
+				// We already acquired the lock for an active operation, but we found another one!
+				// This indicates an inconsistent persistent state (e.g., bug or crash mid-reconciliation).
+				// Log a warning so it's surfaced as a reconciliation failure rather than silently deleted.
+				log.Printf("Warning: Found conflicting active record %s on startup; sweeper will clean it", op.OperationID)
 			}
 		}
 		m.mu.Unlock()
@@ -676,8 +688,9 @@ func (m *DefaultRequestManager) sweep(ctx context.Context) {
 	now := time.Now().UTC()
 
 	for _, op := range ops {
-		createdAt, errTime := time.Parse(time.RFC3339, op.CreatedAt)
-		isExpired := errTime == nil && now.Sub(createdAt) > 15*time.Minute
+		updatedAt, errTime := time.Parse(time.RFC3339, op.UpdatedAt)
+		// TODO: Make this 15-minute TTL configurable via RequestManager options
+		isExpired := errTime == nil && now.Sub(updatedAt) > 15*time.Minute
 
 		m.mu.Lock()
 		isActive := (m.activeStateTx == op.OperationID)

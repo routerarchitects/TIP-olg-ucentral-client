@@ -26,4 +26,3 @@ type OperationStore interface {
 	GetActive(ctx context.Context, limit int) ([]*PersistentOperation, error)
 	Delete(ctx context.Context, operationID string) error
 }
-

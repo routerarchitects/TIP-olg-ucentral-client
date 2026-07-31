@@ -65,16 +65,16 @@ func (c *TransactionCache) Set(canonicalCloudID string, payload []byte, ttl time
 func (c *TransactionCache) Get(canonicalCloudID string) ([]byte, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	
+
 	entry, ok := c.items[canonicalCloudID]
 	if !ok {
 		return nil, false
 	}
-	
+
 	if time.Now().UnixNano() > entry.ExpiresAt {
 		return nil, false // Expired, will be cleaned up by sweeper
 	}
-	
+
 	return entry.Payload, true
 }
 
@@ -98,7 +98,7 @@ func (c *TransactionCache) StartCacheSweeper(ctx context.Context, interval time.
 func (c *TransactionCache) sweepCache() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	
+
 	now := time.Now().UnixNano()
 	for key, entry := range c.items {
 		if now > entry.ExpiresAt {

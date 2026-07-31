@@ -51,7 +51,7 @@ func TestTransactionCache_ExpirationAndSweep(t *testing.T) {
 
 	// Set with very short TTL
 	cache.Set("key1", []byte("payload1"), 50*time.Millisecond)
-	
+
 	// Set with long TTL
 	cache.Set("key2", []byte("payload2"), 1*time.Hour)
 

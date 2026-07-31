@@ -133,7 +133,7 @@ func (s *DiskOperationStore) GetActive(ctx context.Context, limit int) ([]*Persi
 		if err := json.Unmarshal(data, &op); err != nil {
 			continue // Skip corrupted files
 		}
-		
+
 		ops = append(ops, &op)
 	}
 

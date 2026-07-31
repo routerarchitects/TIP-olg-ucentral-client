@@ -937,8 +937,11 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     func (m *DefaultRequestManager) Fail(rpcID string, errResponse []byte) error
     func (m *DefaultRequestManager) Timeout(rpcID string) error
 
-#### PR 3.2: Duplicate Attachment & Cache TTL
-*   **Target File:** `pkg/reqmgr/cache.go`, `pkg/reqmgr/store.go`, `pkg/reqmgr/manager.go` (extensions)
+#### PR 3.2: Duplicate Attachment, Cache TTL & Persistence Implementation
+*   **Target File:** `pkg/reqmgr/cache.go`, `pkg/reqmgr/store.go` (concrete implementation), `pkg/reqmgr/manager.go` (extensions)
+*   **Concrete Persistence:**
+    *   Implement a durable `FileOperationStore` (or equivalent) in `store.go` that satisfies the `OperationStore` interface.
+    *   This implementation must guarantee that active operations are durably flushed to disk to survive host reboots.
 *   **Core Cache Structures:**
     ```go
     package reqmgr
@@ -982,14 +985,13 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     // Terminal Lifecycle:
     // When a terminal downstream status is received, the operation is immediately completed
     // in memory, the memory lock is released, and the OperationStore record is deleted.
-    // GetActive() must return the single active operation (if any) so the daemon can re-acquire
-    // the memory lock upon startup. GetPendingTerminalDelivery() is used by the background
-    // sweeper to locate and delete orphaned records if the daemon crashed before a deletion completed.
+    // GetActive() must return all active operations so the daemon can re-acquire
+    // the memory lock upon startup and the background sweeper can locate and delete 
+    // orphaned records if the daemon crashed before a deletion completed.
     type OperationStore interface {
     	Save(ctx context.Context, operation *PersistentOperation) error
     	Get(ctx context.Context, operationID string) (*PersistentOperation, error)
-    	GetActive(ctx context.Context) (*PersistentOperation, error)
-    	GetPendingTerminalDelivery(ctx context.Context) ([]*PersistentOperation, error)
+    	GetActive(ctx context.Context) ([]*PersistentOperation, error)
     	Delete(ctx context.Context, operationID string) error
     }
     ```

@@ -27,17 +27,3 @@ type OperationStore interface {
 	Delete(ctx context.Context, operationID string) error
 }
 
-// NoopOperationStore provides a dummy store that does nothing, useful for environments
-// that do not require persistence.
-type NoopOperationStore struct{}
-
-func (s *NoopOperationStore) Save(ctx context.Context, operation *PersistentOperation) error {
-	return nil
-}
-func (s *NoopOperationStore) Get(ctx context.Context, operationID string) (*PersistentOperation, error) {
-	return nil, nil
-}
-func (s *NoopOperationStore) GetActive(ctx context.Context, limit int) ([]*PersistentOperation, error) {
-	return nil, nil
-}
-func (s *NoopOperationStore) Delete(ctx context.Context, operationID string) error { return nil }

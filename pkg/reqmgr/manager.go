@@ -66,7 +66,7 @@ func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLCon
 		return nil, errors.New("cache cannot be nil")
 	}
 	if store == nil {
-		store = &NoopOperationStore{}
+		return nil, fmt.Errorf("store cannot be nil")
 	}
 
 	return &DefaultRequestManager{

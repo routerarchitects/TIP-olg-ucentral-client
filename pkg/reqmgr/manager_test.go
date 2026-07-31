@@ -1182,7 +1182,7 @@ func TestTCRM023_CapacityExceeded(t *testing.T) {
 	config := CacheTTLConfig{}
 	scheduler := queues.NewPriorityScheduler(10, 10)
 	store := &mockStore{}
-	
+
 	// Create manager with a strict limit of 3 concurrent requests
 	m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store, 3, 15*time.Minute)
 
@@ -1191,12 +1191,12 @@ func TestTCRM023_CapacityExceeded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create req-1: %v", err)
 	}
-	
+
 	_, err = m.CreateTransaction("session-1", json.RawMessage(`"req-2"`), true, "ping", 10*time.Second, false)
 	if err != nil {
 		t.Fatalf("failed to create req-2: %v", err)
 	}
-	
+
 	_, err = m.CreateTransaction("session-1", json.RawMessage(`"req-3"`), true, "ping", 10*time.Second, false)
 	if err != nil {
 		t.Fatalf("failed to create req-3: %v", err)

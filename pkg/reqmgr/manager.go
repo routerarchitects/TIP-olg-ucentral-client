@@ -43,16 +43,16 @@ const (
 )
 
 type DefaultRequestManager struct {
-	mu                   sync.Mutex
-	dispatchTimeout      time.Duration
-	transactionsByRPCID  map[string]*Transaction
-	activeCloudRequests  map[string]string // Key: RequestKey, Value: RPCID
-	stateLock            sync.Mutex
-	activeStateTx        string         // RPCID or OperationID holding the state lock
-	activeStateOwner     LockOwnerState // Explicitly tracks ownership phase
-	releasingOperationID string         // Operation ID currently being deleted
-	cache                *TransactionCache
-	cacheTTLConfig       CacheTTLConfig
+	mu                    sync.Mutex
+	dispatchTimeout       time.Duration
+	transactionsByRPCID   map[string]*Transaction
+	activeCloudRequests   map[string]string // Key: RequestKey, Value: RPCID
+	stateLock             sync.Mutex
+	activeStateTx         string         // RPCID or OperationID holding the state lock
+	activeStateOwner      LockOwnerState // Explicitly tracks ownership phase
+	releasingOperationID  string         // Operation ID currently being deleted
+	cache                 *TransactionCache
+	cacheTTLConfig        CacheTTLConfig
 	scheduler             *queues.PriorityScheduler
 	store                 OperationStore
 	pendingReplies        map[string]PendingReply
@@ -69,11 +69,11 @@ func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLCon
 	}
 
 	return &DefaultRequestManager{
-		dispatchTimeout:     dispatchTimeout,
-		transactionsByRPCID: make(map[string]*Transaction),
-		activeCloudRequests: make(map[string]string),
-		cache:               cache,
-		cacheTTLConfig:      cacheTTLConfig,
+		dispatchTimeout:       dispatchTimeout,
+		transactionsByRPCID:   make(map[string]*Transaction),
+		activeCloudRequests:   make(map[string]string),
+		cache:                 cache,
+		cacheTTLConfig:        cacheTTLConfig,
 		scheduler:             scheduler,
 		store:                 store,
 		pendingReplies:        make(map[string]PendingReply),
@@ -648,7 +648,7 @@ func (m *DefaultRequestManager) Start(ctx context.Context) {
 		for _, op := range ops {
 			updatedAt, errTime := time.Parse(time.RFC3339, op.UpdatedAt)
 			isExpired := errTime == nil && now.Sub(updatedAt) > m.sweeperTTL
-			
+
 			if m.activeStateTx == "" {
 				if !isExpired {
 					// A background operation was running when we crashed.

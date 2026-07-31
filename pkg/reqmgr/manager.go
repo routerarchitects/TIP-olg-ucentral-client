@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math/big"
 	"sync"
 	"time"
@@ -112,7 +113,7 @@ func CanonicalRequestKey(sessionID string, id json.RawMessage) (string, error) {
 		return "", fmt.Errorf("invalid json-rpc id: %w", err)
 	}
 
-	if err := decoder.Decode(new(interface{})); err != io.EOF {
+	if err := decoder.Decode(new(interface{})) ; err != io.EOF {
 		return "", errors.New("invalid json-rpc id: trailing content")
 	}
 
@@ -360,6 +361,9 @@ func (m *DefaultRequestManager) ReleaseOperationLock(ctx context.Context, operat
 	m.mu.Unlock()
 
 	err := m.store.Delete(ctx, operationID)
+	if err != nil {
+		log.Printf("reqmgr: ReleaseOperationLock failed to delete operation %s: %v", operationID, err)
+	}
 
 	m.mu.Lock()
 	if m.releasingOperationID == operationID {
@@ -431,6 +435,7 @@ func (m *DefaultRequestManager) RespondAndRetain(ctx context.Context, rpcID stri
 	defer m.mu.Unlock()
 
 	if err != nil {
+		log.Printf("reqmgr: RespondAndRetain failed to persist operation %s: %v", operationID, err)
 		tx.HandoffInProgress = false
 		// NOTE: The caller is expected to handle this failure (e.g., by retrying the
 		// RespondAndRetain process or failing the upgrade). The robust retry logic
@@ -484,6 +489,7 @@ func (m *DefaultRequestManager) RespondAndRetain(ctx context.Context, rpcID stri
 			m.mu.Lock()
 
 			if errDelete != nil {
+				log.Printf("reqmgr: failed to safely release persistent record for operation %s (in-memory lock was still released): %v", operationID, errDelete)
 				// The active record was NOT deleted from the database, but ReleaseOperationLock
 				// guarantees that it WAS successfully unlocked in memory!
 				// The background sweeper will eventually clean up the stale DB record.
@@ -663,6 +669,8 @@ func (m *DefaultRequestManager) Start(ctx context.Context) {
 			}
 		}
 		m.mu.Unlock()
+	} else {
+		log.Printf("reqmgr: Start() failed to load active operations from store: %v", err)
 	}
 
 	go func() {
@@ -687,6 +695,7 @@ func (m *DefaultRequestManager) Start(ctx context.Context) {
 func (m *DefaultRequestManager) sweep(ctx context.Context) {
 	ops, err := m.store.GetActive(ctx, m.activeRecordLimit)
 	if err != nil {
+		log.Printf("reqmgr: sweeper failed to read active operations: %v", err)
 		return
 	}
 
@@ -720,7 +729,9 @@ func (m *DefaultRequestManager) sweep(ctx context.Context) {
 		// the sweeper directly cleans up the orphaned DB record.
 		if !isActive {
 			m.mu.Unlock()
-			_ = m.store.Delete(ctx, op.OperationID)
+			if err := m.store.Delete(ctx, op.OperationID); err != nil {
+				log.Printf("reqmgr: sweeper failed to delete orphaned operation %s: %v", op.OperationID, err)
+			}
 			continue
 		}
 

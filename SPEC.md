@@ -842,7 +842,7 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     	RPCID    string
     	CloudSessionID   string
     	CloudRPCID       json.RawMessage
-    	RequestKey       string // sessionID:method:canonicalID (e.g. "session-uuid:configure:number:42")
+    	RequestKey       string // sessionID:typedCanonicalID (e.g. "session-uuid:n:42")
     	RespondToCloud   bool
     	Method           string
     	State            TransactionState
@@ -876,12 +876,13 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     	pendingReplies              map[string][]byte       // Key: RPCID
     }
 
-    // CanonicalRequestKey formats the session ID, method, and raw JSON-RPC ID into a strongly-typed string (e.g., "session-uuid:configure:number:42", or "session-uuid:notification:<generated-uuid>" for notifications)
-    // to strictly prevent collisions across methods, numeric/string IDs, and different Cloud sessions. This key MUST be used by
+    // CanonicalRequestKey formats the session ID and raw JSON-RPC ID into a strongly-typed string (e.g., "session-uuid:n:42", or "session-uuid:<generated-uuid>" for notifications)
+    // to strictly prevent collisions across numeric/string IDs, and different Cloud sessions. The method is intentionally stripped, meaning
+    // duplicate IDs across different methods (e.g. configure id=42 and ping id=42) will be properly rejected. This key MUST be used by
     // activeCloudRequests, TransactionCache, duplicate-active detection, and completed-response replay.
-    func CanonicalRequestKey(sessionID string, method string, id json.RawMessage) (string, error)
+    func CanonicalRequestKey(sessionID string, id json.RawMessage) (string, error)
 
-    func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLConfig, cache *TransactionCache, scheduler *PriorityScheduler, store OperationStore) *DefaultRequestManager
+    func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLConfig, cache *TransactionCache, scheduler *PriorityScheduler, store OperationStore) (*DefaultRequestManager, error)
     
     // CreateTransaction creates a new transaction.
     // The Request Manager must canonicalize the incoming Cloud JSON-RPC ID and enforce the following order:
@@ -925,16 +926,22 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     // by a NATS subscriber, or by the timeout timer.
     func (m *DefaultRequestManager) Complete(rpcID string, response []byte) error
     // RespondAndRetain separates the synchronous JSON-RPC transaction from a persistent background operation (e.g. upgrade).
-    // It MUST follow this sequence under the Request Manager mutex: (1) Validate the transaction is valid for retention (e.g. upgrade).
-    // (2) Persist the OperationStore record. (3) Transfer state-changing reservation ownership from RPCID to OperationID.
-    // (4) Cancel the ordinary response timer. (5) Cache the initial "started" response. (6) Remove the JSON-RPC transaction from active maps and mark it completed. (7) Release mutex and enqueue response.
-    func (m *DefaultRequestManager) RespondAndRetain(rpcID string, response []byte) error
+    // It MUST follow this sequence: (1) Lock mutex and validate the transaction is valid for retention (e.g. upgrade).
+    // (2) Cancel the ordinary response timer and pre-transfer state-changing reservation ownership to a new OperationID.
+    // (3) Unlock mutex and persist the OperationStore record (disk I/O) with a bounded context.
+    // (4) Re-lock mutex. If persistence fails, roll back the lock transfer. If successful, remove the JSON-RPC transaction
+    // from active maps and mark it completed via terminal transition.
+    // Note: The `response` argument caching and enqueuing is deferred to Epic 3 (PR 3.2).
+    func (m *DefaultRequestManager) RespondAndRetain(ctx context.Context, rpcID string, response []byte) (string, error)
 
     func (m *DefaultRequestManager) Fail(rpcID string, errResponse []byte) error
     func (m *DefaultRequestManager) Timeout(rpcID string) error
 
-#### PR 3.2: Duplicate Attachment & Cache TTL
-*   **Target File:** `pkg/reqmgr/cache.go`, `pkg/reqmgr/store.go`, `pkg/reqmgr/manager.go` (extensions)
+#### PR 3.2: Duplicate Attachment, Cache TTL & Persistence Implementation
+*   **Target File:** `pkg/reqmgr/cache.go`, `pkg/reqmgr/store.go` (concrete implementation), `pkg/reqmgr/manager.go` (extensions)
+*   **Concrete Persistence:**
+    *   Implement a durable `FileOperationStore` (or equivalent) in `store.go` that satisfies the `OperationStore` interface.
+    *   This implementation must guarantee that active operations are durably flushed to disk to survive host reboots.
 *   **Core Cache Structures:**
     ```go
     package reqmgr
@@ -976,15 +983,15 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     // and host reboot. An in-memory-only implementation does not satisfy this interface contract.
     //
     // Terminal Lifecycle:
-    // When a terminal downstream status is received, the daemon first saves the operation
-    // with Active=false and its terminal Stage/Status. After the final Cloud response or progress
-    // notification has been successfully queued and the TransactionCache entry has been stored,
-    // the daemon deletes the OperationStore record. GetActive() must return only records where Active=true. On startup, the daemon must recover both Active=true records and Active=false records (via GetPendingTerminalDelivery) to resume Cloud delivery before deleting them.
+    // When a terminal downstream status is received, the operation is immediately completed
+    // in memory, the memory lock is released, and the OperationStore record is deleted.
+    // GetActive() must return all active operations so the daemon can re-acquire
+    // the memory lock upon startup and the background sweeper can locate and delete 
+    // orphaned records if the daemon crashed before a deletion completed.
     type OperationStore interface {
     	Save(ctx context.Context, operation *PersistentOperation) error
     	Get(ctx context.Context, operationID string) (*PersistentOperation, error)
-    	GetActive(ctx context.Context) (*PersistentOperation, error)
-    	GetPendingTerminalDelivery(ctx context.Context) ([]*PersistentOperation, error)
+    	GetActive(ctx context.Context) ([]*PersistentOperation, error)
     	Delete(ctx context.Context, operationID string) error
     }
     ```

@@ -1269,3 +1269,38 @@ func TestTCRM024_ExpiredRecordDeleteObservability(t *testing.T) {
 		t.Fatalf("expected log indicating failure to delete expired operation, got: %s", logOutput)
 	}
 }
+
+func TestTCRM025_RespondToCloudFalsePreventsCache(t *testing.T) {
+	cache := NewTransactionCache()
+	config := CacheTTLConfig{}
+	scheduler := queues.NewPriorityScheduler(10, 10)
+	store := &mockStore{}
+	m, _ := NewRequestManager(1*time.Minute, config, cache, scheduler, store, 10, 1*time.Hour, 100)
+	// We don't need m.Start() because we're just testing synchronous terminal methods
+
+	cloudRPCID := json.RawMessage(`"req-test-no-cache"`)
+	
+	// Create transaction with respondToCloud = false
+	tx, err := m.CreateTransaction("session-1", cloudRPCID, false, "ping", 10*time.Second, false)
+	if err != nil {
+		t.Fatalf("failed to create transaction: %v", err)
+	}
+
+	m.MarkPreparingDispatch(tx.RPCID)
+	m.MarkPendingPublish(tx.RPCID)
+	m.MarkInFlight(tx.RPCID)
+	
+	// Complete successfully
+	payload := []byte(`{"result":"ok"}`)
+	err = m.Complete(tx.RPCID, payload)
+	if err != nil {
+		t.Fatalf("failed to complete transaction: %v", err)
+	}
+
+	// Verify it was NOT cached
+	reqKey, _ := CanonicalRequestKey("session-1", cloudRPCID)
+	_, found := cache.Get(reqKey)
+	if found {
+		t.Fatalf("expected response to NOT be cached when respondToCloud is false")
+	}
+}

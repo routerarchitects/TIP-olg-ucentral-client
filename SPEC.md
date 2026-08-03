@@ -918,7 +918,7 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     // (1b) If the transaction is in TxPendingPublish, store the response in pendingReplies, return nil, and DO NOT proceed.
     // (2) Immediately mark the transaction state as terminal to win the race.
     // (3) Translate the downstream result and build the exact final Cloud response.
-    // (4) Store the response in TransactionCache (only if RespondToCloud=true and RequestKey is valid), determining the correct TTL by calling `m.cacheTTLConfig.TTLForMethod(transaction.Method)`.
+    // (4) If this is a successful completion (Complete), store the response in TransactionCache (only if RespondToCloud=true and RequestKey is valid), determining the correct TTL by calling `m.cacheTTLConfig.TTLForMethod(transaction.Method)`. Do not cache failures or timeouts.
     // (5) Remove active indexes (activeCloudRequests, transactionsByRPCID) and release the activeStateTx lock if held by this rpcID.
     // (6) Release the Request Manager mutex.
     // (7) Reserve/enqueue Priority-0 delivery of the cached response. If reservation fails, DO NOT alter the transaction state. The true device outcome must be preserved. Simply trigger path recovery.

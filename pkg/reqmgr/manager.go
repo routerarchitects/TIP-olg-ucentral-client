@@ -330,8 +330,6 @@ func (m *DefaultRequestManager) Complete(rpcID string, response []byte) error {
 		m.pendingReplies[rpcID] = PendingReply{Payload: bytes.Clone(response), State: TxCompleted}
 		return nil
 	}
-
-	// Cache logic would go here in PR 3.2
 	return m.terminalTransition(rpcID, TxCompleted, response)
 }
 

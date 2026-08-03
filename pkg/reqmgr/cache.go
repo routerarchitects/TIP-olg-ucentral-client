@@ -72,7 +72,7 @@ func (c *TransactionCache) Get(canonicalCloudID string) ([]byte, bool) {
 		return nil, false
 	}
 
-	if time.Now().UnixNano() > entry.ExpiresAt {
+	if time.Now().UnixNano() >= entry.ExpiresAt {
 		return nil, false // Expired, will be cleaned up by sweeper
 	}
 
@@ -105,7 +105,7 @@ func (c *TransactionCache) sweepCache() {
 
 	now := time.Now().UnixNano()
 	for key, entry := range c.items {
-		if now > entry.ExpiresAt {
+		if now >= entry.ExpiresAt {
 			delete(c.items, key)
 		}
 	}

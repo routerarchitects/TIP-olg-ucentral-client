@@ -3,6 +3,7 @@ package reqmgr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -28,17 +29,31 @@ func NewDiskOperationStore(basePath string) (*DiskOperationStore, error) {
 	return &DiskOperationStore{basePath: basePath}, nil
 }
 
-func (s *DiskOperationStore) getPath(operationID string) string {
-	return filepath.Join(s.basePath, operationID+".json")
+func (s *DiskOperationStore) getPath(operationID string) (string, error) {
+	if _, err := uuid.Parse(operationID); err != nil {
+		return "", fmt.Errorf("invalid operation ID: %w", err)
+	}
+	return filepath.Join(s.basePath, operationID+".json"), nil
 }
 
 func (s *DiskOperationStore) Save(ctx context.Context, operation *PersistentOperation) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	if operation == nil {
+		return errors.New("operation cannot be nil")
+	}
+
 	data, err := json.Marshal(operation)
 	if err != nil {
 		return err
 	}
 
-	targetPath := s.getPath(operation.OperationID)
+	targetPath, err := s.getPath(operation.OperationID)
+	if err != nil {
+		return err
+	}
 	tempPath := fmt.Sprintf("%s.tmp.%s", targetPath, uuid.New().String())
 
 	f, err := os.OpenFile(tempPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0640)
@@ -91,7 +106,12 @@ func (s *DiskOperationStore) Get(ctx context.Context, operationID string) (*Pers
 	default:
 	}
 
-	data, err := os.ReadFile(s.getPath(operationID))
+	targetPath, err := s.getPath(operationID)
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := os.ReadFile(targetPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -177,7 +197,15 @@ func (s *DiskOperationStore) GetActive(ctx context.Context, limit int) ([]*Persi
 }
 
 func (s *DiskOperationStore) Delete(ctx context.Context, operationID string) error {
-	return s.deletePathDurably(s.getPath(operationID))
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	targetPath, err := s.getPath(operationID)
+	if err != nil {
+		return err
+	}
+	return s.deletePathDurably(targetPath)
 }
 
 func (s *DiskOperationStore) deletePathDurably(path string) error {

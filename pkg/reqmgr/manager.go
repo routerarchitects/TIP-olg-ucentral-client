@@ -151,7 +151,7 @@ func (m *DefaultRequestManager) CreateTransaction(sessionID string, cloudRPCID j
 
 	// 1. Check cache for duplicates of already completed requests
 	if cachedPayload, ok := m.cache.Get(reqKey); ok {
-		return nil, CachedResponseError{Payload: cachedPayload}
+		return nil, &CachedResponseError{Payload: cachedPayload}
 	}
 
 	// 2. Check active map
@@ -646,8 +646,10 @@ func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState Tran
 	return nil
 }
 
-// Start runs the background sweeper to clean up orphaned persistent operations.
+// Start runs the background sweepers to clean up orphaned persistent operations and expired cache entries.
 func (m *DefaultRequestManager) Start(ctx context.Context) {
+	m.cache.StartCacheSweeper(ctx, 1*time.Minute)
+
 	if ops, err := m.store.GetActive(ctx, m.activeRecordLimit); err == nil {
 		m.mu.Lock()
 		now := time.Now().UTC()

@@ -13,7 +13,7 @@ type CachedResponseError struct {
 	Payload []byte
 }
 
-func (e CachedResponseError) Error() string {
+func (e *CachedResponseError) Error() string {
 	return "request already completed and cached"
 }
 

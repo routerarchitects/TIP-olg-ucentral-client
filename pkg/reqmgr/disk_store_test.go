@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -191,18 +192,13 @@ func TestDiskOperationStore_GetActiveCorruptPolicy(t *testing.T) {
 		t.Fatalf("expected 0 ops, got %d", len(ops))
 	}
 
-	quarantinePaths := []string{
-		tempDir + "/quarantine/11111111-1111-1111-1111-111111111111.json",
-		tempDir + "/quarantine/22222222-2222-2222-2222-222222222222.json",
-		tempDir + "/quarantine/33333333-3333-3333-3333-333333333333.json",
-		tempDir + "/quarantine/55555555-5555-5555-5555-555555555555.json",
-	}
-
 	for i, path := range []string{corruptPath1, corruptPath2, corruptPath3, corruptPath4} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("expected file %d to be removed from original location", i)
 		}
-		if _, err := os.Stat(quarantinePaths[i]); os.IsNotExist(err) {
+		
+		matches, err := filepath.Glob(tempDir + "/quarantine/" + filepath.Base(path) + ".*.corrupt")
+		if err != nil || len(matches) == 0 {
 			t.Fatalf("expected file %d to exist in quarantine directory", i)
 		}
 	}

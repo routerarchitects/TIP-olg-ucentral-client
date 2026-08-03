@@ -172,20 +172,26 @@ func (s *DiskOperationStore) GetActive(ctx context.Context, limit int) ([]*Persi
 
 		if _, err := uuid.Parse(op.OperationID); err != nil {
 			log.Printf("reqmgr: invalid operation ID %q in file %s, treating as corrupt and quarantining: %v", op.OperationID, path, err)
-			_ = s.quarantinePathDurably(path)
+			if qErr := s.quarantinePathDurably(path); qErr != nil {
+				log.Printf("reqmgr: failed to durably quarantine corrupt file %s: %v", path, qErr)
+			}
 			continue
 		}
 
 		expectedName := op.OperationID + ".json"
 		if entry.Name() != expectedName {
 			log.Printf("reqmgr: operation ID mismatch (expected %s, got %s), treating as corrupt and quarantining", expectedName, entry.Name())
-			_ = s.quarantinePathDurably(path)
+			if qErr := s.quarantinePathDurably(path); qErr != nil {
+				log.Printf("reqmgr: failed to durably quarantine corrupt file %s: %v", path, qErr)
+			}
 			continue
 		}
 
 		if _, err := time.Parse(time.RFC3339, op.UpdatedAt); err != nil {
 			log.Printf("reqmgr: invalid UpdatedAt %q in file %s, treating as corrupt and quarantining: %v", op.UpdatedAt, path, err)
-			_ = s.quarantinePathDurably(path)
+			if qErr := s.quarantinePathDurably(path); qErr != nil {
+				log.Printf("reqmgr: failed to durably quarantine corrupt file %s: %v", path, qErr)
+			}
 			continue
 		}
 
@@ -244,7 +250,10 @@ func (s *DiskOperationStore) deletePathDurably(path string) error {
 func (s *DiskOperationStore) quarantinePathDurably(path string) error {
 	filename := filepath.Base(path)
 	quarantineDir := filepath.Join(s.basePath, "quarantine")
-	target := filepath.Join(quarantineDir, filename)
+	target := filepath.Join(
+		quarantineDir,
+		fmt.Sprintf("%s.%d.corrupt", filename, time.Now().UnixNano()),
+	)
 
 	if err := os.Rename(path, target); err != nil {
 		return err

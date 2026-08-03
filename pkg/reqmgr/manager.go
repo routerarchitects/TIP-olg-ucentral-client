@@ -21,7 +21,6 @@ var (
 	ErrAlreadyTerminal            = errors.New("transaction already in terminal state")
 	ErrTransactionNotFound        = errors.New("transaction not found")
 	ErrDuplicateRequest           = errors.New("duplicate request already in progress")
-	ErrCachedRequest              = errors.New("request already completed and cached")
 	ErrStateLockBusy              = errors.New("device is currently executing a state-changing operation")
 	ErrOperationNotActive         = errors.New("operation is not active")
 	ErrOperationReleaseInProgress = errors.New("operation release already in progress")
@@ -67,7 +66,7 @@ func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLCon
 		return nil, errors.New("cache cannot be nil")
 	}
 	if store == nil {
-		store = &NoopOperationStore{}
+		return nil, fmt.Errorf("store cannot be nil")
 	}
 
 	return &DefaultRequestManager{
@@ -150,10 +149,9 @@ func (m *DefaultRequestManager) CreateTransaction(sessionID string, cloudRPCID j
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// 1. Check cache (simplified for now, full impl in PR 3.2)
-	if _, ok := m.cache.Get(reqKey); ok {
-		// Should replay, but for PR 3.1 we just return busy for now
-		return nil, ErrCachedRequest
+	// 1. Check cache for duplicates of already completed requests
+	if cachedPayload, ok := m.cache.Get(reqKey); ok {
+		return nil, &CachedResponseError{Payload: cachedPayload}
 	}
 
 	// 2. Check active map
@@ -332,8 +330,6 @@ func (m *DefaultRequestManager) Complete(rpcID string, response []byte) error {
 		m.pendingReplies[rpcID] = PendingReply{Payload: bytes.Clone(response), State: TxCompleted}
 		return nil
 	}
-
-	// Cache logic would go here in PR 3.2
 	return m.terminalTransition(rpcID, TxCompleted, response)
 }
 
@@ -470,8 +466,6 @@ func (m *DefaultRequestManager) RespondAndRetain(ctx context.Context, rpcID stri
 		m.activeStateTx = operationID
 		m.activeStateOwner = LockOwnedByOperation
 	}
-
-	// Cache logic would go here in PR 3.2
 
 	// 4. Safely clean up via the standard terminal transition
 	// If a buffered reply exists, process it with its proper state
@@ -612,6 +606,11 @@ func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState Tran
 	tx.State = finalState
 	tx.Payload = payload
 
+	if finalState == TxCompleted && tx.RespondToCloud && payload != nil {
+		ttl := m.cacheTTLConfig.TTLForMethod(tx.Method)
+		m.cache.Set(tx.RequestKey, payload, ttl)
+	}
+
 	if tx.DispatchTimer != nil {
 		tx.DispatchTimer.Stop()
 		tx.DispatchTimer = nil
@@ -627,9 +626,6 @@ func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState Tran
 
 	hasValidID := tx.RequestKey != ""
 	if hasValidID {
-		if finalState == TxCompleted {
-			m.cache.Set(tx.RequestKey, payload, m.cacheTTLConfig.TTLForMethod(tx.Method))
-		}
 		delete(m.activeCloudRequests, tx.RequestKey)
 	}
 	delete(m.transactionsByRPCID, rpcID)
@@ -648,14 +644,23 @@ func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState Tran
 	return nil
 }
 
-// Start runs the background sweeper to clean up orphaned persistent operations.
+// Start runs the background sweepers to clean up orphaned persistent operations and expired cache entries.
 func (m *DefaultRequestManager) Start(ctx context.Context) {
+	m.cache.StartCacheSweeper(ctx, 1*time.Minute)
+
 	if ops, err := m.store.GetActive(ctx, m.activeRecordLimit); err == nil {
 		m.mu.Lock()
 		now := time.Now().UTC()
 		for _, op := range ops {
 			updatedAt, errTime := time.Parse(time.RFC3339, op.UpdatedAt)
-			isExpired := errTime == nil && now.Sub(updatedAt) > m.sweeperTTL
+
+			// If the timestamp is missing/malformed, treat it as expired to avoid deadlocks.
+			isExpired := true
+			if errTime == nil {
+				isExpired = now.Sub(updatedAt) > m.sweeperTTL
+			} else {
+				log.Printf("reqmgr: Start() encountered invalid timestamp for operation %s, treating as expired: %v", op.OperationID, errTime)
+			}
 
 			if m.activeStateTx == "" {
 				if !isExpired {
@@ -678,21 +683,21 @@ func (m *DefaultRequestManager) Start(ctx context.Context) {
 		defer ticker.Stop()
 
 		// Run once on startup to reconcile state immediately (e.g. clean stale DB records)
-		m.sweep(ctx)
+		m.sweepOrphanedOperations(ctx)
 
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				m.sweep(ctx)
+				m.sweepOrphanedOperations(ctx)
 			}
 		}
 	}()
 }
 
-// sweep periodically attempts to clean up operations that failed to delete.
-func (m *DefaultRequestManager) sweep(ctx context.Context) {
+// sweepOrphanedOperations periodically attempts to clean up operations that failed to delete.
+func (m *DefaultRequestManager) sweepOrphanedOperations(ctx context.Context) {
 	ops, err := m.store.GetActive(ctx, m.activeRecordLimit)
 	if err != nil {
 		log.Printf("reqmgr: sweeper failed to read active operations: %v", err)
@@ -703,7 +708,14 @@ func (m *DefaultRequestManager) sweep(ctx context.Context) {
 
 	for _, op := range ops {
 		updatedAt, errTime := time.Parse(time.RFC3339, op.UpdatedAt)
-		isExpired := errTime == nil && now.Sub(updatedAt) > m.sweeperTTL
+
+		// If the timestamp is missing/malformed, treat it as expired to avoid deadlocks.
+		isExpired := true
+		if errTime == nil {
+			isExpired = now.Sub(updatedAt) > m.sweeperTTL
+		} else {
+			log.Printf("reqmgr: sweeper encountered invalid timestamp for operation %s, treating as expired: %v", op.OperationID, errTime)
+		}
 
 		m.mu.Lock()
 		isActive := (m.activeStateTx == op.OperationID)
@@ -721,7 +733,9 @@ func (m *DefaultRequestManager) sweep(ctx context.Context) {
 			m.mu.Unlock()
 
 			// Delete the stale record from the database
-			_ = m.store.Delete(ctx, op.OperationID)
+			if err := m.store.Delete(ctx, op.OperationID); err != nil {
+				log.Printf("reqmgr: sweeper failed to durably delete expired operation %s: %v", op.OperationID, err)
+			}
 			continue
 		}
 

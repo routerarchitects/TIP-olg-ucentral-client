@@ -196,7 +196,7 @@ func TestDiskOperationStore_GetActiveCorruptPolicy(t *testing.T) {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("expected file %d to be removed from original location", i)
 		}
-		
+
 		matches, err := filepath.Glob(tempDir + "/quarantine/" + filepath.Base(path) + ".*.corrupt")
 		if err != nil || len(matches) == 0 {
 			t.Fatalf("expected file %d to exist in quarantine directory", i)

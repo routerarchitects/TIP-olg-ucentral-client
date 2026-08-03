@@ -962,7 +962,7 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     }
 
     func NewTransactionCache() *TransactionCache
-    func (c *TransactionCache) Set(canonicalCloudID string, payload []byte, ttlSeconds int)
+    func (c *TransactionCache) Set(canonicalCloudID string, payload []byte, ttl time.Duration)
     func (c *TransactionCache) Get(canonicalCloudID string) ([]byte, bool)
 
     type PersistentOperation struct {

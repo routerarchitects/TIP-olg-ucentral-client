@@ -165,7 +165,7 @@ func TestDiskOperationStore_GetActiveCorruptPolicy(t *testing.T) {
 	tempDir, _ := os.MkdirTemp("", "olg-store-test-*")
 	defer os.RemoveAll(tempDir)
 	store, _ := NewDiskOperationStore(tempDir)
-	
+
 	// 1. Corrupt JSON
 	corruptPath1 := tempDir + "/11111111-1111-1111-1111-111111111111.json"
 	os.WriteFile(corruptPath1, []byte("{corrupt-json"), 0640)
@@ -181,7 +181,7 @@ func TestDiskOperationStore_GetActiveCorruptPolicy(t *testing.T) {
 	// 4. Valid JSON, invalid UpdatedAt
 	corruptPath4 := tempDir + "/55555555-5555-5555-5555-555555555555.json"
 	os.WriteFile(corruptPath4, []byte(`{"id":"55555555-5555-5555-5555-555555555555","active":true,"updated_at":"not-a-time"}`), 0640)
-	
+
 	// GetActive should log and quarantine all of them
 	ops, err := store.GetActive(context.Background(), 10)
 	if err != nil {
@@ -190,7 +190,7 @@ func TestDiskOperationStore_GetActiveCorruptPolicy(t *testing.T) {
 	if len(ops) != 0 {
 		t.Fatalf("expected 0 ops, got %d", len(ops))
 	}
-	
+
 	quarantinePaths := []string{
 		tempDir + "/quarantine/11111111-1111-1111-1111-111111111111.json",
 		tempDir + "/quarantine/22222222-2222-2222-2222-222222222222.json",

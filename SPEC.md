@@ -882,7 +882,7 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     // activeCloudRequests, TransactionCache, duplicate-active detection, and completed-response replay.
     func CanonicalRequestKey(sessionID string, id json.RawMessage) (string, error)
 
-    func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLConfig, cache *TransactionCache, scheduler *PriorityScheduler, store OperationStore) (*DefaultRequestManager, error)
+    func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLConfig, cache *TransactionCache, scheduler *PriorityScheduler, store OperationStore, maxConcurrentRequests int, sweeperTTL time.Duration, activeRecordLimit int) (*DefaultRequestManager, error)
     
     // CreateTransaction creates a new transaction.
     // The Request Manager must canonicalize the incoming Cloud JSON-RPC ID and enforce the following order:
@@ -991,7 +991,7 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     type OperationStore interface {
     	Save(ctx context.Context, operation *PersistentOperation) error
     	Get(ctx context.Context, operationID string) (*PersistentOperation, error)
-    	GetActive(ctx context.Context) ([]*PersistentOperation, error)
+    	GetActive(ctx context.Context, limit int) ([]*PersistentOperation, error)
     	Delete(ctx context.Context, operationID string) error
     }
     ```

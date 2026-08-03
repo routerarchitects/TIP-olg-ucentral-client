@@ -173,15 +173,15 @@ func TestDiskOperationStore_GetActiveCorruptPolicy(t *testing.T) {
 
 	// 2. Valid JSON, bad UUID
 	corruptPath2 := tempDir + "/22222222-2222-2222-2222-222222222222.json"
-	os.WriteFile(corruptPath2, []byte(`{"id":"not-a-uuid","active":true,"updated_at":"`+time.Now().Format(time.RFC3339)+`"}`), 0640)
+	os.WriteFile(corruptPath2, []byte(`{"operation_id":"not-a-uuid","active":true,"updated_at":"`+time.Now().Format(time.RFC3339)+`"}`), 0640)
 
 	// 3. Valid JSON, mismatched filename
 	corruptPath3 := tempDir + "/33333333-3333-3333-3333-333333333333.json"
-	os.WriteFile(corruptPath3, []byte(`{"id":"44444444-4444-4444-4444-444444444444","active":true,"updated_at":"`+time.Now().Format(time.RFC3339)+`"}`), 0640)
+	os.WriteFile(corruptPath3, []byte(`{"operation_id":"44444444-4444-4444-4444-444444444444","active":true,"updated_at":"`+time.Now().Format(time.RFC3339)+`"}`), 0640)
 
 	// 4. Valid JSON, invalid UpdatedAt
 	corruptPath4 := tempDir + "/55555555-5555-5555-5555-555555555555.json"
-	os.WriteFile(corruptPath4, []byte(`{"id":"55555555-5555-5555-5555-555555555555","active":true,"updated_at":"not-a-time"}`), 0640)
+	os.WriteFile(corruptPath4, []byte(`{"operation_id":"55555555-5555-5555-5555-555555555555","active":true,"updated_at":"not-a-time"}`), 0640)
 
 	// GetActive should log and quarantine all of them
 	ops, err := store.GetActive(context.Background(), 10)

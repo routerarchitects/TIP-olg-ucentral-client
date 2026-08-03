@@ -1,9 +1,13 @@
 package reqmgr
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
+	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1224,5 +1228,44 @@ func TestTCRM023_CapacityExceeded(t *testing.T) {
 	_, err = m.CreateTransaction("session-1", json.RawMessage(`"req-4"`), true, "ping", 10*time.Second, false)
 	if err != nil {
 		t.Fatalf("failed to create req-4 after freeing capacity: %v", err)
+	}
+}
+
+type deleteFailingMockStore struct {
+	mockStore
+}
+
+func (s *deleteFailingMockStore) GetActive(ctx context.Context, limit int) ([]*PersistentOperation, error) {
+	// Return one expired operation
+	return []*PersistentOperation{
+		{
+			OperationID: "expired-op",
+			UpdatedAt:   time.Now().Add(-2 * time.Hour).Format(time.RFC3339),
+		},
+	}, nil
+}
+
+func (s *deleteFailingMockStore) Delete(ctx context.Context, opID string) error {
+	return errors.New("simulated delete failure")
+}
+
+func TestTCRM024_ExpiredRecordDeleteObservability(t *testing.T) {
+	cache := NewTransactionCache()
+	config := CacheTTLConfig{}
+	scheduler := queues.NewPriorityScheduler(10, 10)
+	store := &deleteFailingMockStore{}
+	m, _ := NewRequestManager(1*time.Minute, config, cache, scheduler, store, 10, 1*time.Hour, 100)
+
+	// We capture logs to verify the log statement was called
+	var logBuf bytes.Buffer
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(os.Stderr)
+
+	// Manually invoke sweepOrphanedOperations
+	m.sweepOrphanedOperations(context.Background())
+
+	logOutput := logBuf.String()
+	if !strings.Contains(logOutput, "sweeper failed to durably delete expired operation expired-op") {
+		t.Fatalf("expected log indicating failure to delete expired operation, got: %s", logOutput)
 	}
 }

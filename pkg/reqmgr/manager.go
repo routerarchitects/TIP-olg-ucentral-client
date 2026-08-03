@@ -735,7 +735,9 @@ func (m *DefaultRequestManager) sweepOrphanedOperations(ctx context.Context) {
 			m.mu.Unlock()
 
 			// Delete the stale record from the database
-			_ = m.store.Delete(ctx, op.OperationID)
+			if err := m.store.Delete(ctx, op.OperationID); err != nil {
+				log.Printf("reqmgr: sweeper failed to durably delete expired operation %s: %v", op.OperationID, err)
+			}
 			continue
 		}
 

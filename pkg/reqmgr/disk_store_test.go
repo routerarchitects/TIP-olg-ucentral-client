@@ -91,15 +91,16 @@ func TestDiskOperationStore_GetActive_SortingAndLimit(t *testing.T) {
 	}
 
 	// Create 3 operations
+	now := time.Now()
 	for i := 0; i < 3; i++ {
 		op := &PersistentOperation{
 			OperationID: uuids[i],
+			UpdatedAt:   now.Add(time.Duration(i) * time.Hour).Format(time.RFC3339),
+			Active:      true,
 		}
 		if err := store.Save(ctx, op); err != nil {
 			t.Fatalf("failed to save op-%d: %v", i+1, err)
 		}
-		// ensure modification times are distinct
-		time.Sleep(10 * time.Millisecond)
 	}
 
 	// GetActive with limit 2
@@ -112,8 +113,8 @@ func TestDiskOperationStore_GetActive_SortingAndLimit(t *testing.T) {
 		t.Fatalf("expected 2 operations, got %d", len(ops))
 	}
 
-	// Because of descending ModTime sort, the newest should be first.
-	// We slept between saves, so uuids[2] is newest, uuids[1] is next, uuids[0] is oldest.
+	// Because of descending UpdatedAt sort, the newest should be first.
+	// uuids[2] is newest (+2 hours), uuids[1] is next (+1 hour).
 	if ops[0].OperationID != uuids[2] {
 		t.Fatalf("expected first element to be newest, got %s", ops[0].OperationID)
 	}
@@ -178,9 +179,38 @@ func TestDiskOperationStore_GetActiveCorruptPolicy(t *testing.T) {
 		t.Fatalf("expected 0 ops, got %d", len(ops))
 	}
 
-	// Verify it was deleted
+	// Verify it was NOT deleted, but moved to quarantine
 	if _, err := os.Stat(corruptPath); !os.IsNotExist(err) {
-		t.Fatalf("expected corrupt file to be deleted")
+		t.Fatalf("expected corrupt file to be removed from original location")
+	}
+	quarantinePath := tempDir + "/quarantine/12345678-1234-1234-1234-123456789012.json"
+	if _, err := os.Stat(quarantinePath); os.IsNotExist(err) {
+		t.Fatalf("expected corrupt file to exist in quarantine directory")
+	}
+}
+
+func TestDiskOperationStore_GetActive_ActiveFilter(t *testing.T) {
+	tempDir, _ := os.MkdirTemp("", "olg-store-test-*")
+	defer os.RemoveAll(tempDir)
+	store, _ := NewDiskOperationStore(tempDir)
+	ctx := context.Background()
+
+	// 1 Active, 1 Inactive
+	opActive := &PersistentOperation{OperationID: "11111111-1111-1111-1111-111111111111", Active: true}
+	opInactive := &PersistentOperation{OperationID: "22222222-2222-2222-2222-222222222222", Active: false}
+	
+	store.Save(ctx, opActive)
+	store.Save(ctx, opInactive)
+
+	ops, err := store.GetActive(ctx, 10)
+	if err != nil {
+		t.Fatalf("GetActive failed: %v", err)
+	}
+	if len(ops) != 1 {
+		t.Fatalf("expected 1 active operation, got %d", len(ops))
+	}
+	if ops[0].OperationID != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("expected active operation to be returned")
 	}
 }
 

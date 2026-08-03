@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -25,6 +26,9 @@ type DiskOperationStore struct {
 func NewDiskOperationStore(basePath string) (*DiskOperationStore, error) {
 	if err := os.MkdirAll(basePath, 0750); err != nil {
 		return nil, fmt.Errorf("failed to create operation store directory: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Join(basePath, "quarantine"), 0750); err != nil {
+		return nil, fmt.Errorf("failed to create quarantine directory: %w", err)
 	}
 	return &DiskOperationStore{basePath: basePath}, nil
 }
@@ -139,61 +143,52 @@ func (s *DiskOperationStore) GetActive(ctx context.Context, limit int) ([]*Persi
 		return nil, err
 	}
 
-	type fileInfo struct {
-		path    string
-		modTime int64
-	}
+	var allOps []*PersistentOperation
 
-	var files []fileInfo
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		files = append(files, fileInfo{
-			path:    filepath.Join(s.basePath, entry.Name()),
-			modTime: info.ModTime().UnixNano(),
-		})
-	}
-
-	// Contract: Sort descending (newest first)
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].modTime > files[j].modTime
-	})
-
-	var ops []*PersistentOperation
-	for _, f := range files {
-		// Respect context cancellation to abort loop if taking too long
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 
-		if limit > 0 && len(ops) >= limit {
-			break
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
 		}
 
-		data, err := os.ReadFile(f.path)
+		path := filepath.Join(s.basePath, entry.Name())
+		data, err := os.ReadFile(path)
 		if err != nil {
-			log.Printf("reqmgr: failed to read active operation file %s: %v", f.path, err)
-			continue // Skip unreadable files
+			log.Printf("reqmgr: failed to read active operation file %s: %v", path, err)
+			continue
 		}
 
 		var op PersistentOperation
 		if err := json.Unmarshal(data, &op); err != nil {
-			log.Printf("reqmgr: failed to parse active operation file %s, treating as corrupt and deleting: %v", f.path, err)
-			if delErr := s.deletePathDurably(f.path); delErr != nil {
-				log.Printf("reqmgr: failed to durably delete corrupt file %s: %v", f.path, delErr)
+			log.Printf("reqmgr: failed to parse active operation file %s, treating as corrupt and quarantining: %v", path, err)
+			if qErr := s.quarantinePathDurably(path); qErr != nil {
+				log.Printf("reqmgr: failed to durably quarantine corrupt file %s: %v", path, qErr)
 			}
-			continue // Skip corrupted files
+			continue
 		}
 
-		ops = append(ops, &op)
+		if !op.Active {
+			continue
+		}
+
+		allOps = append(allOps, &op)
 	}
 
-	return ops, nil
+	// Sort descending (newest first) by UpdatedAt
+	sort.Slice(allOps, func(i, j int) bool {
+		ti, _ := time.Parse(time.RFC3339, allOps[i].UpdatedAt)
+		tj, _ := time.Parse(time.RFC3339, allOps[j].UpdatedAt)
+		return ti.After(tj)
+	})
+
+	if limit > 0 && len(allOps) > limit {
+		allOps = allOps[:limit]
+	}
+
+	return allOps, nil
 }
 
 func (s *DiskOperationStore) Delete(ctx context.Context, operationID string) error {
@@ -223,6 +218,30 @@ func (s *DiskOperationStore) deletePathDurably(path string) error {
 		return fmt.Errorf("failed to sync directory: %w", err)
 	}
 	parentDir.Close()
+
+	return nil
+}
+
+func (s *DiskOperationStore) quarantinePathDurably(path string) error {
+	filename := filepath.Base(path)
+	quarantineDir := filepath.Join(s.basePath, "quarantine")
+	target := filepath.Join(quarantineDir, filename)
+
+	if err := os.Rename(path, target); err != nil {
+		return err
+	}
+
+	// Sync quarantine dir
+	if qDir, err := os.Open(quarantineDir); err == nil {
+		_ = qDir.Sync()
+		qDir.Close()
+	}
+
+	// Sync parent dir
+	if pDir, err := os.Open(s.basePath); err == nil {
+		_ = pDir.Sync()
+		pDir.Close()
+	}
 
 	return nil
 }

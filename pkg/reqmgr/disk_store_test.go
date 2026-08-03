@@ -198,7 +198,7 @@ func TestDiskOperationStore_GetActive_ActiveFilter(t *testing.T) {
 	// 1 Active, 1 Inactive
 	opActive := &PersistentOperation{OperationID: "11111111-1111-1111-1111-111111111111", Active: true}
 	opInactive := &PersistentOperation{OperationID: "22222222-2222-2222-2222-222222222222", Active: false}
-	
+
 	store.Save(ctx, opActive)
 	store.Save(ctx, opInactive)
 

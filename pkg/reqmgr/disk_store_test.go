@@ -165,12 +165,24 @@ func TestDiskOperationStore_GetActiveCorruptPolicy(t *testing.T) {
 	tempDir, _ := os.MkdirTemp("", "olg-store-test-*")
 	defer os.RemoveAll(tempDir)
 	store, _ := NewDiskOperationStore(tempDir)
+	
+	// 1. Corrupt JSON
+	corruptPath1 := tempDir + "/11111111-1111-1111-1111-111111111111.json"
+	os.WriteFile(corruptPath1, []byte("{corrupt-json"), 0640)
 
-	// Create a corrupt file directly
-	corruptPath := tempDir + "/12345678-1234-1234-1234-123456789012.json"
-	os.WriteFile(corruptPath, []byte("{corrupt-json"), 0640)
+	// 2. Valid JSON, bad UUID
+	corruptPath2 := tempDir + "/22222222-2222-2222-2222-222222222222.json"
+	os.WriteFile(corruptPath2, []byte(`{"id":"not-a-uuid","active":true,"updated_at":"`+time.Now().Format(time.RFC3339)+`"}`), 0640)
 
-	// GetActive should log and delete it
+	// 3. Valid JSON, mismatched filename
+	corruptPath3 := tempDir + "/33333333-3333-3333-3333-333333333333.json"
+	os.WriteFile(corruptPath3, []byte(`{"id":"44444444-4444-4444-4444-444444444444","active":true,"updated_at":"`+time.Now().Format(time.RFC3339)+`"}`), 0640)
+
+	// 4. Valid JSON, invalid UpdatedAt
+	corruptPath4 := tempDir + "/55555555-5555-5555-5555-555555555555.json"
+	os.WriteFile(corruptPath4, []byte(`{"id":"55555555-5555-5555-5555-555555555555","active":true,"updated_at":"not-a-time"}`), 0640)
+	
+	// GetActive should log and quarantine all of them
 	ops, err := store.GetActive(context.Background(), 10)
 	if err != nil {
 		t.Fatalf("GetActive failed: %v", err)
@@ -178,14 +190,21 @@ func TestDiskOperationStore_GetActiveCorruptPolicy(t *testing.T) {
 	if len(ops) != 0 {
 		t.Fatalf("expected 0 ops, got %d", len(ops))
 	}
-
-	// Verify it was NOT deleted, but moved to quarantine
-	if _, err := os.Stat(corruptPath); !os.IsNotExist(err) {
-		t.Fatalf("expected corrupt file to be removed from original location")
+	
+	quarantinePaths := []string{
+		tempDir + "/quarantine/11111111-1111-1111-1111-111111111111.json",
+		tempDir + "/quarantine/22222222-2222-2222-2222-222222222222.json",
+		tempDir + "/quarantine/33333333-3333-3333-3333-333333333333.json",
+		tempDir + "/quarantine/55555555-5555-5555-5555-555555555555.json",
 	}
-	quarantinePath := tempDir + "/quarantine/12345678-1234-1234-1234-123456789012.json"
-	if _, err := os.Stat(quarantinePath); os.IsNotExist(err) {
-		t.Fatalf("expected corrupt file to exist in quarantine directory")
+
+	for i, path := range []string{corruptPath1, corruptPath2, corruptPath3, corruptPath4} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("expected file %d to be removed from original location", i)
+		}
+		if _, err := os.Stat(quarantinePaths[i]); os.IsNotExist(err) {
+			t.Fatalf("expected file %d to exist in quarantine directory", i)
+		}
 	}
 }
 
@@ -196,8 +215,8 @@ func TestDiskOperationStore_GetActive_ActiveFilter(t *testing.T) {
 	ctx := context.Background()
 
 	// 1 Active, 1 Inactive
-	opActive := &PersistentOperation{OperationID: "11111111-1111-1111-1111-111111111111", Active: true}
-	opInactive := &PersistentOperation{OperationID: "22222222-2222-2222-2222-222222222222", Active: false}
+	opActive := &PersistentOperation{OperationID: "11111111-1111-1111-1111-111111111111", Active: true, UpdatedAt: time.Now().Format(time.RFC3339)}
+	opInactive := &PersistentOperation{OperationID: "22222222-2222-2222-2222-222222222222", Active: false, UpdatedAt: time.Now().Format(time.RFC3339)}
 
 	store.Save(ctx, opActive)
 	store.Save(ctx, opInactive)

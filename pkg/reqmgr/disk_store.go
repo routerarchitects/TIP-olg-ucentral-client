@@ -170,6 +170,25 @@ func (s *DiskOperationStore) GetActive(ctx context.Context, limit int) ([]*Persi
 			continue
 		}
 
+		if _, err := uuid.Parse(op.OperationID); err != nil {
+			log.Printf("reqmgr: invalid operation ID %q in file %s, treating as corrupt and quarantining: %v", op.OperationID, path, err)
+			_ = s.quarantinePathDurably(path)
+			continue
+		}
+
+		expectedName := op.OperationID + ".json"
+		if entry.Name() != expectedName {
+			log.Printf("reqmgr: operation ID mismatch (expected %s, got %s), treating as corrupt and quarantining", expectedName, entry.Name())
+			_ = s.quarantinePathDurably(path)
+			continue
+		}
+
+		if _, err := time.Parse(time.RFC3339, op.UpdatedAt); err != nil {
+			log.Printf("reqmgr: invalid UpdatedAt %q in file %s, treating as corrupt and quarantining: %v", op.UpdatedAt, path, err)
+			_ = s.quarantinePathDurably(path)
+			continue
+		}
+
 		if !op.Active {
 			continue
 		}
@@ -232,16 +251,26 @@ func (s *DiskOperationStore) quarantinePathDurably(path string) error {
 	}
 
 	// Sync quarantine dir
-	if qDir, err := os.Open(quarantineDir); err == nil {
-		_ = qDir.Sync()
-		qDir.Close()
+	qDir, err := os.Open(quarantineDir)
+	if err != nil {
+		return fmt.Errorf("failed to open quarantine dir for sync: %w", err)
 	}
+	if err := qDir.Sync(); err != nil {
+		qDir.Close()
+		return fmt.Errorf("failed to sync quarantine dir: %w", err)
+	}
+	qDir.Close()
 
 	// Sync parent dir
-	if pDir, err := os.Open(s.basePath); err == nil {
-		_ = pDir.Sync()
-		pDir.Close()
+	pDir, err := os.Open(s.basePath)
+	if err != nil {
+		return fmt.Errorf("failed to open operations dir for sync: %w", err)
 	}
+	if err := pDir.Sync(); err != nil {
+		pDir.Close()
+		return fmt.Errorf("failed to sync operations dir: %w", err)
+	}
+	pDir.Close()
 
 	return nil
 }

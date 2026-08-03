@@ -1279,7 +1279,7 @@ func TestTCRM025_RespondToCloudFalsePreventsCache(t *testing.T) {
 	// We don't need m.Start() because we're just testing synchronous terminal methods
 
 	cloudRPCID := json.RawMessage(`"req-test-no-cache"`)
-	
+
 	// Create transaction with respondToCloud = false
 	tx, err := m.CreateTransaction("session-1", cloudRPCID, false, "ping", 10*time.Second, false)
 	if err != nil {
@@ -1289,7 +1289,7 @@ func TestTCRM025_RespondToCloudFalsePreventsCache(t *testing.T) {
 	m.MarkPreparingDispatch(tx.RPCID)
 	m.MarkPendingPublish(tx.RPCID)
 	m.MarkInFlight(tx.RPCID)
-	
+
 	// Complete successfully
 	payload := []byte(`{"result":"ok"}`)
 	err = m.Complete(tx.RPCID, payload)

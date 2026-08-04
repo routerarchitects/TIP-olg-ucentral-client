@@ -270,6 +270,18 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, sessionID string
 		timeout = time.Duration(c.config.ConnectTimeoutSeconds) * time.Second
 	}
 
+	// Force-close the socket if context cancels during the blocking handshake!
+	watchCtx, cancelWatch := context.WithCancel(context.Background())
+	defer cancelWatch()
+	go func() {
+		select {
+		case <-watchCtx.Done(): // Handshake finished normally
+			return
+		case <-ctx.Done():      // Daemon was killed!
+			c.conn.Close()
+		}
+	}()
+
 	c.conn.SetWriteDeadline(time.Now().Add(timeout))
 	if err := c.conn.WriteJSON(req); err != nil {
 		log.Printf("ws: failed to write connect request: %v", err)

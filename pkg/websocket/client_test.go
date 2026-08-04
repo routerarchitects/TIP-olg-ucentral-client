@@ -424,7 +424,7 @@ func TestWSClient_PingDuringVerification(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		
+
 		// Read the connect req first!
 		_, connectPayload, _ := conn.ReadMessage()
 
@@ -458,7 +458,7 @@ func TestWSClient_PingDuringVerification(t *testing.T) {
 	client := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	
+
 	go client.ReconnectLoop(ctx, &mockFrameHandler{})
 	time.Sleep(1 * time.Second) // Let handshake finish
 }
@@ -472,7 +472,7 @@ func TestWSClient_StalePriority0(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		
+
 		conn.ReadMessage() // read connect req
 		resp := map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{"status": "accepted"}}
 		conn.WriteJSON(resp)

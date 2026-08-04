@@ -198,7 +198,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 
 		g, gCtx := errgroup.WithContext(sessionCtx)
 
-		// Teardown watcher: violently close the physical socket to unblock 
+		// Teardown watcher: violently close the physical socket to unblock
 		// ReadMessage/WriteMessage the instant any loop crashes or the context is canceled!
 		g.Go(func() error {
 			<-gCtx.Done()
@@ -213,7 +213,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 		g.Go(func() error {
 			return c.startWriterLoop(gCtx)
 		})
-		
+
 		err = g.Wait()
 		sessionCancel()
 		log.Printf("ws: session %s ended: %v", sessionID, err)

@@ -234,7 +234,7 @@ func TestWSClient_11MBFrameLimit(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
 	cfg := &config.CloudConfig{URL: wsURL}
-	
+
 	var states []string
 	var mu sync.Mutex
 	stateCh := make(chan string, 10)
@@ -250,9 +250,9 @@ func TestWSClient_11MBFrameLimit(t *testing.T) {
 	client := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, onState)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	
+
 	go client.ReconnectLoop(ctx, &mockFrameHandler{})
-	
+
 	// We expect: connecting-unknown -> connected-verifying -> connected-accepted -> (crash) -> connecting-unknown
 	crashObserved := false
 	for i := 0; i < 4; i++ {
@@ -265,7 +265,7 @@ func TestWSClient_11MBFrameLimit(t *testing.T) {
 			t.Fatalf("timed out waiting for state transitions. Current states: %v", states)
 		}
 	}
-	
+
 	if !crashObserved {
 		t.Errorf("expected socket to crash and return to connecting-unknown after 12MB frame. States: %v", states)
 	}
@@ -283,11 +283,11 @@ func TestWSClient_HandshakeTimeout(t *testing.T) {
 		time.Sleep(5 * time.Second)
 	}))
 	defer server.Close()
-	
+
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
 	// Set an aggressive 1-second connect timeout for the test!
 	cfg := &config.CloudConfig{URL: wsURL, ConnectTimeoutSeconds: 1}
-	
+
 	var states []string
 	var mu sync.Mutex
 	stateCh := make(chan string, 10)
@@ -303,9 +303,9 @@ func TestWSClient_HandshakeTimeout(t *testing.T) {
 	client := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, onState)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	
+
 	go client.ReconnectLoop(ctx, &mockFrameHandler{})
-	
+
 	// Expect: connecting-unknown -> connected-verifying -> (timeout) -> connecting-unknown
 	timeoutObserved := false
 	for i := 0; i < 3; i++ {
@@ -318,7 +318,7 @@ func TestWSClient_HandshakeTimeout(t *testing.T) {
 			t.Fatalf("test timed out waiting for handshake timeout. States: %v", states)
 		}
 	}
-	
+
 	if !timeoutObserved {
 		t.Errorf("expected client to timeout and revert to connecting-unknown. States: %v", states)
 	}
@@ -337,7 +337,7 @@ func TestWSClient_TLSVerification(t *testing.T) {
 
 	wsURL := "wss" + strings.TrimPrefix(server.URL, "https")
 	cfg := &config.CloudConfig{URL: wsURL}
-	
+
 	var mu sync.Mutex
 	var states []string
 	onState := func(cloud contracts.LinkState, protocol contracts.ProtocolState) {
@@ -349,11 +349,11 @@ func TestWSClient_TLSVerification(t *testing.T) {
 	client := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, onState)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	
+
 	go client.ReconnectLoop(ctx, &mockFrameHandler{})
-	
+
 	time.Sleep(1 * time.Second)
-	
+
 	mu.Lock()
 	defer mu.Unlock()
 	for _, s := range states {
@@ -385,7 +385,7 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 			}
 			return conn.WriteMessage(gws.PongMessage, []byte(appData))
 		})
-		
+
 		// Start a dummy reader to process control frames (like ping)
 		go func() {
 			for {
@@ -394,7 +394,7 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 				}
 			}
 		}()
-		
+
 		select {
 		case <-pingReceived:
 			// Test passes!

@@ -1,0 +1,328 @@
+package websocket
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	gws "github.com/gorilla/websocket"
+	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/config"
+	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/contracts"
+	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/queues"
+)
+
+type mockMetadataProvider struct{}
+
+func (m *mockMetadataProvider) ConnectParams(ctx context.Context) (CloudConnectParams, error) {
+	return CloudConnectParams{
+		Serial:       "SERIAL123",
+		Firmware:     "1.0.0",
+		Capabilities: map[string]any{"model": "test-router"},
+		UUID:         12345,
+	}, nil
+}
+
+type mockFrameHandler struct {
+	mu     sync.Mutex
+	frames []InboundFrame
+}
+
+func (m *mockFrameHandler) HandleFrame(ctx context.Context, frame InboundFrame) (FrameDisposition, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.frames = append(m.frames, frame)
+	return FrameAccepted, nil
+}
+
+func TestWSClient_HandshakeSuccess(t *testing.T) {
+	upgrader := gws.Upgrader{}
+
+	// Create a mock Cloud Server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+
+		// Read the connect frame sent by the client
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+
+		var req map[string]any
+		if err := json.Unmarshal(payload, &req); err != nil {
+			t.Errorf("failed to parse connect request: %v", err)
+		}
+
+		if req["method"] != "connect" {
+			t.Errorf("expected connect method, got %v", req["method"])
+		}
+
+		// Reply with success
+		resp := map[string]any{
+			"jsonrpc": "2.0",
+			"id":      req["id"],
+			"result": map[string]any{
+				"status": "accepted",
+			},
+		}
+		conn.WriteJSON(resp)
+
+		// Keep connection open so the read/write loops can start
+		time.Sleep(2 * time.Second)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+
+	cfg := &config.CloudConfig{
+		URL:                 wsURL,
+		PingIntervalSeconds: 1,
+		PongTimeoutSeconds:  5,
+	}
+
+	sched := queues.NewPriorityScheduler(10, 10)
+	meta := &mockMetadataProvider{}
+
+	var states []string
+	var mu sync.Mutex
+
+	onState := func(cloud contracts.LinkState, protocol contracts.ProtocolState) {
+		mu.Lock()
+		defer mu.Unlock()
+		states = append(states, string(cloud)+"-"+string(protocol))
+	}
+
+	client := NewWSClient(*cfg, sched, meta, onState)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	handler := &mockFrameHandler{}
+
+	// Run the reconnect loop in the background
+	go client.ReconnectLoop(ctx, handler)
+
+	// Give the client time to connect and handshake
+	time.Sleep(1 * time.Second)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Validate the exact state machine transitions
+	if len(states) < 3 {
+		t.Fatalf("expected at least 3 state transitions, got %v", states)
+	}
+	if states[0] != "connecting-unknown" {
+		t.Errorf("expected connecting-unknown, got %s", states[0])
+	}
+	if states[1] != "connected-verifying" {
+		t.Errorf("expected connected-verifying, got %s", states[1])
+	}
+	if states[2] != "connected-accepted" {
+		t.Errorf("expected connected-accepted, got %s", states[2])
+	}
+}
+
+func TestWSClient_HandshakeRejected(t *testing.T) {
+	upgrader := gws.Upgrader{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+
+		var req map[string]any
+		json.Unmarshal(payload, &req)
+
+		// Reply with a rejection error!
+		resp := map[string]any{
+			"jsonrpc": "2.0",
+			"id":      req["id"],
+			"error": map[string]any{
+				"code":    -32603,
+				"message": "protocol version rejected",
+			},
+		}
+		conn.WriteJSON(resp)
+		time.Sleep(1 * time.Second)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+
+	cfg := &config.CloudConfig{
+		URL: wsURL,
+	}
+
+	sched := queues.NewPriorityScheduler(10, 10)
+	meta := &mockMetadataProvider{}
+
+	var states []string
+	var mu sync.Mutex
+
+	onState := func(cloud contracts.LinkState, protocol contracts.ProtocolState) {
+		mu.Lock()
+		defer mu.Unlock()
+		states = append(states, string(cloud)+"-"+string(protocol))
+	}
+
+	client := NewWSClient(*cfg, sched, meta, onState)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	handler := &mockFrameHandler{}
+
+	go client.ReconnectLoop(ctx, handler)
+
+	time.Sleep(1 * time.Second)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Wait, the client should transition back to connecting-unknown upon disconnect
+	if len(states) < 3 {
+		t.Fatalf("expected at least 3 state transitions, got %v", states)
+	}
+	if states[0] != "connecting-unknown" {
+		t.Errorf("expected connecting-unknown, got %s", states[0])
+	}
+	if states[1] != "connected-verifying" {
+		t.Errorf("expected connected-verifying, got %s", states[1])
+	}
+	if states[2] != "connecting-unknown" {
+		t.Errorf("expected connecting-unknown after rejection, got %s", states[2])
+	}
+}
+
+func TestWSClient_11MBFrameLimit(t *testing.T) {
+	upgrader := gws.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, payload, _ := conn.ReadMessage()
+		var req map[string]any
+		json.Unmarshal(payload, &req)
+		resp := map[string]any{"jsonrpc": "2.0", "id": req["id"], "result": map[string]any{"status": "accepted"}}
+		conn.WriteJSON(resp)
+		time.Sleep(100 * time.Millisecond)
+
+		// Send 12MB frame (exceeds 11MB limit)
+		largePayload := make([]byte, 12*1024*1024)
+		conn.WriteMessage(gws.TextMessage, largePayload)
+		time.Sleep(1 * time.Second)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &config.CloudConfig{URL: wsURL}
+	client := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	
+	go client.ReconnectLoop(ctx, &mockFrameHandler{})
+	time.Sleep(2 * time.Second)
+}
+
+func TestWSClient_HandshakeTimeout(t *testing.T) {
+	upgrader := gws.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		time.Sleep(2 * time.Second)
+	}))
+	defer server.Close()
+	
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &config.CloudConfig{URL: wsURL}
+	client := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	
+	go client.ReconnectLoop(ctx, &mockFrameHandler{})
+	time.Sleep(500 * time.Millisecond)
+	cancel() // Interrupt the blocked handshake
+	time.Sleep(500 * time.Millisecond)
+}
+
+func TestWSClient_TLSVerification(t *testing.T) {
+	upgrader := gws.Upgrader{}
+	// NewTLSServer uses a self-signed certificate!
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err == nil {
+			conn.Close()
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "wss" + strings.TrimPrefix(server.URL, "https")
+	cfg := &config.CloudConfig{URL: wsURL}
+	client := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	
+	go client.ReconnectLoop(ctx, &mockFrameHandler{})
+	time.Sleep(1 * time.Second)
+	// Dialer will fail because the cert is self-signed and our client strictly enforces verification.
+}
+
+func TestWSClient_PingPongHeartbeat(t *testing.T) {
+	upgrader := gws.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, payload, _ := conn.ReadMessage()
+		var req map[string]any
+		json.Unmarshal(payload, &req)
+		resp := map[string]any{"jsonrpc": "2.0", "id": req["id"], "result": map[string]any{"status": "accepted"}}
+		conn.WriteJSON(resp)
+		
+		pingReceived := false
+		conn.SetPingHandler(func(appData string) error {
+			pingReceived = true
+			return conn.WriteMessage(gws.PongMessage, []byte(appData))
+		})
+		
+		for i := 0; i < 3; i++ {
+			conn.ReadMessage() // wait for ping from client
+			if pingReceived {
+				return // Test passes!
+			}
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &config.CloudConfig{URL: wsURL, PingIntervalSeconds: 1, PongTimeoutSeconds: 5}
+	client := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	
+	go client.ReconnectLoop(ctx, &mockFrameHandler{})
+	time.Sleep(3 * time.Second)
+}

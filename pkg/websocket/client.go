@@ -385,6 +385,27 @@ func (c *WSClient) startWriterLoop(ctx context.Context) error {
 	sessID := fmt.Sprintf("sess-%d", c.generation)
 	c.mu.Unlock()
 
+	type nextResult struct {
+		msg queues.OutboundMessage
+		err error
+	}
+	msgCh := make(chan nextResult)
+
+	// Spawn a background reader for the blocking PriorityQueue
+	go func() {
+		for {
+			msg, err := c.scheduler.Next(ctx)
+			select {
+			case <-ctx.Done():
+				return
+			case msgCh <- nextResult{msg: msg, err: err}:
+			}
+			if err != nil {
+				return // Stop the goroutine on terminal queue errors
+			}
+		}
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -399,16 +420,15 @@ func (c *WSClient) startWriterLoop(ctx context.Context) error {
 			if err != nil {
 				return fmt.Errorf("failed to write ping: %v", err)
 			}
-		default:
-			// Drain Priority Queue
-			msg, err := c.scheduler.Next(ctx)
-			if err != nil {
-				if err == context.Canceled || err == context.DeadlineExceeded {
+		case res := <-msgCh:
+			if res.err != nil {
+				if res.err == context.Canceled || res.err == context.DeadlineExceeded {
 					return ctx.Err()
 				}
-				log.Printf("ws: queue drain error: %v", err)
+				log.Printf("ws: queue drain error: %v", res.err)
 				continue
 			}
+			msg := res.msg
 
 			// Discard Priority-0 OutboundMessages whose SessionID does not match the active connection
 			if msg.Priority == queues.PriorityHighest && msg.SessionID != sessID {
@@ -418,7 +438,7 @@ func (c *WSClient) startWriterLoop(ctx context.Context) error {
 
 			c.mu.Lock()
 			c.conn.SetWriteDeadline(time.Now().Add(60 * time.Second)) // Using a generous write deadline
-			err = c.conn.WriteMessage(gws.TextMessage, msg.Payload)
+			err := c.conn.WriteMessage(gws.TextMessage, msg.Payload)
 			c.mu.Unlock()
 
 			if err != nil {

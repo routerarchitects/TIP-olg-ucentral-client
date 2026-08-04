@@ -302,17 +302,30 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 		resp := map[string]any{"jsonrpc": "2.0", "id": req["id"], "result": map[string]any{"status": "accepted"}}
 		conn.WriteJSON(resp)
 
-		pingReceived := false
+		pingReceived := make(chan bool, 1)
 		conn.SetPingHandler(func(appData string) error {
-			pingReceived = true
+			select {
+			case pingReceived <- true:
+			default:
+			}
 			return conn.WriteMessage(gws.PongMessage, []byte(appData))
 		})
-
-		for i := 0; i < 3; i++ {
-			conn.ReadMessage() // wait for ping from client
-			if pingReceived {
-				return // Test passes!
+		
+		// Start a dummy reader to process control frames (like ping)
+		go func() {
+			for {
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
 			}
+		}()
+		
+		select {
+		case <-pingReceived:
+			// Test passes!
+			return
+		case <-time.After(4 * time.Second):
+			t.Errorf("failed to receive ping heartbeat from client within 4 seconds")
 		}
 	}))
 	defer server.Close()

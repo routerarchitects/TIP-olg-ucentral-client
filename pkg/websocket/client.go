@@ -103,7 +103,11 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 			caCert, err := os.ReadFile(c.config.TLS.CAFile)
 			if err != nil {
 				log.Printf("ws: failed to read CA file: %v", err)
-				time.Sleep(backoff)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(backoff):
+				}
 				continue
 			}
 			caCertPool := x509.NewCertPool()
@@ -112,7 +116,11 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 			cert, err := tls.LoadX509KeyPair(c.config.TLS.ClientCertFile, c.config.TLS.ClientKeyFile)
 			if err != nil {
 				log.Printf("ws: failed to load client cert: %v", err)
-				time.Sleep(backoff)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(backoff):
+				}
 				continue
 			}
 
@@ -130,7 +138,11 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 		if err != nil {
 			log.Printf("ws: dial failed: %v", err)
 			c.onStateChange(contracts.LinkConnecting, contracts.ProtocolUnknown)
-			time.Sleep(backoff)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
 			backoff *= 2
 			if backoff > maxBackoff {
 				backoff = maxBackoff
@@ -168,7 +180,11 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 				backoff = maxBackoff
 			}
 
-			time.Sleep(backoff)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
 			backoff *= 2
 			if backoff > maxBackoff {
 				backoff = maxBackoff
@@ -182,6 +198,14 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 
 		g, gCtx := errgroup.WithContext(sessionCtx)
 
+		// Teardown watcher: violently close the physical socket to unblock 
+		// ReadMessage/WriteMessage the instant any loop crashes or the context is canceled!
+		g.Go(func() error {
+			<-gCtx.Done()
+			c.Close()
+			return nil
+		})
+
 		g.Go(func() error {
 			return c.startReaderLoop(gCtx, handler)
 		})
@@ -189,11 +213,10 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 		g.Go(func() error {
 			return c.startWriterLoop(gCtx)
 		})
-
+		
 		err = g.Wait()
-		log.Printf("ws: session %s ended: %v", sessionID, err)
-		c.Close()
 		sessionCancel()
+		log.Printf("ws: session %s ended: %v", sessionID, err)
 	}
 }
 

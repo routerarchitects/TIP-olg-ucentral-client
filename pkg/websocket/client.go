@@ -277,7 +277,7 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, sessionID string
 		select {
 		case <-watchCtx.Done(): // Handshake finished normally
 			return
-		case <-ctx.Done():      // Daemon was killed!
+		case <-ctx.Done(): // Daemon was killed!
 			c.conn.Close()
 		}
 	}()

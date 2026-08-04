@@ -101,6 +101,8 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 		return errors.New("ws: frame handler cannot be nil")
 	}
 
+	defer c.onStateChange(contracts.LinkConnecting, contracts.ProtocolUnknown)
+
 	backoff := 2 * time.Second
 	maxBackoff := 60 * time.Second
 
@@ -231,7 +233,12 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 		// ReadMessage/WriteMessage the instant any loop crashes or the context is canceled!
 		g.Go(func() error {
 			<-gCtx.Done()
-			c.Close()
+			conn.Close()
+			c.mu.Lock()
+			if c.conn == conn {
+				c.conn = nil
+			}
+			c.mu.Unlock()
 			return nil
 		})
 

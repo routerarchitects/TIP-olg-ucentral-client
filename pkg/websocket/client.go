@@ -126,7 +126,6 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 			}
 		}
 
-
 		conn, _, err := dialer.DialContext(ctx, c.config.URL, nil)
 		if err != nil {
 			log.Printf("ws: dial failed: %v", err)
@@ -159,7 +158,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 			c.Close()
 			sessionCancel()
 			c.onStateChange(contracts.LinkConnecting, contracts.ProtocolUnknown)
-			
+
 			if hsResult == HandshakeFatalClose {
 				// Fatal failure, perhaps stop entirely or use max backoff
 				log.Printf("ws: fatal handshake failure, applying max backoff")
@@ -168,7 +167,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 				// Keep connection open theoretically, but spec says reconnect loop manages retries
 				backoff = maxBackoff
 			}
-			
+
 			time.Sleep(backoff)
 			backoff *= 2
 			if backoff > maxBackoff {
@@ -206,11 +205,11 @@ type jsonrpcRequest struct {
 }
 
 type jsonrpcResponse struct {
-	JSONRPC string             `json:"jsonrpc"`
-	ID      uint64             `json:"id"`
+	JSONRPC string              `json:"jsonrpc"`
+	ID      uint64              `json:"id"`
 	Result  *CloudConnectResult `json:"result,omitempty"`
-	Error   *jsonrpcError      `json:"error,omitempty"`
-	Method  string             `json:"method,omitempty"`
+	Error   *jsonrpcError       `json:"error,omitempty"`
+	Method  string              `json:"method,omitempty"`
 }
 
 type jsonrpcError struct {

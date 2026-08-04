@@ -237,7 +237,7 @@ func TestWSClient_11MBFrameLimit(t *testing.T) {
 	client := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	
+
 	go client.ReconnectLoop(ctx, &mockFrameHandler{})
 	time.Sleep(2 * time.Second)
 }
@@ -253,13 +253,13 @@ func TestWSClient_HandshakeTimeout(t *testing.T) {
 		time.Sleep(2 * time.Second)
 	}))
 	defer server.Close()
-	
+
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
 	cfg := &config.CloudConfig{URL: wsURL}
 	client := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	
+
 	go client.ReconnectLoop(ctx, &mockFrameHandler{})
 	time.Sleep(500 * time.Millisecond)
 	cancel() // Interrupt the blocked handshake
@@ -282,7 +282,7 @@ func TestWSClient_TLSVerification(t *testing.T) {
 	client := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	
+
 	go client.ReconnectLoop(ctx, &mockFrameHandler{})
 	time.Sleep(1 * time.Second)
 	// Dialer will fail because the cert is self-signed and our client strictly enforces verification.
@@ -301,13 +301,13 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 		json.Unmarshal(payload, &req)
 		resp := map[string]any{"jsonrpc": "2.0", "id": req["id"], "result": map[string]any{"status": "accepted"}}
 		conn.WriteJSON(resp)
-		
+
 		pingReceived := false
 		conn.SetPingHandler(func(appData string) error {
 			pingReceived = true
 			return conn.WriteMessage(gws.PongMessage, []byte(appData))
 		})
-		
+
 		for i := 0; i < 3; i++ {
 			conn.ReadMessage() // wait for ping from client
 			if pingReceived {
@@ -322,7 +322,7 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 	client := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	
+
 	go client.ReconnectLoop(ctx, &mockFrameHandler{})
 	time.Sleep(3 * time.Second)
 }

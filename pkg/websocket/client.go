@@ -57,9 +57,9 @@ type HandshakeResult int
 
 const (
 	HandshakeAccepted HandshakeResult = iota
-	HandshakeRejectedKeepOpen
 	HandshakeRetryableFailure
-	HandshakeFatalClose
+	HandshakeLongBackoffFailure
+	HandshakeRejectedKeepOpen
 )
 
 type WSClient struct {
@@ -74,6 +74,15 @@ type WSClient struct {
 }
 
 func NewWSClient(cfg config.CloudConfig, scheduler queues.OutboundScheduler, metaProvider ConnectMetadataProvider, onStateChange func(contracts.LinkState, contracts.ProtocolState)) *WSClient {
+	if scheduler == nil {
+		panic("scheduler cannot be nil")
+	}
+	if metaProvider == nil {
+		panic("metadata provider cannot be nil")
+	}
+	if onStateChange == nil {
+		onStateChange = func(contracts.LinkState, contracts.ProtocolState) {}
+	}
 	return &WSClient{
 		config:        cfg,
 		scheduler:     scheduler,
@@ -85,6 +94,19 @@ func NewWSClient(cfg config.CloudConfig, scheduler queues.OutboundScheduler, met
 func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 	backoff := 2 * time.Second
 	maxBackoff := 60 * time.Second
+
+	waitForRetry := func() bool {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+		return true
+	}
 
 	for {
 		select {
@@ -111,20 +133,16 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 				caCert, err := os.ReadFile(c.config.TLS.CAFile)
 				if err != nil {
 					log.Printf("ws: failed to read CA file: %v", err)
-					select {
-					case <-ctx.Done():
+					if !waitForRetry() {
 						return
-					case <-time.After(backoff):
 					}
 					continue
 				}
 				caCertPool := x509.NewCertPool()
 				if !caCertPool.AppendCertsFromPEM(caCert) {
 					log.Printf("ws: failed to parse any valid certificates from CA file")
-					select {
-					case <-ctx.Done():
+					if !waitForRetry() {
 						return
-					case <-time.After(backoff):
 					}
 					continue
 				}
@@ -134,43 +152,33 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 			if hasCert {
 				if c.config.TLS.ClientCertFile == "" || c.config.TLS.ClientKeyFile == "" {
 					log.Printf("ws: incomplete client certificate configuration")
-					select {
-					case <-ctx.Done():
+					if !waitForRetry() {
 						return
-					case <-time.After(backoff):
 					}
 					continue
 				}
 				cert, err := tls.LoadX509KeyPair(c.config.TLS.ClientCertFile, c.config.TLS.ClientKeyFile)
 				if err != nil {
 					log.Printf("ws: failed to load client cert: %v", err)
-					select {
-					case <-ctx.Done():
+					if !waitForRetry() {
 						return
-					case <-time.After(backoff):
 					}
 					continue
 				}
 				tlsConfig.Certificates = []tls.Certificate{cert}
 			}
 
-			dialer = &gws.Dialer{
-				TLSClientConfig: tlsConfig,
-			}
+			dialerCopy := *gws.DefaultDialer
+			dialerCopy.TLSClientConfig = tlsConfig
+			dialer = &dialerCopy
 		}
 
 		conn, _, err := dialer.DialContext(ctx, c.config.URL, nil)
 		if err != nil {
 			log.Printf("ws: dial failed: %v", err)
 			c.onStateChange(contracts.LinkConnecting, contracts.ProtocolUnknown)
-			select {
-			case <-ctx.Done():
+			if !waitForRetry() {
 				return
-			case <-time.After(backoff):
-			}
-			backoff *= 2
-			if backoff > maxBackoff {
-				backoff = maxBackoff
 			}
 			continue
 		}
@@ -199,7 +207,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 			sessionCancel()
 			c.onStateChange(contracts.LinkConnecting, contracts.ProtocolUnknown)
 
-			if hsResult == HandshakeFatalClose {
+			if hsResult == HandshakeLongBackoffFailure {
 				// Fatal failure, perhaps stop entirely or use max backoff
 				log.Printf("ws: fatal handshake failure, applying max backoff")
 				backoff = maxBackoff
@@ -208,14 +216,8 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 				backoff = maxBackoff
 			}
 
-			select {
-			case <-ctx.Done():
+			if !waitForRetry() {
 				return
-			case <-time.After(backoff):
-			}
-			backoff *= 2
-			if backoff > maxBackoff {
-				backoff = maxBackoff
 			}
 			continue
 		}
@@ -244,6 +246,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 
 		err = g.Wait()
 		sessionCancel()
+		c.onStateChange(contracts.LinkConnecting, contracts.ProtocolUnknown)
 		log.Printf("ws: session %s ended: %v", sessionID, err)
 
 		// Only reset backoff if the session was stable (connected for > 60s)
@@ -252,14 +255,8 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 		}
 
 		// Apply backoff before the next dial to prevent rapid accept/drop churn
-		select {
-		case <-ctx.Done():
+		if !waitForRetry() {
 			return
-		case <-time.After(backoff):
-		}
-		backoff *= 2
-		if backoff > maxBackoff {
-			backoff = maxBackoff
 		}
 	}
 }
@@ -378,7 +375,7 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn, 
 		if resp.ID == 1 {
 			if resp.Error != nil && resp.Error.Code == -32600 {
 				log.Printf("ws: fatal rejection from cloud: %v", resp.Error)
-				return HandshakeFatalClose
+				return HandshakeLongBackoffFailure
 			}
 			if resp.Error != nil {
 				log.Printf("ws: rejected by cloud (jsonrpc error): %v", resp.Error)

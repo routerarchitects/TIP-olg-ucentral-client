@@ -535,3 +535,199 @@ func TestWSClient_StalePriority0(t *testing.T) {
 		}
 	}
 }
+
+func TestWSClient_ReconnectThrottling(t *testing.T) {
+	upgrader := gws.Upgrader{}
+	var mu sync.Mutex
+	var connectTimes []time.Time
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		mu.Lock()
+		connectTimes = append(connectTimes, time.Now())
+		count := len(connectTimes)
+		mu.Unlock()
+
+		if count > 3 {
+			return
+		}
+
+		// Accept handshake
+		var req map[string]any
+		conn.ReadJSON(&req)
+		conn.WriteJSON(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      req["id"],
+			"result": map[string]any{"status": "accepted"},
+		})
+		
+		// Immediately drop connection (less than 60s stable duration)
+		conn.Close()
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &config.CloudConfig{URL: wsURL}
+	client := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go client.ReconnectLoop(ctx, &mockFrameHandler{})
+	time.Sleep(10 * time.Second) // Wait for at least 3 attempts with backoff (2s + 4s)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(connectTimes) < 3 {
+		t.Fatalf("expected at least 3 connections, got %d", len(connectTimes))
+	}
+	
+	d1 := connectTimes[1].Sub(connectTimes[0])
+	d2 := connectTimes[2].Sub(connectTimes[1])
+
+	// First wait should be ~2s (allow 1.5 - 3.0s)
+	if d1 < 1500*time.Millisecond || d1 > 3500*time.Millisecond {
+		t.Errorf("expected 2s backoff, got %v", d1)
+	}
+	// Second wait should be ~4s (allow 3.5 - 5.5s)
+	if d2 < 3500*time.Millisecond || d2 > 5500*time.Millisecond {
+		t.Errorf("expected 4s backoff, got %v", d2)
+	}
+}
+
+func TestWSClient_PingControlDeadlineRefresh(t *testing.T) {
+	upgrader := gws.Upgrader{}
+	serverMessageReceived := make(chan struct{})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		var req map[string]any
+		conn.ReadJSON(&req)
+		conn.WriteJSON(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      req["id"],
+			"result": map[string]any{"status": "accepted"},
+		})
+
+		// Send pings every 500ms to keep connection alive
+		go func() {
+			for i := 0; i < 6; i++ {
+				time.Sleep(500 * time.Millisecond)
+				conn.WriteControl(gws.PingMessage, []byte{}, time.Now().Add(time.Second))
+			}
+			// Finally send a text message after 3 seconds
+			conn.WriteMessage(gws.TextMessage, []byte(`{"method":"ping"}`))
+		}()
+
+		_, _, err = conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		close(serverMessageReceived)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &config.CloudConfig{
+		URL:                wsURL,
+		PongTimeoutSeconds: 2, // 2s timeout
+	}
+	client := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go client.ReconnectLoop(ctx, &mockFrameHandler{})
+
+	// Wait 4 seconds to ensure the 2s deadline would have tripped if not refreshed
+	time.Sleep(4 * time.Second)
+
+	client.mu.Lock()
+	connAlive := client.conn != nil
+	client.mu.Unlock()
+
+	if !connAlive {
+		t.Errorf("client connection was dropped despite ping refresh")
+	}
+}
+
+func TestWSClient_ConfiguredWriteTimeout(t *testing.T) {
+	upgrader := gws.Upgrader{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		var req map[string]any
+		conn.ReadJSON(&req)
+		conn.WriteJSON(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      req["id"],
+			"result": map[string]any{"status": "accepted"},
+		})
+
+		// Block reads completely so the client TCP buffer fills and writes block
+		time.Sleep(10 * time.Second)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &config.CloudConfig{
+		URL:                 wsURL,
+		WriteTimeoutSeconds: 1, // Fail fast on write
+	}
+	sched := queues.NewPriorityScheduler(10, 10)
+	client := NewWSClient(*cfg, sched, &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go client.ReconnectLoop(ctx, &mockFrameHandler{})
+	time.Sleep(1 * time.Second)
+
+	client.mu.Lock()
+	sessID := fmt.Sprintf("sess-%d", client.generation)
+	client.mu.Unlock()
+
+	// Fill the buffer with a huge message
+	hugePayload := make([]byte, 10*1024*1024)
+	sched.Push(queues.OutboundMessage{
+		SessionID: sessID,
+		Priority:  queues.PriorityHigh,
+		Payload:   hugePayload,
+	})
+
+	// Monitor how long the connection takes to drop
+	start := time.Now()
+	for {
+		client.mu.Lock()
+		active := client.conn != nil
+		client.mu.Unlock()
+		if !active {
+			break
+		}
+		if time.Since(start) > 5*time.Second {
+			t.Fatalf("write timeout did not drop connection in time")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	duration := time.Since(start)
+	if duration > 3*time.Second {
+		t.Errorf("expected write failure around 1s, took %v", duration)
+	}
+}

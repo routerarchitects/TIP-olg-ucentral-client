@@ -202,7 +202,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 
 		c.onStateChange(contracts.LinkConnected, contracts.ProtocolAccepted)
 		log.Printf("ws: session %s active", sessionID)
-		backoff = 2 * time.Second // Reset backoff on success
+		sessionStartTime := time.Now()
 
 		g, gCtx := errgroup.WithContext(sessionCtx)
 
@@ -225,6 +225,22 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 		err = g.Wait()
 		sessionCancel()
 		log.Printf("ws: session %s ended: %v", sessionID, err)
+
+		// Only reset backoff if the session was stable (connected for > 60s)
+		if time.Since(sessionStartTime) > 60*time.Second {
+			backoff = 2 * time.Second
+		}
+
+		// Apply backoff before the next dial to prevent rapid accept/drop churn
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
 	}
 }
 
@@ -387,6 +403,14 @@ func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler 
 		conn.SetReadDeadline(time.Now().Add(pongTimeout))
 		return nil
 	})
+	conn.SetPingHandler(func(appData string) error {
+		conn.SetReadDeadline(time.Now().Add(pongTimeout))
+		err := conn.WriteControl(gws.PongMessage, []byte(appData), time.Now().Add(10*time.Second))
+		if err == gws.ErrCloseSent {
+			return nil
+		}
+		return err
+	})
 
 	c.mu.Lock()
 	sessID := fmt.Sprintf("sess-%d", c.generation)
@@ -427,6 +451,11 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 		pingInterval = time.Duration(c.config.PingIntervalSeconds) * time.Second
 	}
 
+	writeTimeout := 60 * time.Second
+	if c.config.WriteTimeoutSeconds > 0 {
+		writeTimeout = time.Duration(c.config.WriteTimeoutSeconds) * time.Second
+	}
+
 	pingTicker := time.NewTicker(pingInterval)
 	defer pingTicker.Stop()
 
@@ -461,8 +490,8 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 			return ctx.Err()
 		case <-pingTicker.C:
 			// Writer loop exclusively sends Ping
-			// Set a short deadline for writing the ping itself
-			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			// Set deadline for writing the ping itself based on config
+			conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 			err := conn.WriteMessage(gws.PingMessage, nil)
 			if err != nil {
 				return fmt.Errorf("failed to write ping: %v", err)
@@ -482,7 +511,7 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 				continue
 			}
 
-			conn.SetWriteDeadline(time.Now().Add(60 * time.Second)) // Using a generous write deadline
+			conn.SetWriteDeadline(time.Now().Add(writeTimeout)) // Using configured write deadline
 			err := conn.WriteMessage(gws.TextMessage, msg.Payload)
 
 			if err != nil {

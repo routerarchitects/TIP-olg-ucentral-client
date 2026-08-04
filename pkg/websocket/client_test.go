@@ -563,9 +563,9 @@ func TestWSClient_ReconnectThrottling(t *testing.T) {
 		conn.WriteJSON(map[string]any{
 			"jsonrpc": "2.0",
 			"id":      req["id"],
-			"result": map[string]any{"status": "accepted"},
+			"result":  map[string]any{"status": "accepted"},
 		})
-		
+
 		// Immediately drop connection (less than 60s stable duration)
 		conn.Close()
 	}))
@@ -574,7 +574,7 @@ func TestWSClient_ReconnectThrottling(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
 	cfg := &config.CloudConfig{URL: wsURL}
 	client := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
-	
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -587,7 +587,7 @@ func TestWSClient_ReconnectThrottling(t *testing.T) {
 	if len(connectTimes) < 3 {
 		t.Fatalf("expected at least 3 connections, got %d", len(connectTimes))
 	}
-	
+
 	d1 := connectTimes[1].Sub(connectTimes[0])
 	d2 := connectTimes[2].Sub(connectTimes[1])
 
@@ -617,7 +617,7 @@ func TestWSClient_PingControlDeadlineRefresh(t *testing.T) {
 		conn.WriteJSON(map[string]any{
 			"jsonrpc": "2.0",
 			"id":      req["id"],
-			"result": map[string]any{"status": "accepted"},
+			"result":  map[string]any{"status": "accepted"},
 		})
 
 		// Send pings every 500ms to keep connection alive
@@ -644,7 +644,7 @@ func TestWSClient_PingControlDeadlineRefresh(t *testing.T) {
 		PongTimeoutSeconds: 2, // 2s timeout
 	}
 	client := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
-	
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -677,7 +677,7 @@ func TestWSClient_ConfiguredWriteTimeout(t *testing.T) {
 		conn.WriteJSON(map[string]any{
 			"jsonrpc": "2.0",
 			"id":      req["id"],
-			"result": map[string]any{"status": "accepted"},
+			"result":  map[string]any{"status": "accepted"},
 		})
 
 		// Block reads completely so the client TCP buffer fills and writes block
@@ -692,7 +692,7 @@ func TestWSClient_ConfiguredWriteTimeout(t *testing.T) {
 	}
 	sched := queues.NewPriorityScheduler(10, 10)
 	client := NewWSClient(*cfg, sched, &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
-	
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

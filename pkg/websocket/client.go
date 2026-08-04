@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -73,12 +74,12 @@ type WSClient struct {
 	onStateChange func(cloud contracts.LinkState, protocol contracts.ProtocolState)
 }
 
-func NewWSClient(cfg config.CloudConfig, scheduler queues.OutboundScheduler, metaProvider ConnectMetadataProvider, onStateChange func(contracts.LinkState, contracts.ProtocolState)) *WSClient {
+func NewWSClient(cfg config.CloudConfig, scheduler queues.OutboundScheduler, metaProvider ConnectMetadataProvider, onStateChange func(contracts.LinkState, contracts.ProtocolState)) (*WSClient, error) {
 	if scheduler == nil {
-		panic("scheduler cannot be nil")
+		return nil, errors.New("scheduler cannot be nil")
 	}
 	if metaProvider == nil {
-		panic("metadata provider cannot be nil")
+		return nil, errors.New("metadata provider cannot be nil")
 	}
 	if onStateChange == nil {
 		onStateChange = func(contracts.LinkState, contracts.ProtocolState) {}
@@ -88,7 +89,7 @@ func NewWSClient(cfg config.CloudConfig, scheduler queues.OutboundScheduler, met
 		scheduler:     scheduler,
 		metaProvider:  metaProvider,
 		onStateChange: onStateChange,
-	}
+	}, nil
 }
 
 func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
@@ -137,41 +138,29 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 			if hasCA {
 				caCert, err := os.ReadFile(c.config.TLS.CAFile)
 				if err != nil {
-					log.Printf("ws: failed to read CA file: %v", err)
-					if !waitForRetry() {
-						return
-					}
-					continue
+					log.Printf("ws: fatal: failed to read CA file: %v", err)
+					return
 				}
 				caCertPool, err := x509.SystemCertPool()
 				if err != nil || caCertPool == nil {
 					caCertPool = x509.NewCertPool()
 				}
 				if !caCertPool.AppendCertsFromPEM(caCert) {
-					log.Printf("ws: failed to parse any valid certificates from CA file")
-					if !waitForRetry() {
-						return
-					}
-					continue
+					log.Printf("ws: fatal: failed to parse any valid certificates from CA file")
+					return
 				}
 				tlsConfig.RootCAs = caCertPool
 			}
 
 			if hasCert {
 				if c.config.TLS.ClientCertFile == "" || c.config.TLS.ClientKeyFile == "" {
-					log.Printf("ws: incomplete client certificate configuration")
-					if !waitForRetry() {
-						return
-					}
-					continue
+					log.Printf("ws: fatal: incomplete client certificate configuration")
+					return
 				}
 				cert, err := tls.LoadX509KeyPair(c.config.TLS.ClientCertFile, c.config.TLS.ClientKeyFile)
 				if err != nil {
-					log.Printf("ws: failed to load client cert: %v", err)
-					if !waitForRetry() {
-						return
-					}
-					continue
+					log.Printf("ws: fatal: failed to load client cert: %v", err)
+					return
 				}
 				tlsConfig.Certificates = []tls.Certificate{cert}
 			}
@@ -209,28 +198,31 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 		c.mu.Unlock()
 
 		hsResult := c.performConnectHandshake(sessionCtx, conn, sessionID)
-		if hsResult != HandshakeAccepted {
-			log.Printf("ws: handshake failed, closing connection")
+		if hsResult == HandshakeLongBackoffFailure {
+			log.Printf("ws: fatal handshake failure, closing connection and applying max backoff")
 			c.Close()
 			sessionCancel()
 			c.onStateChange(contracts.LinkConnecting, contracts.ProtocolUnknown)
-
-			if hsResult == HandshakeLongBackoffFailure {
-				// Fatal failure, perhaps stop entirely or use max backoff
-				log.Printf("ws: fatal handshake failure, applying max backoff")
-				backoff = maxBackoff
-			} else if hsResult == HandshakeRejectedKeepOpen {
-				// Keep connection open theoretically, but spec says reconnect loop manages retries
-				backoff = maxBackoff
-			}
-
+			backoff = maxBackoff
 			if !waitForRetry() {
 				return
 			}
 			continue
+		} else if hsResult == HandshakeRetryableFailure {
+			log.Printf("ws: handshake failed, closing connection and retrying")
+			c.Close()
+			sessionCancel()
+			c.onStateChange(contracts.LinkConnecting, contracts.ProtocolUnknown)
+			if !waitForRetry() {
+				return
+			}
+			continue
+		} else if hsResult == HandshakeRejectedKeepOpen {
+			log.Printf("ws: handshake rejected, keeping connection open")
+			c.onStateChange(contracts.LinkConnected, contracts.ProtocolRejected)
+		} else {
+			c.onStateChange(contracts.LinkConnected, contracts.ProtocolAccepted)
 		}
-
-		c.onStateChange(contracts.LinkConnected, contracts.ProtocolAccepted)
 		log.Printf("ws: session %s active", sessionID)
 		sessionStartTime := time.Now()
 
@@ -468,8 +460,11 @@ func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler 
 		}
 
 		disp, err := handler.HandleFrame(ctx, frame)
-		if disp == FrameFatalCloseConnection || err != nil {
-			return fmt.Errorf("fatal frame disposition: %v", err)
+		if err != nil {
+			log.Printf("ws: frame handler error: %v", err)
+		}
+		if disp == FrameFatalCloseConnection {
+			return fmt.Errorf("handler requested fatal socket termination")
 		}
 	}
 }

@@ -104,7 +104,7 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 		states = append(states, string(cloud)+"-"+string(protocol))
 	}
 
-	client := NewWSClient(*cfg, sched, meta, onState)
+	client, _ := NewWSClient(*cfg, sched, meta, onState)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -185,7 +185,7 @@ func TestWSClient_HandshakeRejected(t *testing.T) {
 		states = append(states, string(cloud)+"-"+string(protocol))
 	}
 
-	client := NewWSClient(*cfg, sched, meta, onState)
+	client, _ := NewWSClient(*cfg, sched, meta, onState)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -209,8 +209,8 @@ func TestWSClient_HandshakeRejected(t *testing.T) {
 	if states[1] != "connected-verifying" {
 		t.Errorf("expected connected-verifying, got %s", states[1])
 	}
-	if states[2] != "connecting-unknown" {
-		t.Errorf("expected connecting-unknown after rejection, got %s", states[2])
+	if states[2] != "connected-rejected" {
+		t.Errorf("expected connected-rejected after rejection, got %s", states[2])
 	}
 }
 
@@ -251,7 +251,7 @@ func TestWSClient_11MBFrameLimit(t *testing.T) {
 		stateCh <- s
 	}
 
-	client := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, onState)
+	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, onState)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -304,7 +304,7 @@ func TestWSClient_HandshakeTimeout(t *testing.T) {
 		stateCh <- s
 	}
 
-	client := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, onState)
+	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, onState)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -350,7 +350,7 @@ func TestWSClient_TLSVerification(t *testing.T) {
 		states = append(states, string(cloud)+"-"+string(protocol))
 	}
 
-	client := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, onState)
+	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, onState)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -411,7 +411,7 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
 	cfg := &config.CloudConfig{URL: wsURL, PingIntervalSeconds: 1, PongTimeoutSeconds: 5}
-	client := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -458,7 +458,7 @@ func TestWSClient_PingDuringVerification(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
 	cfg := &config.CloudConfig{URL: wsURL}
-	client := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -494,7 +494,7 @@ func TestWSClient_StalePriority0(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
 	cfg := &config.CloudConfig{URL: wsURL}
 	scheduler := queues.NewPriorityScheduler(10, 10)
-	client := NewWSClient(*cfg, scheduler, &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	client, _ := NewWSClient(*cfg, scheduler, &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -576,7 +576,7 @@ func TestWSClient_ReconnectThrottling(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
 	cfg := &config.CloudConfig{URL: wsURL}
-	client := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -646,7 +646,7 @@ func TestWSClient_PingControlDeadlineRefresh(t *testing.T) {
 		URL:                wsURL,
 		PongTimeoutSeconds: 2, // 2s timeout
 	}
-	client := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -694,7 +694,7 @@ func TestWSClient_ConfiguredWriteTimeout(t *testing.T) {
 		WriteTimeoutSeconds: 1, // Fail fast on write
 	}
 	sched := queues.NewPriorityScheduler(10, 10)
-	client := NewWSClient(*cfg, sched, &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	client, _ := NewWSClient(*cfg, sched, &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -772,7 +772,7 @@ func TestWSClient_11MBFrameLimit_Handshake(t *testing.T) {
 	log.SetOutput(&logBuf)
 	defer log.SetOutput(os.Stderr)
 
-	client := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, onState)
+	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, onState)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -861,7 +861,7 @@ func TestWSClient_HandshakeValidation(t *testing.T) {
 				states = append(states, s)
 			}
 
-			client := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, onState)
+			client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, onState)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 

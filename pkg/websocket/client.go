@@ -99,44 +99,61 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 
 		// Create dialer
 		dialer := gws.DefaultDialer
-		if c.config.TLS.CAFile != "" {
-			caCert, err := os.ReadFile(c.config.TLS.CAFile)
-			if err != nil {
-				log.Printf("ws: failed to read CA file: %v", err)
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(backoff):
-				}
-				continue
-			}
-			caCertPool := x509.NewCertPool()
-			if !caCertPool.AppendCertsFromPEM(caCert) {
-				log.Printf("ws: failed to parse any valid certificates from CA file")
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(backoff):
-				}
-				continue
-			}
+		hasCA := c.config.TLS.CAFile != ""
+		hasCert := c.config.TLS.ClientCertFile != "" || c.config.TLS.ClientKeyFile != ""
 
-			cert, err := tls.LoadX509KeyPair(c.config.TLS.ClientCertFile, c.config.TLS.ClientKeyFile)
-			if err != nil {
-				log.Printf("ws: failed to load client cert: %v", err)
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(backoff):
-				}
-				continue
-			}
-
+		if hasCA || hasCert || c.config.TLS.ServerName != "" {
 			tlsConfig := &tls.Config{
-				RootCAs:      caCertPool,
-				Certificates: []tls.Certificate{cert},
-				ServerName:   c.config.TLS.ServerName,
+				ServerName: c.config.TLS.ServerName,
 			}
+
+			if hasCA {
+				caCert, err := os.ReadFile(c.config.TLS.CAFile)
+				if err != nil {
+					log.Printf("ws: failed to read CA file: %v", err)
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(backoff):
+					}
+					continue
+				}
+				caCertPool := x509.NewCertPool()
+				if !caCertPool.AppendCertsFromPEM(caCert) {
+					log.Printf("ws: failed to parse any valid certificates from CA file")
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(backoff):
+					}
+					continue
+				}
+				tlsConfig.RootCAs = caCertPool
+			}
+
+			if hasCert {
+				if c.config.TLS.ClientCertFile == "" || c.config.TLS.ClientKeyFile == "" {
+					log.Printf("ws: incomplete client certificate configuration")
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(backoff):
+					}
+					continue
+				}
+				cert, err := tls.LoadX509KeyPair(c.config.TLS.ClientCertFile, c.config.TLS.ClientKeyFile)
+				if err != nil {
+					log.Printf("ws: failed to load client cert: %v", err)
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(backoff):
+					}
+					continue
+				}
+				tlsConfig.Certificates = []tls.Certificate{cert}
+			}
+
 			dialer = &gws.Dialer{
 				TLSClientConfig: tlsConfig,
 			}
@@ -157,6 +174,9 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 			}
 			continue
 		}
+
+		// Enforce transport hard maximum frame size (11MB) to prevent OOM across all reads
+		conn.SetReadLimit(11 * 1024 * 1024)
 
 		c.mu.Lock()
 		c.conn = conn
@@ -306,13 +326,15 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn, 
 		}
 	}()
 
-	conn.SetWriteDeadline(time.Now().Add(timeout))
+	handshakeDeadline := time.Now().Add(timeout)
+
+	conn.SetWriteDeadline(handshakeDeadline)
 	if err := conn.WriteJSON(req); err != nil {
 		log.Printf("ws: failed to write connect request: %v", err)
 		return HandshakeRetryableFailure
 	}
 
-	conn.SetReadDeadline(time.Now().Add(timeout))
+	conn.SetReadDeadline(handshakeDeadline)
 	for {
 		var resp jsonrpcResponse
 		if err := conn.ReadJSON(&resp); err != nil {
@@ -328,7 +350,7 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn, 
 					"id":      resp.ID,
 					"result":  map[string]any{"serial": params.Serial, "uuid": params.UUID},
 				}
-				conn.SetWriteDeadline(time.Now().Add(timeout))
+				conn.SetWriteDeadline(handshakeDeadline)
 				if err := conn.WriteJSON(pingReply); err != nil {
 					log.Printf("ws: failed to write ping reply during handshake: %v", err)
 					return HandshakeRetryableFailure
@@ -344,13 +366,12 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn, 
 						"data":    map[string]any{"application_code": 3},
 					},
 				}
-				conn.SetWriteDeadline(time.Now().Add(timeout))
+				conn.SetWriteDeadline(handshakeDeadline)
 				if err := conn.WriteJSON(rejectReply); err != nil {
 					log.Printf("ws: failed to write reject reply during handshake: %v", err)
 					return HandshakeRetryableFailure
 				}
 			}
-			conn.SetReadDeadline(time.Now().Add(timeout))
 			continue
 		}
 
@@ -390,9 +411,6 @@ func (c *WSClient) Close() error {
 }
 
 func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler FrameHandler) error {
-	// 1. Enforce transport hard maximum frame size (11MB) to prevent OOM
-	conn.SetReadLimit(11 * 1024 * 1024)
-
 	pongTimeout := 60 * time.Second
 	if c.config.PongTimeoutSeconds > 0 {
 		pongTimeout = time.Duration(c.config.PongTimeoutSeconds) * time.Second

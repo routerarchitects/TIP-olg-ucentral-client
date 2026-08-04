@@ -1,11 +1,14 @@
 package websocket
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -729,5 +732,71 @@ func TestWSClient_ConfiguredWriteTimeout(t *testing.T) {
 	duration := time.Since(start)
 	if duration > 3*time.Second {
 		t.Errorf("expected write failure around 1s, took %v", duration)
+	}
+}
+
+func TestWSClient_11MBFrameLimit_Handshake(t *testing.T) {
+	upgrader := gws.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _, err = conn.ReadMessage()
+		if err != nil {
+			return
+		}
+
+		// Send 12MB frame (exceeds 11MB limit) AS the connect response
+		largePayload := make([]byte, 12*1024*1024)
+		conn.WriteMessage(gws.TextMessage, largePayload)
+		time.Sleep(1 * time.Second)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &config.CloudConfig{URL: wsURL}
+
+	var states []string
+	var mu sync.Mutex
+
+	onState := func(cloud contracts.LinkState, protocol contracts.ProtocolState) {
+		mu.Lock()
+		defer mu.Unlock()
+		s := string(cloud) + "-" + string(protocol)
+		states = append(states, s)
+	}
+
+	var logBuf bytes.Buffer
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(os.Stderr)
+
+	client := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, onState)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go client.ReconnectLoop(ctx, &mockFrameHandler{})
+	time.Sleep(2 * time.Second)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Ensure the handshake failed specifically due to the frame limit!
+	if !strings.Contains(logBuf.String(), "read limit exceeded") {
+		t.Fatalf("expected read limit exceeded error, got logs: %s", logBuf.String())
+	}
+
+	if len(states) < 3 {
+		t.Fatalf("expected at least 3 state transitions, got %v", states)
+	}
+	if states[0] != "connecting-unknown" {
+		t.Errorf("expected connecting-unknown, got %s", states[0])
+	}
+	if states[1] != "connected-verifying" {
+		t.Errorf("expected connected-verifying, got %s", states[1])
+	}
+	if states[2] != "connecting-unknown" {
+		t.Errorf("expected connecting-unknown after rejection, got %s", states[2])
 	}
 }

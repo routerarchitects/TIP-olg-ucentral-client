@@ -172,7 +172,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 		sessionID := fmt.Sprintf("sess-%d", c.generation)
 		c.mu.Unlock()
 
-		hsResult := c.performConnectHandshake(sessionCtx, sessionID)
+		hsResult := c.performConnectHandshake(sessionCtx, conn, sessionID)
 		if hsResult != HandshakeAccepted {
 			log.Printf("ws: handshake failed, closing connection")
 			c.Close()
@@ -214,13 +214,12 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 			return nil
 		})
 
-		connToUse := c.conn
 		g.Go(func() error {
-			return c.startReaderLoop(gCtx, connToUse, handler)
+			return c.startReaderLoop(gCtx, conn, handler)
 		})
 
 		g.Go(func() error {
-			return c.startWriterLoop(gCtx, connToUse)
+			return c.startWriterLoop(gCtx, conn)
 		})
 
 		err = g.Wait()
@@ -249,8 +248,8 @@ type jsonrpcError struct {
 	Message string `json:"message"`
 }
 
-func (c *WSClient) performConnectHandshake(ctx context.Context, sessionID string) HandshakeResult {
-	if c.conn == nil {
+func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn, sessionID string) HandshakeResult {
+	if conn == nil {
 		return HandshakeRetryableFailure
 	}
 
@@ -287,20 +286,20 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, sessionID string
 		case <-watchCtx.Done(): // Handshake finished normally
 			return
 		case <-ctx.Done(): // Daemon was killed!
-			c.conn.Close()
+			conn.Close()
 		}
 	}()
 
-	c.conn.SetWriteDeadline(time.Now().Add(timeout))
-	if err := c.conn.WriteJSON(req); err != nil {
+	conn.SetWriteDeadline(time.Now().Add(timeout))
+	if err := conn.WriteJSON(req); err != nil {
 		log.Printf("ws: failed to write connect request: %v", err)
 		return HandshakeRetryableFailure
 	}
 
-	c.conn.SetReadDeadline(time.Now().Add(timeout))
+	conn.SetReadDeadline(time.Now().Add(timeout))
 	for {
 		var resp jsonrpcResponse
-		if err := c.conn.ReadJSON(&resp); err != nil {
+		if err := conn.ReadJSON(&resp); err != nil {
 			log.Printf("ws: failed to read connect response: %v", err)
 			return HandshakeRetryableFailure
 		}
@@ -313,8 +312,8 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, sessionID string
 					"id":      resp.ID,
 					"result":  map[string]any{"serial": params.Serial, "uuid": params.UUID},
 				}
-				c.conn.SetWriteDeadline(time.Now().Add(timeout))
-				if err := c.conn.WriteJSON(pingReply); err != nil {
+				conn.SetWriteDeadline(time.Now().Add(timeout))
+				if err := conn.WriteJSON(pingReply); err != nil {
 					log.Printf("ws: failed to write ping reply during handshake: %v", err)
 					return HandshakeRetryableFailure
 				}
@@ -329,13 +328,13 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, sessionID string
 						"data":    map[string]any{"application_code": 3},
 					},
 				}
-				c.conn.SetWriteDeadline(time.Now().Add(timeout))
-				if err := c.conn.WriteJSON(rejectReply); err != nil {
+				conn.SetWriteDeadline(time.Now().Add(timeout))
+				if err := conn.WriteJSON(rejectReply); err != nil {
 					log.Printf("ws: failed to write reject reply during handshake: %v", err)
 					return HandshakeRetryableFailure
 				}
 			}
-			c.conn.SetReadDeadline(time.Now().Add(timeout))
+			conn.SetReadDeadline(time.Now().Add(timeout))
 			continue
 		}
 
@@ -462,11 +461,9 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 			return ctx.Err()
 		case <-pingTicker.C:
 			// Writer loop exclusively sends Ping
-			c.mu.Lock()
 			// Set a short deadline for writing the ping itself
 			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			err := conn.WriteMessage(gws.PingMessage, nil)
-			c.mu.Unlock()
 			if err != nil {
 				return fmt.Errorf("failed to write ping: %v", err)
 			}
@@ -485,10 +482,8 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 				continue
 			}
 
-			c.mu.Lock()
 			conn.SetWriteDeadline(time.Now().Add(60 * time.Second)) // Using a generous write deadline
 			err := conn.WriteMessage(gws.TextMessage, msg.Payload)
-			c.mu.Unlock()
 
 			if err != nil {
 				return fmt.Errorf("failed to write outbound message: %v", err)

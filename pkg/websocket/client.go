@@ -50,6 +50,10 @@ const (
 	FrameFatalCloseConnection
 )
 
+// FrameHandler represents the upstream component that processes incoming frames.
+// SECURITY CONTRACT: The FrameHandler implementation MUST track the current ProtocolState
+// (via the onStateChange callback). If the state is ProtocolVerifying or ProtocolRejected,
+// the handler MUST discard all JSON-RPC methods EXCEPT "ping", returning error -32603 (app_code=3).
 type FrameHandler interface {
 	HandleFrame(ctx context.Context, frame InboundFrame) (FrameDisposition, error)
 }
@@ -92,10 +96,9 @@ func NewWSClient(cfg config.CloudConfig, scheduler queues.OutboundScheduler, met
 	}, nil
 }
 
-func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
+func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) error {
 	if handler == nil {
-		log.Printf("ws: frame handler cannot be nil")
-		return
+		return errors.New("ws: frame handler cannot be nil")
 	}
 
 	backoff := 2 * time.Second
@@ -118,7 +121,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 		select {
 		case <-ctx.Done():
 			log.Printf("ws: reconnect loop stopped by context")
-			return
+			return nil
 		default:
 		}
 
@@ -138,29 +141,25 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 			if hasCA {
 				caCert, err := os.ReadFile(c.config.TLS.CAFile)
 				if err != nil {
-					log.Printf("ws: fatal: failed to read CA file: %v", err)
-					return
+					return fmt.Errorf("ws: fatal: failed to read CA file: %w", err)
 				}
 				caCertPool, err := x509.SystemCertPool()
 				if err != nil || caCertPool == nil {
 					caCertPool = x509.NewCertPool()
 				}
 				if !caCertPool.AppendCertsFromPEM(caCert) {
-					log.Printf("ws: fatal: failed to parse any valid certificates from CA file")
-					return
+					return errors.New("ws: fatal: failed to parse any valid certificates from CA file")
 				}
 				tlsConfig.RootCAs = caCertPool
 			}
 
 			if hasCert {
 				if c.config.TLS.ClientCertFile == "" || c.config.TLS.ClientKeyFile == "" {
-					log.Printf("ws: fatal: incomplete client certificate configuration")
-					return
+					return errors.New("ws: fatal: incomplete client certificate configuration")
 				}
 				cert, err := tls.LoadX509KeyPair(c.config.TLS.ClientCertFile, c.config.TLS.ClientKeyFile)
 				if err != nil {
-					log.Printf("ws: fatal: failed to load client cert: %v", err)
-					return
+					return fmt.Errorf("ws: fatal: failed to load client cert: %w", err)
 				}
 				tlsConfig.Certificates = []tls.Certificate{cert}
 			}
@@ -175,7 +174,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 			log.Printf("ws: dial failed: %v", err)
 			c.onStateChange(contracts.LinkConnecting, contracts.ProtocolUnknown)
 			if !waitForRetry() {
-				return
+				return nil
 			}
 			continue
 		}
@@ -205,7 +204,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 			c.onStateChange(contracts.LinkConnecting, contracts.ProtocolUnknown)
 			backoff = maxBackoff
 			if !waitForRetry() {
-				return
+				return nil
 			}
 			continue
 		} else if hsResult == HandshakeRetryableFailure {
@@ -214,16 +213,16 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 			sessionCancel()
 			c.onStateChange(contracts.LinkConnecting, contracts.ProtocolUnknown)
 			if !waitForRetry() {
-				return
+				return nil
 			}
 			continue
 		} else if hsResult == HandshakeRejectedKeepOpen {
-			log.Printf("ws: handshake rejected, keeping connection open")
+			log.Printf("ws: session %s active (REJECTED state)", sessionID)
 			c.onStateChange(contracts.LinkConnected, contracts.ProtocolRejected)
 		} else {
+			log.Printf("ws: session %s active", sessionID)
 			c.onStateChange(contracts.LinkConnected, contracts.ProtocolAccepted)
 		}
-		log.Printf("ws: session %s active", sessionID)
 		sessionStartTime := time.Now()
 
 		g, gCtx := errgroup.WithContext(sessionCtx)
@@ -256,7 +255,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 
 		// Apply backoff before the next dial to prevent rapid accept/drop churn
 		if !waitForRetry() {
-			return
+			return nil
 		}
 	}
 }

@@ -74,7 +74,7 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 			"jsonrpc": "2.0",
 			"id":      req["id"],
 			"result": map[string]any{
-				"status": "accepted",
+				"error": 0, "text": "Success",
 			},
 		}
 		conn.WriteJSON(resp)
@@ -225,7 +225,7 @@ func TestWSClient_11MBFrameLimit(t *testing.T) {
 		_, payload, _ := conn.ReadMessage()
 		var req map[string]any
 		json.Unmarshal(payload, &req)
-		resp := map[string]any{"jsonrpc": "2.0", "id": req["id"], "result": map[string]any{"status": "accepted"}}
+		resp := map[string]any{"jsonrpc": "2.0", "id": req["id"], "result": map[string]any{"error": 0, "text": "Success"}}
 		conn.WriteJSON(resp)
 		time.Sleep(100 * time.Millisecond)
 
@@ -378,7 +378,7 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 		_, payload, _ := conn.ReadMessage()
 		var req map[string]any
 		json.Unmarshal(payload, &req)
-		resp := map[string]any{"jsonrpc": "2.0", "id": req["id"], "result": map[string]any{"status": "accepted"}}
+		resp := map[string]any{"jsonrpc": "2.0", "id": req["id"], "result": map[string]any{"error": 0, "text": "Success"}}
 		conn.WriteJSON(resp)
 
 		pingReceived := make(chan bool, 1)
@@ -451,7 +451,7 @@ func TestWSClient_PingDuringVerification(t *testing.T) {
 		// Now finally accept the connect handshake using the connect request's ID
 		var req map[string]any
 		json.Unmarshal(connectPayload, &req)
-		resp := map[string]any{"jsonrpc": "2.0", "id": req["id"], "result": map[string]any{"status": "accepted"}}
+		resp := map[string]any{"jsonrpc": "2.0", "id": req["id"], "result": map[string]any{"error": 0, "text": "Success"}}
 		conn.WriteJSON(resp)
 	}))
 	defer server.Close()
@@ -477,7 +477,7 @@ func TestWSClient_StalePriority0(t *testing.T) {
 		defer conn.Close()
 
 		conn.ReadMessage() // read connect req
-		resp := map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{"status": "accepted"}}
+		resp := map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{"error": 0, "text": "Success"}}
 		conn.WriteJSON(resp)
 
 		// Read outbound messages from the client queue
@@ -566,7 +566,7 @@ func TestWSClient_ReconnectThrottling(t *testing.T) {
 		conn.WriteJSON(map[string]any{
 			"jsonrpc": "2.0",
 			"id":      req["id"],
-			"result":  map[string]any{"status": "accepted"},
+			"result":  map[string]any{"error": 0, "text": "Success"},
 		})
 
 		// Immediately drop connection (less than 60s stable duration)
@@ -620,7 +620,7 @@ func TestWSClient_PingControlDeadlineRefresh(t *testing.T) {
 		conn.WriteJSON(map[string]any{
 			"jsonrpc": "2.0",
 			"id":      req["id"],
-			"result":  map[string]any{"status": "accepted"},
+			"result":  map[string]any{"error": 0, "text": "Success"},
 		})
 
 		// Send pings every 500ms to keep connection alive
@@ -680,7 +680,7 @@ func TestWSClient_ConfiguredWriteTimeout(t *testing.T) {
 		conn.WriteJSON(map[string]any{
 			"jsonrpc": "2.0",
 			"id":      req["id"],
-			"result":  map[string]any{"status": "accepted"},
+			"result":  map[string]any{"error": 0, "text": "Success"},
 		})
 
 		// Block reads completely so the client TCP buffer fills and writes block
@@ -798,5 +798,97 @@ func TestWSClient_11MBFrameLimit_Handshake(t *testing.T) {
 	}
 	if states[2] != "connecting-unknown" {
 		t.Errorf("expected connecting-unknown after rejection, got %s", states[2])
+	}
+}
+
+func TestWSClient_HandshakeValidation(t *testing.T) {
+	tests := []struct {
+		name         string
+		response     map[string]any
+		expectAccept bool
+	}{
+		{
+			name:         "empty result",
+			response:     map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{}},
+			expectAccept: false,
+		},
+		{
+			name:         "unknown result fields only",
+			response:     map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{"status": "accepted"}},
+			expectAccept: false,
+		},
+		{
+			name:         "missing required error field",
+			response:     map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{"text": "Success"}},
+			expectAccept: false,
+		},
+		{
+			name:         "explicit successful result",
+			response:     map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{"error": 0, "text": "Success"}},
+			expectAccept: true,
+		},
+		{
+			name:         "explicit rejection result",
+			response:     map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{"error": 1, "text": "Rejected"}},
+			expectAccept: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			upgrader := gws.Upgrader{}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := upgrader.Upgrade(w, r, nil)
+				if err != nil {
+					return
+				}
+				defer conn.Close()
+				conn.ReadMessage()
+				conn.WriteJSON(tt.response)
+			}))
+			defer server.Close()
+
+			wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+			cfg := &config.CloudConfig{URL: wsURL}
+
+			var states []string
+			var mu sync.Mutex
+
+			onState := func(cloud contracts.LinkState, protocol contracts.ProtocolState) {
+				mu.Lock()
+				defer mu.Unlock()
+				s := string(cloud) + "-" + string(protocol)
+				states = append(states, s)
+			}
+
+			client := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, onState)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			go client.ReconnectLoop(ctx, &mockFrameHandler{})
+			time.Sleep(1 * time.Second)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			if tt.expectAccept {
+				foundAccepted := false
+				for _, s := range states {
+					if s == "connected-accepted" {
+						foundAccepted = true
+						break
+					}
+				}
+				if !foundAccepted {
+					t.Errorf("expected connected-accepted state, got %v", states)
+				}
+			} else {
+				for _, s := range states {
+					if s == "connected-accepted" {
+						t.Errorf("expected handshake to fail, but got connected-accepted state")
+					}
+				}
+			}
+		})
 	}
 }

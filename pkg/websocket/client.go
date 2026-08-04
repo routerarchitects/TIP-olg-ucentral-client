@@ -31,7 +31,7 @@ type ConnectMetadataProvider interface {
 }
 
 type CloudConnectResult struct {
-	Error int    `json:"error"`
+	Error *int   `json:"error"`
 	Text  string `json:"text,omitempty"`
 }
 
@@ -92,6 +92,11 @@ func NewWSClient(cfg config.CloudConfig, scheduler queues.OutboundScheduler, met
 }
 
 func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
+	if handler == nil {
+		log.Printf("ws: frame handler cannot be nil")
+		return
+	}
+
 	backoff := 2 * time.Second
 	maxBackoff := 60 * time.Second
 
@@ -138,7 +143,10 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 					}
 					continue
 				}
-				caCertPool := x509.NewCertPool()
+				caCertPool, err := x509.SystemCertPool()
+				if err != nil || caCertPool == nil {
+					caCertPool = x509.NewCertPool()
+				}
 				if !caCertPool.AppendCertsFromPEM(caCert) {
 					log.Printf("ws: failed to parse any valid certificates from CA file")
 					if !waitForRetry() {
@@ -381,13 +389,19 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn, 
 				log.Printf("ws: rejected by cloud (jsonrpc error): %v", resp.Error)
 				return HandshakeRejectedKeepOpen
 			}
-			if resp.Result != nil && resp.Result.Error != 0 {
-				log.Printf("ws: rejected by cloud (result error %d): %s", resp.Result.Error, resp.Result.Text)
-				return HandshakeRejectedKeepOpen
-			}
-			if resp.Result == nil && resp.Error == nil {
-				log.Printf("ws: malformed empty response from cloud")
+			if resp.Result == nil {
+				log.Printf("ws: handshake rejected: missing result field")
 				return HandshakeRetryableFailure
+			}
+			
+			if resp.Result.Error == nil {
+				log.Printf("ws: handshake rejected: missing required error field in result")
+				return HandshakeRetryableFailure
+			}
+
+			if *resp.Result.Error != 0 {
+				log.Printf("ws: rejected by cloud (result error %d): %s", *resp.Result.Error, resp.Result.Text)
+				return HandshakeRejectedKeepOpen
 			}
 
 			log.Printf("ws: connect handshake accepted by cloud")

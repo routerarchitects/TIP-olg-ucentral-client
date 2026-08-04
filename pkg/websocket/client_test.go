@@ -3,6 +3,7 @@ package websocket
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -413,4 +414,124 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 
 	go client.ReconnectLoop(ctx, &mockFrameHandler{})
 	time.Sleep(3 * time.Second)
+}
+
+func TestWSClient_PingDuringVerification(t *testing.T) {
+	upgrader := gws.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		
+		// Read the connect req first!
+		_, connectPayload, _ := conn.ReadMessage()
+
+		// Send a JSON-RPC ping BEFORE replying to connect!
+		pingReq := map[string]any{"jsonrpc": "2.0", "method": "ping", "id": 999}
+		conn.WriteJSON(pingReq)
+
+		// Wait for the ping reply
+		_, payload, _ := conn.ReadMessage()
+		var reply map[string]any
+		json.Unmarshal(payload, &reply)
+
+		if reply["id"].(float64) != 999 {
+			t.Errorf("expected ping reply id 999, got %v", reply["id"])
+		}
+		result, ok := reply["result"].(map[string]any)
+		if !ok || result["serial"] != "SERIAL123" {
+			t.Errorf("expected ping reply serial SERIAL123, got %v", reply["result"])
+		}
+
+		// Now finally accept the connect handshake using the connect request's ID
+		var req map[string]any
+		json.Unmarshal(connectPayload, &req)
+		resp := map[string]any{"jsonrpc": "2.0", "id": req["id"], "result": map[string]any{"status": "accepted"}}
+		conn.WriteJSON(resp)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &config.CloudConfig{URL: wsURL}
+	client := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	
+	go client.ReconnectLoop(ctx, &mockFrameHandler{})
+	time.Sleep(1 * time.Second) // Let handshake finish
+}
+
+func TestWSClient_StalePriority0(t *testing.T) {
+	msgReceived := make(chan string, 2)
+	upgrader := gws.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		
+		conn.ReadMessage() // read connect req
+		resp := map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{"status": "accepted"}}
+		conn.WriteJSON(resp)
+
+		// Read outbound messages from the client queue
+		for {
+			_, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			msgReceived <- string(payload)
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &config.CloudConfig{URL: wsURL}
+	scheduler := queues.NewPriorityScheduler(10, 10)
+	client := NewWSClient(*cfg, scheduler, &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go client.ReconnectLoop(ctx, &mockFrameHandler{})
+	time.Sleep(1 * time.Second) // wait for connect
+
+	client.mu.Lock()
+	activeSess := fmt.Sprintf("sess-%d", client.generation)
+	client.mu.Unlock()
+
+	// Push a stale P0 message
+	scheduler.Push(queues.OutboundMessage{
+		SessionID: "sess-old",
+		Priority:  queues.PriorityHighest,
+		Payload:   []byte("stale-p0"),
+	})
+
+	// Push a valid P1 message
+	scheduler.Push(queues.OutboundMessage{
+		SessionID: "sess-old", // P1 ignores session ID filtering
+		Priority:  queues.PriorityHigh,
+		Payload:   []byte("valid-p1"),
+	})
+
+	// Push a valid P0 message
+	scheduler.Push(queues.OutboundMessage{
+		SessionID: activeSess,
+		Priority:  queues.PriorityHighest,
+		Payload:   []byte("valid-p0"),
+	})
+
+	// We expect to only receive "valid-p0" then "valid-p1"
+	for i := 0; i < 2; i++ {
+		select {
+		case msg := <-msgReceived:
+			if msg == "stale-p0" {
+				t.Errorf("client failed to drop stale Priority-0 message")
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for outbound messages")
+		}
+	}
 }

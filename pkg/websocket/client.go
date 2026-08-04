@@ -111,7 +111,15 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 				continue
 			}
 			caCertPool := x509.NewCertPool()
-			caCertPool.AppendCertsFromPEM(caCert)
+			if !caCertPool.AppendCertsFromPEM(caCert) {
+				log.Printf("ws: failed to parse any valid certificates from CA file")
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(backoff):
+				}
+				continue
+			}
 
 			cert, err := tls.LoadX509KeyPair(c.config.TLS.ClientCertFile, c.config.TLS.ClientKeyFile)
 			if err != nil {
@@ -206,12 +214,13 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) {
 			return nil
 		})
 
+		connToUse := c.conn
 		g.Go(func() error {
-			return c.startReaderLoop(gCtx, handler)
+			return c.startReaderLoop(gCtx, connToUse, handler)
 		})
 
 		g.Go(func() error {
-			return c.startWriterLoop(gCtx)
+			return c.startWriterLoop(gCtx, connToUse)
 		})
 
 		err = g.Wait()
@@ -305,7 +314,10 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, sessionID string
 					"result":  map[string]any{"serial": params.Serial, "uuid": params.UUID},
 				}
 				c.conn.SetWriteDeadline(time.Now().Add(timeout))
-				_ = c.conn.WriteJSON(pingReply)
+				if err := c.conn.WriteJSON(pingReply); err != nil {
+					log.Printf("ws: failed to write ping reply during handshake: %v", err)
+					return HandshakeRetryableFailure
+				}
 			} else {
 				// Reject non-ping
 				rejectReply := map[string]any{
@@ -318,7 +330,10 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, sessionID string
 					},
 				}
 				c.conn.SetWriteDeadline(time.Now().Add(timeout))
-				_ = c.conn.WriteJSON(rejectReply)
+				if err := c.conn.WriteJSON(rejectReply); err != nil {
+					log.Printf("ws: failed to write reject reply during handshake: %v", err)
+					return HandshakeRetryableFailure
+				}
 			}
 			c.conn.SetReadDeadline(time.Now().Add(timeout))
 			continue
@@ -359,18 +374,18 @@ func (c *WSClient) Close() error {
 	return nil
 }
 
-func (c *WSClient) startReaderLoop(ctx context.Context, handler FrameHandler) error {
+func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler FrameHandler) error {
 	// 1. Enforce transport hard maximum frame size (11MB) to prevent OOM
-	c.conn.SetReadLimit(11 * 1024 * 1024)
+	conn.SetReadLimit(11 * 1024 * 1024)
 
 	pongTimeout := 60 * time.Second
 	if c.config.PongTimeoutSeconds > 0 {
 		pongTimeout = time.Duration(c.config.PongTimeoutSeconds) * time.Second
 	}
 
-	c.conn.SetReadDeadline(time.Now().Add(pongTimeout))
-	c.conn.SetPongHandler(func(string) error {
-		c.conn.SetReadDeadline(time.Now().Add(pongTimeout))
+	conn.SetReadDeadline(time.Now().Add(pongTimeout))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(pongTimeout))
 		return nil
 	})
 
@@ -385,14 +400,14 @@ func (c *WSClient) startReaderLoop(ctx context.Context, handler FrameHandler) er
 		default:
 		}
 
-		msgType, payload, err := c.conn.ReadMessage()
+		msgType, payload, err := conn.ReadMessage()
 		if err != nil {
 			log.Printf("ws: reader loop socket error: %v", err)
 			return err
 		}
 
 		// Update deadline aggressively on any successful read (pong or payload)
-		c.conn.SetReadDeadline(time.Now().Add(pongTimeout))
+		conn.SetReadDeadline(time.Now().Add(pongTimeout))
 
 		frame := InboundFrame{
 			SessionID: sessID,
@@ -407,7 +422,7 @@ func (c *WSClient) startReaderLoop(ctx context.Context, handler FrameHandler) er
 	}
 }
 
-func (c *WSClient) startWriterLoop(ctx context.Context) error {
+func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 	pingInterval := 30 * time.Second
 	if c.config.PingIntervalSeconds > 0 {
 		pingInterval = time.Duration(c.config.PingIntervalSeconds) * time.Second
@@ -449,19 +464,18 @@ func (c *WSClient) startWriterLoop(ctx context.Context) error {
 			// Writer loop exclusively sends Ping
 			c.mu.Lock()
 			// Set a short deadline for writing the ping itself
-			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			err := c.conn.WriteMessage(gws.PingMessage, nil)
+			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			err := conn.WriteMessage(gws.PingMessage, nil)
 			c.mu.Unlock()
 			if err != nil {
 				return fmt.Errorf("failed to write ping: %v", err)
 			}
 		case res := <-msgCh:
 			if res.err != nil {
-				if res.err == context.Canceled || res.err == context.DeadlineExceeded {
-					return ctx.Err()
+				if res.err != context.Canceled && res.err != context.DeadlineExceeded {
+					log.Printf("ws: terminal queue drain error: %v", res.err)
 				}
-				log.Printf("ws: queue drain error: %v", res.err)
-				continue
+				return res.err // Crash the writer loop so the errgroup tears down the session
 			}
 			msg := res.msg
 
@@ -472,8 +486,8 @@ func (c *WSClient) startWriterLoop(ctx context.Context) error {
 			}
 
 			c.mu.Lock()
-			c.conn.SetWriteDeadline(time.Now().Add(60 * time.Second)) // Using a generous write deadline
-			err := c.conn.WriteMessage(gws.TextMessage, msg.Payload)
+			conn.SetWriteDeadline(time.Now().Add(60 * time.Second)) // Using a generous write deadline
+			err := conn.WriteMessage(gws.TextMessage, msg.Payload)
 			c.mu.Unlock()
 
 			if err != nil {

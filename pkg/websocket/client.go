@@ -393,7 +393,7 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn, 
 				log.Printf("ws: handshake rejected: missing result field")
 				return HandshakeRetryableFailure
 			}
-			
+
 			if resp.Result.Error == nil {
 				log.Printf("ws: handshake rejected: missing required error field in result")
 				return HandshakeRetryableFailure

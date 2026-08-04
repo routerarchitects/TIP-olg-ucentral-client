@@ -404,6 +404,12 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn, 
 func (c *WSClient) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	
+	if c.cancel != nil {
+		c.cancel()
+		c.cancel = nil
+	}
+
 	if c.conn != nil {
 		err := c.conn.Close()
 		c.conn = nil

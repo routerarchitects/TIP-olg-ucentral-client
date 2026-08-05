@@ -54,7 +54,11 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 
 		hsPingReceived := make(chan struct{})
 		conn.SetPingHandler(func(appData string) error {
-			close(hsPingReceived)
+			select {
+			case <-hsPingReceived:
+			default:
+				close(hsPingReceived)
+			}
 			return conn.WriteControl(gws.PongMessage, []byte(appData), time.Now().Add(time.Second))
 		})
 
@@ -184,7 +188,11 @@ func TestWSClient_PingValidation(t *testing.T) {
 				conn.ReadMessage() // connect
 				hsPingReceived := make(chan struct{})
 				conn.SetPingHandler(func(appData string) error {
-					close(hsPingReceived)
+					select {
+			case <-hsPingReceived:
+			default:
+				close(hsPingReceived)
+			}
 					return conn.WriteControl(10, []byte(appData), time.Now().Add(time.Second))
 				})
 				go func() { conn.ReadMessage() }()
@@ -279,7 +287,11 @@ func TestWSClient_11MBFrameLimit(t *testing.T) {
 		json.Unmarshal(payload, &req)
 		hsPingReceived := make(chan struct{})
 		conn.SetPingHandler(func(appData string) error {
-			close(hsPingReceived)
+			select {
+			case <-hsPingReceived:
+			default:
+				close(hsPingReceived)
+			}
 			return conn.WriteControl(10, []byte(appData), time.Now().Add(time.Second))
 		})
 		go func() { conn.ReadMessage() }()
@@ -386,10 +398,20 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 		json.Unmarshal(payload, &req)
 		hsPingReceived := make(chan struct{})
 		conn.SetPingHandler(func(appData string) error {
-			close(hsPingReceived)
+			select {
+			case <-hsPingReceived:
+			default:
+				close(hsPingReceived)
+			}
 			return conn.WriteControl(10, []byte(appData), time.Now().Add(time.Second))
 		})
-		go func() { conn.ReadMessage() }()
+		go func() {
+			for {
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+			}
+		}()
 		<-hsPingReceived
 		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
 
@@ -401,15 +423,6 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 			}
 			return conn.WriteMessage(gws.PongMessage, []byte(appData))
 		})
-
-		// Start a dummy reader to process control frames (like ping)
-		go func() {
-			for {
-				if _, _, err := conn.ReadMessage(); err != nil {
-					return
-				}
-			}
-		}()
 
 		select {
 		case <-hsPingReceived:

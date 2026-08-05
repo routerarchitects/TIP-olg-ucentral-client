@@ -51,7 +51,7 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer conn.Close()
-		
+
 		// Read the connect frame sent by the client
 		_, payload, err := conn.ReadMessage()
 		if err != nil {
@@ -66,7 +66,7 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 		if req["method"] != "connect" {
 			t.Errorf("expected connect method, got %v", req["method"])
 		}
-conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
+		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
 
 		// Keep connection open so the read/write loops can start
 		time.Sleep(2 * time.Second)
@@ -255,10 +255,10 @@ func TestWSClient_11MBFrameLimit(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-				_, payload, _ := conn.ReadMessage()
+		_, payload, _ := conn.ReadMessage()
 		var req map[string]any
 		json.Unmarshal(payload, &req)
-conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
+		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
 
 		time.Sleep(100 * time.Millisecond)
 
@@ -355,10 +355,10 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-				_, payload, _ := conn.ReadMessage()
+		_, payload, _ := conn.ReadMessage()
 		var req map[string]any
 		json.Unmarshal(payload, &req)
-conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
+		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
 
 		pingReceived := make(chan bool, 1)
 		conn.SetPingHandler(func(appData string) error {

@@ -355,7 +355,7 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn) 
 			// Security: Pre-acceptance commands must NOT be buffered or replayed.
 			// The transport strictly owns and discards all non-ping application frames
 			// received before identity verification completes.
-			log.Printf("ws: discarded pre-acceptance application frame: %s", string(payload))
+			log.Printf("ws: discarded pre-acceptance application frame (%d bytes)", len(payload))
 		}
 	}
 
@@ -408,6 +408,8 @@ func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler 
 	sessID := fmt.Sprintf("sess-%d", c.generation)
 	c.mu.Unlock()
 
+	consecutiveErrors := 0
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -429,8 +431,21 @@ func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler 
 
 		disp, err := handler.HandleFrame(ctx, frame)
 		if err != nil {
-			log.Printf("ws: frame handler error: %v", err)
+			consecutiveErrors++
+			log.Printf("ws: frame handler error: %v (consecutive: %d)", err, consecutiveErrors)
+			
+			maxErrors := 20
+			if c.config.MaxConsecutiveFrameErrors > 0 {
+				maxErrors = c.config.MaxConsecutiveFrameErrors
+			}
+			
+			if consecutiveErrors >= maxErrors {
+				return fmt.Errorf("ws: fatal: exceeded maximum consecutive frame handler errors")
+			}
+		} else {
+			consecutiveErrors = 0
 		}
+		
 		if disp == FrameFatalCloseConnection {
 			return fmt.Errorf("handler requested fatal socket termination")
 		}

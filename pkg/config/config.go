@@ -44,6 +44,7 @@ type CloudConfig struct {
 	PongTimeoutSeconds            int            `json:"pong_timeout_seconds"`
 	StableSessionThresholdSeconds int            `json:"stable_session_threshold_seconds"`
 	CompressionThresholdBytes     int            `json:"compression_threshold_bytes"` // Defines compression threshold mapped to permessage-deflate behavior
+	MaxConsecutiveFrameErrors     int            `json:"max_consecutive_frame_errors"`
 	TLS                           CloudTLSConfig `json:"tls"`
 }
 

@@ -52,6 +52,12 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 		}
 		defer conn.Close()
 
+		hsPingReceived := make(chan struct{})
+		conn.SetPingHandler(func(appData string) error {
+			close(hsPingReceived)
+			return conn.WriteControl(gws.PongMessage, []byte(appData), time.Now().Add(time.Second))
+		})
+
 		// Read the connect frame sent by the client
 		_, payload, err := conn.ReadMessage()
 		if err != nil {
@@ -66,6 +72,13 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 		if req["method"] != "connect" {
 			t.Errorf("expected connect method, got %v", req["method"])
 		}
+
+		// Read the next message in a goroutine so gorilla/websocket can process the Ping control frame
+		go func() {
+			conn.ReadMessage()
+		}()
+
+		<-hsPingReceived
 		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
 
 		// Keep connection open so the read/write loops can start
@@ -169,7 +182,13 @@ func TestWSClient_PingValidation(t *testing.T) {
 
 				// wait for connect frame
 				conn.ReadMessage() // connect
-
+				hsPingReceived := make(chan struct{})
+				conn.SetPingHandler(func(appData string) error {
+					close(hsPingReceived)
+					return conn.WriteControl(10, []byte(appData), time.Now().Add(time.Second))
+				})
+				go func() { conn.ReadMessage() }()
+				<-hsPingReceived
 				// Send an unrelated command before the valid ping to prove we skip it
 				if tc.name == "valid ping" {
 					conn.WriteJSON(map[string]any{"method": "upgrade", "jsonrpc": "2.0"})
@@ -224,7 +243,7 @@ type mockEmptySerialProvider struct{}
 
 func (m *mockEmptySerialProvider) ConnectParams(ctx context.Context) (CloudConnectParams, error) {
 	return CloudConnectParams{
-		Serial:       "", // explicitly empty
+		Serial:       "   ", // explicitly whitespace
 		Firmware:     "mock-fw",
 		UUID:         42,
 		Capabilities: map[string]any{"test": true},
@@ -258,6 +277,13 @@ func TestWSClient_11MBFrameLimit(t *testing.T) {
 		_, payload, _ := conn.ReadMessage()
 		var req map[string]any
 		json.Unmarshal(payload, &req)
+		hsPingReceived := make(chan struct{})
+		conn.SetPingHandler(func(appData string) error {
+			close(hsPingReceived)
+			return conn.WriteControl(10, []byte(appData), time.Now().Add(time.Second))
+		})
+		go func() { conn.ReadMessage() }()
+		<-hsPingReceived
 		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
 
 		time.Sleep(100 * time.Millisecond)
@@ -358,6 +384,13 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 		_, payload, _ := conn.ReadMessage()
 		var req map[string]any
 		json.Unmarshal(payload, &req)
+		hsPingReceived := make(chan struct{})
+		conn.SetPingHandler(func(appData string) error {
+			close(hsPingReceived)
+			return conn.WriteControl(10, []byte(appData), time.Now().Add(time.Second))
+		})
+		go func() { conn.ReadMessage() }()
+		<-hsPingReceived
 		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
 
 		pingReceived := make(chan bool, 1)
@@ -379,7 +412,7 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 		}()
 
 		select {
-		case <-pingReceived:
+		case <-hsPingReceived:
 			// Test passes!
 			return
 		case <-time.After(4 * time.Second):

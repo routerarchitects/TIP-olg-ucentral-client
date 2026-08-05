@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -280,8 +281,8 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn) 
 		return HandshakeRetryableFailure
 	}
 
-	if params.Serial == "" {
-		log.Printf("ws: aborting handshake, local serial number is empty")
+	if strings.TrimSpace(params.Serial) == "" {
+		log.Printf("ws: aborting handshake, local serial number is empty or whitespace")
 		return HandshakeRetryableFailure
 	}
 

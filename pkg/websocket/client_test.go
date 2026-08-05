@@ -134,8 +134,6 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 	}
 }
 
-
-
 func TestWSClient_11MBFrameLimit(t *testing.T) {
 	upgrader := gws.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -197,8 +195,6 @@ func TestWSClient_11MBFrameLimit(t *testing.T) {
 		t.Errorf("expected socket to crash and return to connecting-unknown after 12MB frame. States: %v", states)
 	}
 }
-
-
 
 func TestWSClient_TLSVerification(t *testing.T) {
 	upgrader := gws.Upgrader{}

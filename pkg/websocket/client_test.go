@@ -425,7 +425,7 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 		})
 
 		select {
-		case <-hsPingReceived:
+		case <-pingReceived:
 			// Test passes!
 			return
 		case <-time.After(4 * time.Second):

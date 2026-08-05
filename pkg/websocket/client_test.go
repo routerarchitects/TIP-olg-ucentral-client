@@ -399,7 +399,7 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 		json.Unmarshal(payload, &req)
 		hsPingReceived := make(chan struct{})
 		pingReceived := make(chan bool, 1)
-		
+
 		conn.SetPingHandler(func(appData string) error {
 			select {
 			case <-hsPingReceived:
@@ -416,7 +416,7 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 			}
 			return conn.WriteControl(gws.PongMessage, []byte(appData), time.Now().Add(time.Second))
 		})
-		
+
 		go func() {
 			for {
 				if _, _, err := conn.ReadMessage(); err != nil {
@@ -424,7 +424,7 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 				}
 			}
 		}()
-		
+
 		<-hsPingReceived
 		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
 

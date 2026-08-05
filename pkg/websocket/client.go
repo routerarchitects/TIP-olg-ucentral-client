@@ -59,8 +59,6 @@ type HandshakeResult int
 const (
 	HandshakeAccepted HandshakeResult = iota
 	HandshakeRetryableFailure
-	HandshakeLongBackoffFailure
-	HandshakeRejectedKeepOpen
 )
 
 type WSClient struct {
@@ -195,17 +193,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 		c.mu.Unlock()
 
 		hsResult := c.performConnectHandshake(sessionCtx, conn, sessionID)
-		if hsResult == HandshakeLongBackoffFailure {
-			log.Printf("ws: fatal handshake failure, closing connection and applying max backoff")
-			c.Close()
-			sessionCancel()
-			c.onStateChange(contracts.LinkConnecting, contracts.ProtocolUnknown)
-			backoff = maxBackoff
-			if !waitForRetry() {
-				return nil
-			}
-			continue
-		} else if hsResult == HandshakeRetryableFailure {
+		if hsResult == HandshakeRetryableFailure {
 			log.Printf("ws: handshake failed, closing connection and retrying")
 			c.Close()
 			sessionCancel()
@@ -214,9 +202,6 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 				return nil
 			}
 			continue
-		} else if hsResult == HandshakeRejectedKeepOpen {
-			log.Printf("ws: session %s active (REJECTED state)", sessionID)
-			c.onStateChange(contracts.LinkConnected, contracts.ProtocolRejected)
 		} else {
 			log.Printf("ws: session %s active", sessionID)
 			c.onStateChange(contracts.LinkConnected, contracts.ProtocolAccepted)
@@ -274,27 +259,12 @@ type jsonrpcRequest struct {
 	Params  map[string]any `json:"params"`
 }
 
-type jsonrpcResponse struct {
-	JSONRPC string              `json:"jsonrpc"`
-	ID      uint64              `json:"id"`
-	Result  *CloudConnectResult `json:"result,omitempty"`
-	Error   *jsonrpcError       `json:"error,omitempty"`
-	Method  string              `json:"method,omitempty"`
+type PingResponse struct {
+	Ping *struct {
+		SerialNumber string `json:"serialNumber"`
+	} `json:"ping"`
 }
 
-type CloudConnectResult struct {
-	Status *CloudConnectStatus `json:"status,omitempty"`
-}
-
-type CloudConnectStatus struct {
-	Error *int   `json:"error"`
-	Text  string `json:"text"`
-}
-
-type jsonrpcError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-}
 
 func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn, sessionID string) HandshakeResult {
 	if conn == nil {
@@ -361,15 +331,18 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn, 
 		}
 
 		if msgType == gws.TextMessage {
-			var resp map[string]any
-			if err := json.Unmarshal(payload, &resp); err == nil {
-				if _, hasPing := resp["ping"]; hasPing {
-					log.Printf("ws: received proprietary ping response, handshake accepted!")
+			var resp PingResponse
+			if err := json.Unmarshal(payload, &resp); err == nil && resp.Ping != nil {
+				if resp.Ping.SerialNumber == params.Serial {
+					log.Printf("ws: received valid ping response for serial %s, handshake accepted!", params.Serial)
 					break
+				} else {
+					log.Printf("ws: received ping response with mismatched serial %s (expected %s)", resp.Ping.SerialNumber, params.Serial)
+					return HandshakeRetryableFailure
 				}
-				// We ignore other commands (like upgrade) for now as requested
-				log.Printf("ws: received unexpected frame during handshake: %s", string(payload))
 			}
+			// We ignore other commands (like upgrade) for now as requested
+			log.Printf("ws: received unexpected frame during handshake: %s", string(payload))
 		}
 	}
 

@@ -51,7 +51,7 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer conn.Close()
-		conn.WriteJSON(map[string]any{"ping": map[string]any{}})
+		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
 
 		// Read the connect frame sent by the client
 		_, payload, err := conn.ReadMessage()
@@ -68,15 +68,7 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 			t.Errorf("expected connect method, got %v", req["method"])
 		}
 
-		// Reply with success
-		resp := map[string]any{
-			"jsonrpc": "2.0",
-			"id":      req["id"],
-			"result": map[string]any{
-				"status": map[string]any{"error": 0, "text": "Success"},
-			},
-		}
-		conn.WriteJSON(resp)
+		
 
 		// Keep connection open so the read/write loops can start
 		time.Sleep(2 * time.Second)
@@ -142,12 +134,11 @@ func TestWSClient_11MBFrameLimit(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		conn.WriteJSON(map[string]any{"ping": map[string]any{}})
+		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
 		_, payload, _ := conn.ReadMessage()
 		var req map[string]any
 		json.Unmarshal(payload, &req)
-		resp := map[string]any{"jsonrpc": "2.0", "id": req["id"], "result": map[string]any{"status": map[string]any{"error": 0, "text": "Success"}}}
-		conn.WriteJSON(resp)
+		
 		time.Sleep(100 * time.Millisecond)
 
 		// Send 12MB frame (exceeds 11MB limit)
@@ -243,12 +234,11 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		conn.WriteJSON(map[string]any{"ping": map[string]any{}})
+		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
 		_, payload, _ := conn.ReadMessage()
 		var req map[string]any
 		json.Unmarshal(payload, &req)
-		resp := map[string]any{"jsonrpc": "2.0", "id": req["id"], "result": map[string]any{"status": map[string]any{"error": 0, "text": "Success"}}}
-		conn.WriteJSON(resp)
+		
 
 		pingReceived := make(chan bool, 1)
 		conn.SetPingHandler(func(appData string) error {
@@ -297,7 +287,7 @@ func TestWSClient_StalePriority0(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		conn.WriteJSON(map[string]any{"ping": map[string]any{}})
+		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
 
 		conn.ReadMessage() // read connect req
 		resp := map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{"status": map[string]any{"error": 0, "text": "Success"}}}
@@ -373,7 +363,7 @@ func TestWSClient_ReconnectThrottling(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		conn.WriteJSON(map[string]any{"ping": map[string]any{}})
+		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
 
 		mu.Lock()
 		connectTimes = append(connectTimes, time.Now())
@@ -387,11 +377,7 @@ func TestWSClient_ReconnectThrottling(t *testing.T) {
 		// Accept handshake
 		var req map[string]any
 		conn.ReadJSON(&req)
-		conn.WriteJSON(map[string]any{
-			"jsonrpc": "2.0",
-			"id":      req["id"],
-			"result":  map[string]any{"status": map[string]any{"error": 0, "text": "Success"}},
-		})
+		
 
 		// Immediately drop connection (less than 60s stable duration)
 		conn.Close()
@@ -438,15 +424,11 @@ func TestWSClient_PingControlDeadlineRefresh(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		conn.WriteJSON(map[string]any{"ping": map[string]any{}})
+		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
 
 		var req map[string]any
 		conn.ReadJSON(&req)
-		conn.WriteJSON(map[string]any{
-			"jsonrpc": "2.0",
-			"id":      req["id"],
-			"result":  map[string]any{"status": map[string]any{"error": 0, "text": "Success"}},
-		})
+		
 
 		// Send pings every 500ms to keep connection alive
 		go func() {
@@ -499,15 +481,11 @@ func TestWSClient_ConfiguredWriteTimeout(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		conn.WriteJSON(map[string]any{"ping": map[string]any{}})
+		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
 
 		var req map[string]any
 		conn.ReadJSON(&req)
-		conn.WriteJSON(map[string]any{
-			"jsonrpc": "2.0",
-			"id":      req["id"],
-			"result":  map[string]any{"status": map[string]any{"error": 0, "text": "Success"}},
-		})
+		
 
 		// Block reads completely so the client TCP buffer fills and writes block
 		time.Sleep(10 * time.Second)
@@ -602,7 +580,7 @@ func TestWSClient_StableSessionThreshold(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		conn.WriteJSON(map[string]any{"ping": map[string]any{}})
+		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
 
 		mu.Lock()
 		connectTimes = append(connectTimes, time.Now())
@@ -616,11 +594,7 @@ func TestWSClient_StableSessionThreshold(t *testing.T) {
 		// Accept handshake
 		var req map[string]any
 		conn.ReadJSON(&req)
-		conn.WriteJSON(map[string]any{
-			"jsonrpc": "2.0",
-			"id":      req["id"],
-			"result":  map[string]any{"status": map[string]any{"error": 0, "text": "Success"}},
-		})
+		
 
 		// Sleep for 2 seconds to exceed the stable threshold of 1s
 		time.Sleep(2 * time.Second)

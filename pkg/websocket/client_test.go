@@ -73,18 +73,46 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 			t.Errorf("failed to parse connect request: %v", err)
 		}
 
+		if req["jsonrpc"] != "2.0" {
+			t.Errorf("expected jsonrpc 2.0, got %v", req["jsonrpc"])
+		}
 		if req["method"] != "connect" {
 			t.Errorf("expected connect method, got %v", req["method"])
+		}
+		if _, exists := req["id"]; exists {
+			t.Errorf("expected no id in connect event, got %v", req["id"])
+		}
+
+		params, ok := req["params"].(map[string]any)
+		if !ok {
+			t.Errorf("expected params object")
+		} else {
+			if params["serial"] != "SERIAL123" {
+				t.Errorf("expected serial SERIAL123, got %v", params["serial"])
+			}
+			if params["uuid"] != float64(12345) { // JSON unmarshals numbers as float64
+				t.Errorf("expected uuid 12345, got %v", params["uuid"])
+			}
+			if params["firmware"] != "1.0.0" {
+				t.Errorf("expected firmware 1.0.0, got %v", params["firmware"])
+			}
+			caps, ok := params["capabilities"].(map[string]any)
+			if !ok || caps["model"] != "test-router" {
+				t.Errorf("expected capabilities object with model test-router, got %v", params["capabilities"])
+			}
 		}
 
 		// Read the next message in a goroutine so gorilla/websocket can process the Ping control frame
 		go func() {
-			conn.ReadMessage()
+			for {
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+			}
 		}()
 
 		<-hsPingReceived
-		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
-
+		time.Sleep(100 * time.Millisecond) // Give it a moment to complete
 		// Keep connection open so the read/write loops can start
 		time.Sleep(2 * time.Second)
 	}))
@@ -152,13 +180,14 @@ func TestWSClient_DiscardPreAcceptanceCommands(t *testing.T) {
 		defer conn.Close()
 
 		hsPingReceived := make(chan struct{})
+		// Do not automatically send Pong here! We want to send invalid frames first.
 		conn.SetPingHandler(func(appData string) error {
 			select {
 			case <-hsPingReceived:
 			default:
 				close(hsPingReceived)
 			}
-			return conn.WriteControl(gws.PongMessage, []byte(appData), time.Now().Add(time.Second))
+			return nil
 		})
 
 		// Read the connect frame sent by the client
@@ -180,8 +209,8 @@ func TestWSClient_DiscardPreAcceptanceCommands(t *testing.T) {
 		conn.WriteJSON(map[string]any{"jsonrpc": "2.0", "method": "upgrade", "params": map[string]any{}})
 		time.Sleep(50 * time.Millisecond)
 
-		// Send the valid identity ping response to complete the handshake
-		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
+		// Send the valid Pong control frame to complete the handshake
+		conn.WriteControl(gws.PongMessage, []byte{}, time.Now().Add(time.Second))
 
 		time.Sleep(1 * time.Second)
 	}))
@@ -212,111 +241,7 @@ func TestWSClient_DiscardPreAcceptanceCommands(t *testing.T) {
 	}
 }
 
-func TestWSClient_PingValidation(t *testing.T) {
-	cases := []struct {
-		name     string
-		response any
-		valid    bool
-	}{
-		{
-			name:     "valid ping",
-			response: map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}},
-			valid:    true,
-		},
-		{
-			name:     "null ping",
-			response: map[string]any{"ping": nil},
-			valid:    false,
-		},
-		{
-			name:     "empty ping object",
-			response: map[string]any{"ping": map[string]any{}},
-			valid:    false,
-		},
-		{
-			name:     "wrong serial",
-			response: map[string]any{"ping": map[string]any{"serialNumber": "OTHER"}},
-			valid:    false,
-		},
-		{
-			name:     "malformed json",
-			response: "not-json", // will write raw text
-			valid:    false,
-		},
-	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			upgrader := gws.Upgrader{}
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				conn, err := upgrader.Upgrade(w, r, nil)
-				if err != nil {
-					return
-				}
-				defer conn.Close()
-
-				// wait for connect frame
-				conn.ReadMessage() // connect
-				hsPingReceived := make(chan struct{})
-				conn.SetPingHandler(func(appData string) error {
-					select {
-					case <-hsPingReceived:
-					default:
-						close(hsPingReceived)
-					}
-					return conn.WriteControl(10, []byte(appData), time.Now().Add(time.Second))
-				})
-				go func() { conn.ReadMessage() }()
-				<-hsPingReceived
-				// Send an unrelated command before the valid ping to prove we skip it
-				if tc.name == "valid ping" {
-					conn.WriteJSON(map[string]any{"method": "upgrade", "jsonrpc": "2.0"})
-				}
-
-				if s, ok := tc.response.(string); ok {
-					conn.WriteMessage(gws.TextMessage, []byte(s))
-				} else {
-					conn.WriteJSON(tc.response)
-				}
-
-				// If not valid, don't send anything else. Client will timeout.
-				// Let's close the connection explicitly after writing invalid to unblock the reader quickly!
-				if !tc.valid {
-					conn.Close()
-				} else {
-					time.Sleep(100 * time.Millisecond)
-				}
-			}))
-			defer server.Close()
-
-			wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-			cfg := &config.CloudConfig{
-				URL:                   wsURL,
-				ConnectTimeoutSeconds: 1, // fast timeout for the tests
-			}
-
-			sched := queues.NewPriorityScheduler(10, 10)
-			client, err := NewWSClient(*cfg, sched, &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
-			if err != nil {
-				t.Fatalf("failed to create client: %v", err)
-			}
-
-			conn, _, err := gws.DefaultDialer.Dial(cfg.URL, nil)
-			if err != nil {
-				t.Fatalf("failed to dial: %v", err)
-			}
-			defer conn.Close()
-
-			res := client.performConnectHandshake(context.Background(), conn)
-
-			if tc.valid && res != HandshakeAccepted {
-				t.Errorf("expected handshake to be accepted")
-			} else if !tc.valid && res == HandshakeAccepted {
-				t.Errorf("expected handshake to be rejected")
-			}
-		})
-	}
-}
 
 type mockEmptySerialProvider struct{}
 
@@ -345,6 +270,55 @@ func TestWSClient_EmptyLocalSerial(t *testing.T) {
 	}
 }
 
+type mockWhitespaceSerialProvider struct{}
+
+func (m *mockWhitespaceSerialProvider) ConnectParams(ctx context.Context) (CloudConnectParams, error) {
+	return CloudConnectParams{
+		Serial:       "  WHITESPACE123  ", // padded whitespace
+		Firmware:     "mock-fw",
+		UUID:         42,
+		Capabilities: map[string]any{"test": true},
+	}, nil
+}
+
+func TestWSClient_WhitespaceSerial(t *testing.T) {
+	upgrader := gws.Upgrader{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+
+		conn.SetPingHandler(func(appData string) error {
+			return conn.WriteControl(gws.PongMessage, []byte(appData), time.Now().Add(time.Second))
+		})
+
+		_, payload, _ := conn.ReadMessage()
+		var req map[string]any
+		json.Unmarshal(payload, &req)
+
+		params := req["params"].(map[string]any)
+		if params["serial"] != "WHITESPACE123" {
+			t.Errorf("expected normalized serial 'WHITESPACE123', got '%v'", params["serial"])
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &config.CloudConfig{URL: wsURL, PingIntervalSeconds: 1, PongTimeoutSeconds: 5}
+	sched := queues.NewPriorityScheduler(10, 10)
+
+	client, _ := NewWSClient(*cfg, sched, &mockWhitespaceSerialProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go client.ReconnectLoop(ctx, &mockFrameHandler{})
+	time.Sleep(500 * time.Millisecond)
+}
+
 func TestWSClient_11MBFrameLimit(t *testing.T) {
 	upgrader := gws.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -367,7 +341,6 @@ func TestWSClient_11MBFrameLimit(t *testing.T) {
 		})
 		go func() { conn.ReadMessage() }()
 		<-hsPingReceived
-		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
 
 		time.Sleep(100 * time.Millisecond)
 
@@ -474,15 +447,17 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 		conn.SetPingHandler(func(appData string) error {
 			select {
 			case <-hsPingReceived:
+				// Second ping (heartbeat)
 				select {
 				case pingReceived <- true:
-					select {
-					case pingVerified <- true:
-					default:
-					}
+				default:
+				}
+				select {
+				case pingVerified <- true:
 				default:
 				}
 			default:
+				// First ping (handshake)
 				close(hsPingReceived)
 			}
 			return conn.WriteControl(gws.PongMessage, []byte(appData), time.Now().Add(time.Second))
@@ -497,7 +472,6 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 		}()
 
 		<-hsPingReceived
-		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
 
 		select {
 		case <-pingReceived:
@@ -532,7 +506,10 @@ func TestWSClient_StalePriority0(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
+
+		conn.SetPingHandler(func(appData string) error {
+			return conn.WriteControl(gws.PongMessage, []byte(appData), time.Now().Add(time.Second))
+		})
 
 		conn.ReadMessage() // read connect req
 		resp := map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{"status": map[string]any{"error": 0, "text": "Success"}}}
@@ -542,6 +519,7 @@ func TestWSClient_StalePriority0(t *testing.T) {
 		for {
 			_, payload, err := conn.ReadMessage()
 			if err != nil {
+				fmt.Printf("MOCK SERVER READ ERROR: %v\n", err)
 				return
 			}
 			msgReceived <- string(payload)
@@ -608,7 +586,7 @@ func TestWSClient_ReconnectThrottling(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
+
 
 		mu.Lock()
 		connectTimes = append(connectTimes, time.Now())
@@ -668,7 +646,7 @@ func TestWSClient_PingControlDeadlineRefresh(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
+
 
 		var req map[string]any
 		conn.ReadJSON(&req)
@@ -724,10 +702,16 @@ func TestWSClient_ConfiguredWriteTimeout(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
 
-		var req map[string]any
-		conn.ReadJSON(&req)
+		conn.SetPingHandler(func(appData string) error {
+			return conn.WriteControl(gws.PongMessage, []byte(appData), time.Now().Add(time.Second))
+		})
+
+		// Run a background reader to process the Ping and send the Pong,
+		// but ONLY read the first Connect frame so we stop reading and block the buffer.
+		go func() {
+			conn.ReadMessage()
+		}()
 
 		// Block reads completely so the client TCP buffer fills and writes block
 		time.Sleep(10 * time.Second)
@@ -822,7 +806,7 @@ func TestWSClient_StableSessionThreshold(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
+
 
 		mu.Lock()
 		connectTimes = append(connectTimes, time.Now())

@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -207,10 +206,10 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 				return nil
 			}
 			continue
-		} else {
-			log.Printf("ws: session %s active", sessionID)
-			c.onStateChange(contracts.LinkConnected, contracts.ProtocolAccepted)
 		}
+		
+		log.Printf("ws: session %s active, waiting for ping verification...", sessionID)
+		// Note: Protocol state remains ProtocolVerifying until startReaderLoop receives the Pong
 		sessionStartTime := time.Now()
 
 		g, gCtx := errgroup.WithContext(sessionCtx)
@@ -260,14 +259,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 type jsonrpcRequest struct {
 	JSONRPC string         `json:"jsonrpc"`
 	Method  string         `json:"method"`
-	ID      uint64         `json:"id"`
 	Params  map[string]any `json:"params"`
-}
-
-type PingResponse struct {
-	Ping *struct {
-		SerialNumber string `json:"serialNumber"`
-	} `json:"ping"`
 }
 
 func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn) HandshakeResult {
@@ -281,7 +273,8 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn) 
 		return HandshakeRetryableFailure
 	}
 
-	if strings.TrimSpace(params.Serial) == "" {
+	params.Serial = strings.TrimSpace(params.Serial)
+	if params.Serial == "" {
 		log.Printf("ws: aborting handshake, local serial number is empty or whitespace")
 		return HandshakeRetryableFailure
 	}
@@ -330,49 +323,9 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn) 
 		return HandshakeRetryableFailure
 	}
 
-	// 3. Wait for the server's proprietary {"ping": {...}} response (or an EOF if rejected)
-	conn.SetReadDeadline(handshakeDeadline)
-	for {
-		msgType, reader, err := conn.NextReader()
-		if err != nil {
-			log.Printf("ws: handshake rejected: socket closed or timed out waiting for ping response: %v", err)
-			return HandshakeRetryableFailure
-		}
-
-		limited := io.LimitReader(reader, 11*1024*1024+1)
-		payload, err := io.ReadAll(limited)
-		if err != nil {
-			log.Printf("ws: error reading handshake frame: %v", err)
-			return HandshakeRetryableFailure
-		}
-		if len(payload) > 11*1024*1024 {
-			log.Printf("ws: handshake rejected: decompressed frame exceeds 11MB limit")
-			return HandshakeRetryableFailure
-		}
-
-		if msgType == gws.TextMessage {
-			var resp PingResponse
-			if err := json.Unmarshal(payload, &resp); err == nil && resp.Ping != nil {
-				if resp.Ping.SerialNumber == params.Serial {
-					log.Printf("ws: received valid ping response for serial %s, handshake accepted!", params.Serial)
-					break
-				} else {
-					log.Printf("ws: received ping response with mismatched serial %s (expected %s)", resp.Ping.SerialNumber, params.Serial)
-					return HandshakeRetryableFailure
-				}
-			}
-			// Security: Pre-acceptance commands must NOT be buffered or replayed.
-			// The transport strictly owns and discards all non-ping application frames
-			// received before identity verification completes.
-			log.Printf("ws: discarded pre-acceptance application frame (%d bytes)", len(payload))
-		}
-	}
-
-	// Clear the deadline for future operations
-	conn.SetReadDeadline(time.Time{})
-	conn.SetWriteDeadline(time.Time{})
-
-	log.Printf("ws: connect handshake complete")
+	// 3. Handshake verification is now asynchronously enforced by startReaderLoop!
+	// If the server fails to reply with a Pong, startReaderLoop will time out and kill the connection.
+	log.Printf("ws: connect handshake frames sent, transitioning to reader loop")
 	return HandshakeAccepted
 }
 
@@ -399,9 +352,16 @@ func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler 
 		pongTimeout = time.Duration(c.config.PongTimeoutSeconds) * time.Second
 	}
 
+	isVerifying := true // Tracks if we are still waiting for the initial Handshake Pong
+
 	conn.SetReadDeadline(time.Now().Add(pongTimeout))
 	conn.SetPongHandler(func(string) error {
 		conn.SetReadDeadline(time.Now().Add(pongTimeout))
+		if isVerifying {
+			isVerifying = false
+			log.Printf("ws: received pong response, handshake fully verified!")
+			c.onStateChange(contracts.LinkConnected, contracts.ProtocolAccepted)
+		}
 		return nil
 	})
 	conn.SetPingHandler(func(appData string) error {
@@ -445,6 +405,11 @@ func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler 
 			SessionID: sessID,
 			Type:      msgType,
 			Payload:   payload,
+		}
+
+		if isVerifying {
+			log.Printf("ws: discarded pre-acceptance application frame (%d bytes)", len(payload))
+			continue
 		}
 
 		disp, err := handler.HandleFrame(ctx, frame)

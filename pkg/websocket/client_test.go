@@ -124,6 +124,102 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 	}
 }
 
+func TestWSClient_PingValidation(t *testing.T) {
+	cases := []struct {
+		name     string
+		response any
+		valid    bool
+	}{
+		{
+			name:     "valid ping",
+			response: map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}},
+			valid:    true,
+		},
+		{
+			name:     "null ping",
+			response: map[string]any{"ping": nil},
+			valid:    false,
+		},
+		{
+			name:     "empty ping object",
+			response: map[string]any{"ping": map[string]any{}},
+			valid:    false,
+		},
+		{
+			name:     "wrong serial",
+			response: map[string]any{"ping": map[string]any{"serialNumber": "OTHER"}},
+			valid:    false,
+		},
+		{
+			name:     "malformed json",
+			response: "not-json", // will write raw text
+			valid:    false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			upgrader := gws.Upgrader{}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := upgrader.Upgrade(w, r, nil)
+				if err != nil {
+					return
+				}
+				defer conn.Close()
+
+				// wait for connect frame
+				conn.ReadMessage() // connect
+
+				// Send an unrelated command before the valid ping to prove we skip it
+				if tc.name == "valid ping" {
+					conn.WriteJSON(map[string]any{"method": "upgrade", "jsonrpc": "2.0"})
+				}
+
+				if s, ok := tc.response.(string); ok {
+					conn.WriteMessage(gws.TextMessage, []byte(s))
+				} else {
+					conn.WriteJSON(tc.response)
+				}
+
+				// If not valid, don't send anything else. Client will timeout.
+				// Let's close the connection explicitly after writing invalid to unblock the reader quickly!
+				if !tc.valid {
+					conn.Close()
+				} else {
+					time.Sleep(100 * time.Millisecond)
+				}
+			}))
+			defer server.Close()
+
+			wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+			cfg := &config.CloudConfig{
+				URL:                   wsURL,
+				ConnectTimeoutSeconds: 1, // fast timeout for the tests
+			}
+
+			sched := queues.NewPriorityScheduler(10, 10)
+			client, err := NewWSClient(*cfg, sched, &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+			if err != nil {
+				t.Fatalf("failed to create client: %v", err)
+			}
+
+			conn, _, err := gws.DefaultDialer.Dial(cfg.URL, nil)
+			if err != nil {
+				t.Fatalf("failed to dial: %v", err)
+			}
+			defer conn.Close()
+
+			res := client.performConnectHandshake(context.Background(), conn, "test")
+
+			if tc.valid && res != HandshakeAccepted {
+				t.Errorf("expected handshake to be accepted")
+			} else if !tc.valid && res == HandshakeAccepted {
+				t.Errorf("expected handshake to be rejected")
+			}
+		})
+	}
+}
+
 func TestWSClient_11MBFrameLimit(t *testing.T) {
 	upgrader := gws.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

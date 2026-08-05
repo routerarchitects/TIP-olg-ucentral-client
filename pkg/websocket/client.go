@@ -31,8 +31,6 @@ type ConnectMetadataProvider interface {
 	ConnectParams(ctx context.Context) (CloudConnectParams, error)
 }
 
-
-
 type InboundFrame struct {
 	SessionID string
 	Type      int

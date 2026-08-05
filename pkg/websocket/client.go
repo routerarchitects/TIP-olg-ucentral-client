@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strings"
@@ -148,10 +149,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 				if err != nil {
 					return fmt.Errorf("ws: fatal: failed to read CA file: %w", err)
 				}
-				caCertPool, err := x509.SystemCertPool()
-				if err != nil || caCertPool == nil {
-					caCertPool = x509.NewCertPool()
-				}
+				caCertPool := x509.NewCertPool()
 				if !caCertPool.AppendCertsFromPEM(caCert) {
 					return errors.New("ws: fatal: failed to parse any valid certificates from CA file")
 				}
@@ -335,9 +333,20 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn) 
 	// 3. Wait for the server's proprietary {"ping": {...}} response (or an EOF if rejected)
 	conn.SetReadDeadline(handshakeDeadline)
 	for {
-		msgType, payload, err := conn.ReadMessage()
+		msgType, reader, err := conn.NextReader()
 		if err != nil {
 			log.Printf("ws: handshake rejected: socket closed or timed out waiting for ping response: %v", err)
+			return HandshakeRetryableFailure
+		}
+
+		limited := io.LimitReader(reader, 11*1024*1024+1)
+		payload, err := io.ReadAll(limited)
+		if err != nil {
+			log.Printf("ws: error reading handshake frame: %v", err)
+			return HandshakeRetryableFailure
+		}
+		if len(payload) > 11*1024*1024 {
+			log.Printf("ws: handshake rejected: decompressed frame exceeds 11MB limit")
 			return HandshakeRetryableFailure
 		}
 
@@ -417,10 +426,19 @@ func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler 
 		default:
 		}
 
-		msgType, payload, err := conn.ReadMessage()
+		msgType, reader, err := conn.NextReader()
 		if err != nil {
 			log.Printf("ws: reader loop socket error: %v", err)
 			return err
+		}
+
+		limited := io.LimitReader(reader, 11*1024*1024+1)
+		payload, err := io.ReadAll(limited)
+		if err != nil {
+			return fmt.Errorf("failed to read decompressed frame: %w", err)
+		}
+		if len(payload) > 11*1024*1024 {
+			return fmt.Errorf("decompressed websocket message exceeds limit")
 		}
 
 		frame := InboundFrame{

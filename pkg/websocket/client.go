@@ -125,7 +125,13 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 		log.Printf("ws: dialing %s", c.config.URL)
 
 		// Create dialer
-		dialer := gws.DefaultDialer
+		dialerCopy := *gws.DefaultDialer
+		dialer := &dialerCopy
+
+		if c.config.CompressionThresholdBytes > 0 {
+			dialer.EnableCompression = true
+		}
+
 		hasCA := c.config.TLS.CAFile != ""
 		hasCert := c.config.TLS.ClientCertFile != "" || c.config.TLS.ClientKeyFile != ""
 
@@ -160,9 +166,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 				tlsConfig.Certificates = []tls.Certificate{cert}
 			}
 
-			dialerCopy := *gws.DefaultDialer
-			dialerCopy.TLSClientConfig = tlsConfig
-			dialer = &dialerCopy
+			dialer.TLSClientConfig = tlsConfig
 		}
 
 		conn, _, err := dialer.DialContext(ctx, c.config.URL, nil)
@@ -192,7 +196,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 		sessionID := fmt.Sprintf("sess-%d", c.generation)
 		c.mu.Unlock()
 
-		hsResult := c.performConnectHandshake(sessionCtx, conn, sessionID)
+		hsResult := c.performConnectHandshake(sessionCtx, conn)
 		if hsResult == HandshakeRetryableFailure {
 			log.Printf("ws: handshake failed, closing connection and retrying")
 			c.Close()
@@ -265,7 +269,7 @@ type PingResponse struct {
 	} `json:"ping"`
 }
 
-func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn, sessionID string) HandshakeResult {
+func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn) HandshakeResult {
 	if conn == nil {
 		return HandshakeRetryableFailure
 	}
@@ -273,6 +277,11 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn, 
 	params, err := c.metaProvider.ConnectParams(ctx)
 	if err != nil {
 		log.Printf("ws: failed to get connect params: %v", err)
+		return HandshakeRetryableFailure
+	}
+
+	if params.Serial == "" {
+		log.Printf("ws: aborting handshake, local serial number is empty")
 		return HandshakeRetryableFailure
 	}
 
@@ -493,7 +502,15 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 			}
 
 			conn.SetWriteDeadline(time.Now().Add(writeTimeout)) // Using configured write deadline
-			err := conn.WriteMessage(gws.TextMessage, msg.Payload)
+
+			// Enable permessage-deflate compression if payload exceeds the configured threshold
+			if c.config.CompressionThresholdBytes > 0 && len(msg.Payload) >= c.config.CompressionThresholdBytes {
+				conn.EnableWriteCompression(true)
+			} else {
+				conn.EnableWriteCompression(false)
+			}
+
+			err := conn.WriteMessage(gws.TextMessage, []byte(msg.Payload))
 
 			if err != nil {
 				return fmt.Errorf("failed to write outbound message: %v", err)

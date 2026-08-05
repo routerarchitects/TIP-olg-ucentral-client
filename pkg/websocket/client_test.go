@@ -51,8 +51,7 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer conn.Close()
-		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
-
+		
 		// Read the connect frame sent by the client
 		_, payload, err := conn.ReadMessage()
 		if err != nil {
@@ -67,6 +66,7 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 		if req["method"] != "connect" {
 			t.Errorf("expected connect method, got %v", req["method"])
 		}
+conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
 
 		// Keep connection open so the read/write loops can start
 		time.Sleep(2 * time.Second)
@@ -209,7 +209,7 @@ func TestWSClient_PingValidation(t *testing.T) {
 			}
 			defer conn.Close()
 
-			res := client.performConnectHandshake(context.Background(), conn, "test")
+			res := client.performConnectHandshake(context.Background(), conn)
 
 			if tc.valid && res != HandshakeAccepted {
 				t.Errorf("expected handshake to be accepted")
@@ -217,6 +217,33 @@ func TestWSClient_PingValidation(t *testing.T) {
 				t.Errorf("expected handshake to be rejected")
 			}
 		})
+	}
+}
+
+type mockEmptySerialProvider struct{}
+
+func (m *mockEmptySerialProvider) ConnectParams(ctx context.Context) (CloudConnectParams, error) {
+	return CloudConnectParams{
+		Serial:       "", // explicitly empty
+		Firmware:     "mock-fw",
+		UUID:         42,
+		Capabilities: map[string]any{"test": true},
+	}, nil
+}
+
+func TestWSClient_EmptyLocalSerial(t *testing.T) {
+	cfg := &config.CloudConfig{
+		URL:                   "ws://example.com", // shouldn't even connect
+		ConnectTimeoutSeconds: 1,
+	}
+
+	sched := queues.NewPriorityScheduler(10, 10)
+	client, _ := NewWSClient(*cfg, sched, &mockEmptySerialProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+
+	res := client.performConnectHandshake(context.Background(), &gws.Conn{})
+
+	if res != HandshakeRetryableFailure {
+		t.Errorf("expected handshake to be rejected due to empty serial, got %v", res)
 	}
 }
 
@@ -228,10 +255,10 @@ func TestWSClient_11MBFrameLimit(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
-		_, payload, _ := conn.ReadMessage()
+				_, payload, _ := conn.ReadMessage()
 		var req map[string]any
 		json.Unmarshal(payload, &req)
+conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
 
 		time.Sleep(100 * time.Millisecond)
 
@@ -328,10 +355,10 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
-		_, payload, _ := conn.ReadMessage()
+				_, payload, _ := conn.ReadMessage()
 		var req map[string]any
 		json.Unmarshal(payload, &req)
+conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
 
 		pingReceived := make(chan bool, 1)
 		conn.SetPingHandler(func(appData string) error {

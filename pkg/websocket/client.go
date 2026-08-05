@@ -31,10 +31,7 @@ type ConnectMetadataProvider interface {
 	ConnectParams(ctx context.Context) (CloudConnectParams, error)
 }
 
-type CloudConnectResult struct {
-	Error *int   `json:"error"`
-	Text  string `json:"text,omitempty"`
-}
+
 
 type InboundFrame struct {
 	SessionID string
@@ -286,6 +283,15 @@ type jsonrpcResponse struct {
 	Method  string              `json:"method,omitempty"`
 }
 
+type CloudConnectResult struct {
+	Status *CloudConnectStatus `json:"status,omitempty"`
+}
+
+type CloudConnectStatus struct {
+	Error *int   `json:"error"`
+	Text  string `json:"text"`
+}
+
 type jsonrpcError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
@@ -396,13 +402,13 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn, 
 				return HandshakeRetryableFailure
 			}
 
-			if resp.Result.Error == nil {
-				log.Printf("ws: handshake rejected: missing required error field in result")
+			if resp.Result.Status == nil || resp.Result.Status.Error == nil {
+				log.Printf("ws: handshake rejected: missing required error field in result status")
 				return HandshakeRetryableFailure
 			}
 
-			if *resp.Result.Error != 0 {
-				log.Printf("ws: rejected by cloud (result error %d): %s", *resp.Result.Error, resp.Result.Text)
+			if *resp.Result.Status.Error != 0 {
+				log.Printf("ws: rejected by cloud (result error %d): %s", *resp.Result.Status.Error, resp.Result.Status.Text)
 				return HandshakeRejectedKeepOpen
 			}
 

@@ -74,7 +74,7 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 			"jsonrpc": "2.0",
 			"id":      req["id"],
 			"result": map[string]any{
-				"error": 0, "text": "Success",
+				"status": map[string]any{"error": 0, "text": "Success"},
 			},
 		}
 		conn.WriteJSON(resp)
@@ -225,7 +225,7 @@ func TestWSClient_11MBFrameLimit(t *testing.T) {
 		_, payload, _ := conn.ReadMessage()
 		var req map[string]any
 		json.Unmarshal(payload, &req)
-		resp := map[string]any{"jsonrpc": "2.0", "id": req["id"], "result": map[string]any{"error": 0, "text": "Success"}}
+		resp := map[string]any{"jsonrpc": "2.0", "id": req["id"], "result": map[string]any{"status": map[string]any{"error": 0, "text": "Success"}}}
 		conn.WriteJSON(resp)
 		time.Sleep(100 * time.Millisecond)
 
@@ -378,7 +378,7 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 		_, payload, _ := conn.ReadMessage()
 		var req map[string]any
 		json.Unmarshal(payload, &req)
-		resp := map[string]any{"jsonrpc": "2.0", "id": req["id"], "result": map[string]any{"error": 0, "text": "Success"}}
+		resp := map[string]any{"jsonrpc": "2.0", "id": req["id"], "result": map[string]any{"status": map[string]any{"error": 0, "text": "Success"}}}
 		conn.WriteJSON(resp)
 
 		pingReceived := make(chan bool, 1)
@@ -451,7 +451,7 @@ func TestWSClient_PingDuringVerification(t *testing.T) {
 		// Now finally accept the connect handshake using the connect request's ID
 		var req map[string]any
 		json.Unmarshal(connectPayload, &req)
-		resp := map[string]any{"jsonrpc": "2.0", "id": req["id"], "result": map[string]any{"error": 0, "text": "Success"}}
+		resp := map[string]any{"jsonrpc": "2.0", "id": req["id"], "result": map[string]any{"status": map[string]any{"error": 0, "text": "Success"}}}
 		conn.WriteJSON(resp)
 	}))
 	defer server.Close()
@@ -477,7 +477,7 @@ func TestWSClient_StalePriority0(t *testing.T) {
 		defer conn.Close()
 
 		conn.ReadMessage() // read connect req
-		resp := map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{"error": 0, "text": "Success"}}
+		resp := map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{"status": map[string]any{"error": 0, "text": "Success"}}}
 		conn.WriteJSON(resp)
 
 		// Read outbound messages from the client queue
@@ -566,7 +566,7 @@ func TestWSClient_ReconnectThrottling(t *testing.T) {
 		conn.WriteJSON(map[string]any{
 			"jsonrpc": "2.0",
 			"id":      req["id"],
-			"result":  map[string]any{"error": 0, "text": "Success"},
+			"result":  map[string]any{"status": map[string]any{"error": 0, "text": "Success"}},
 		})
 
 		// Immediately drop connection (less than 60s stable duration)
@@ -620,7 +620,7 @@ func TestWSClient_PingControlDeadlineRefresh(t *testing.T) {
 		conn.WriteJSON(map[string]any{
 			"jsonrpc": "2.0",
 			"id":      req["id"],
-			"result":  map[string]any{"error": 0, "text": "Success"},
+			"result":  map[string]any{"status": map[string]any{"error": 0, "text": "Success"}},
 		})
 
 		// Send pings every 500ms to keep connection alive
@@ -680,7 +680,7 @@ func TestWSClient_ConfiguredWriteTimeout(t *testing.T) {
 		conn.WriteJSON(map[string]any{
 			"jsonrpc": "2.0",
 			"id":      req["id"],
-			"result":  map[string]any{"error": 0, "text": "Success"},
+			"result":  map[string]any{"status": map[string]any{"error": 0, "text": "Success"}},
 		})
 
 		// Block reads completely so the client TCP buffer fills and writes block
@@ -814,22 +814,22 @@ func TestWSClient_HandshakeValidation(t *testing.T) {
 		},
 		{
 			name:         "unknown result fields only",
-			response:     map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{"status": "accepted"}},
+			response:     map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{"foo": "bar"}},
 			expectAccept: false,
 		},
 		{
 			name:         "missing required error field",
-			response:     map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{"text": "Success"}},
+			response:     map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{"status": map[string]any{"text": "Success"}}},
 			expectAccept: false,
 		},
 		{
 			name:         "explicit successful result",
-			response:     map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{"error": 0, "text": "Success"}},
+			response:     map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{"status": map[string]any{"error": 0, "text": "Success"}}},
 			expectAccept: true,
 		},
 		{
 			name:         "explicit rejection result",
-			response:     map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{"error": 1, "text": "Rejected"}},
+			response:     map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{"status": map[string]any{"error": 1, "text": "Rejected"}}},
 			expectAccept: false,
 		},
 	}
@@ -950,7 +950,7 @@ func TestWSClient_StableSessionThreshold(t *testing.T) {
 		conn.WriteJSON(map[string]any{
 			"jsonrpc": "2.0",
 			"id":      req["id"],
-			"result":  map[string]any{"error": 0, "text": "Success"},
+			"result":  map[string]any{"status": map[string]any{"error": 0, "text": "Success"}},
 		})
 
 		// Sleep for 2 seconds to exceed the stable threshold of 1s

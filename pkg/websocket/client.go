@@ -255,8 +255,12 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 		c.onStateChange(contracts.LinkConnecting, contracts.ProtocolUnknown)
 		log.Printf("ws: session %s ended: %v", sessionID, err)
 
-		// Only reset backoff if the session was stable (connected for > 60s)
-		if time.Since(sessionStartTime) > 60*time.Second {
+		// Only reset backoff if the session was stable
+		threshold := time.Duration(c.config.StableSessionThresholdSeconds) * time.Second
+		if threshold <= 0 {
+			threshold = 60 * time.Second
+		}
+		if time.Since(sessionStartTime) > threshold {
 			backoff = 2 * time.Second
 		}
 

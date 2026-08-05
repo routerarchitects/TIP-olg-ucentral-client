@@ -892,3 +892,102 @@ func TestWSClient_HandshakeValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestWSClient_TLSInvalidCAFile(t *testing.T) {
+	// Create a temp file with invalid PEM data
+	tmpfile, err := os.CreateTemp("", "invalid_ca_*.pem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpfile.Name())
+	tmpfile.Write([]byte("this is not a valid pem certificate data"))
+	tmpfile.Close()
+
+	cfg := &config.CloudConfig{
+		URL: "wss://example.com",
+		TLS: config.CloudTLSConfig{
+			CAFile: tmpfile.Name(),
+		},
+	}
+
+	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err = client.ReconnectLoop(ctx, &mockFrameHandler{})
+	if err == nil {
+		t.Fatalf("expected error from ReconnectLoop, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to parse any valid certificates from CA file") {
+		t.Fatalf("expected parse error, got: %v", err)
+	}
+}
+
+func TestWSClient_StableSessionThreshold(t *testing.T) {
+	upgrader := gws.Upgrader{}
+	var mu sync.Mutex
+	var connectTimes []time.Time
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		mu.Lock()
+		connectTimes = append(connectTimes, time.Now())
+		count := len(connectTimes)
+		mu.Unlock()
+
+		if count > 3 {
+			return
+		}
+
+		// Accept handshake
+		var req map[string]any
+		conn.ReadJSON(&req)
+		conn.WriteJSON(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      req["id"],
+			"result":  map[string]any{"error": 0, "text": "Success"},
+		})
+
+		// Sleep for 2 seconds to exceed the stable threshold of 1s
+		time.Sleep(2 * time.Second)
+		conn.Close()
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &config.CloudConfig{
+		URL:                           wsURL,
+		StableSessionThresholdSeconds: 1,
+	}
+	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go client.ReconnectLoop(ctx, &mockFrameHandler{})
+	time.Sleep(12 * time.Second)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(connectTimes) < 3 {
+		t.Fatalf("expected at least 3 connections, got %d", len(connectTimes))
+	}
+
+	d1 := connectTimes[1].Sub(connectTimes[0])
+	d2 := connectTimes[2].Sub(connectTimes[1])
+
+	// Both delays should be ~4s (2s server sleep + 2s reset backoff)
+	// (allow 3.5 - 5.5s)
+	if d1 < 3500*time.Millisecond || d1 > 5500*time.Millisecond {
+		t.Errorf("expected ~4s total delay for first reconnect, got %v", d1)
+	}
+	if d2 < 3500*time.Millisecond || d2 > 5500*time.Millisecond {
+		t.Errorf("expected ~4s total delay for second reconnect (backoff reset), got %v", d2)
+	}
+}

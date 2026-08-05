@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -316,7 +317,6 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn, 
 	req := jsonrpcRequest{
 		JSONRPC: "2.0",
 		Method:  "connect",
-		ID:      1,
 		Params:  paramsMap,
 	}
 
@@ -345,75 +345,40 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn, 
 		return HandshakeRetryableFailure
 	}
 
+	// 2. Send a WebSocket Ping control frame to force a response from ucentralgw
+	if err := conn.WriteMessage(gws.PingMessage, nil); err != nil {
+		log.Printf("ws: failed to write ping frame: %v", err)
+		return HandshakeRetryableFailure
+	}
+
+	// 3. Wait for the server's proprietary {"ping": {...}} response (or an EOF if rejected)
 	conn.SetReadDeadline(handshakeDeadline)
 	for {
-		var resp jsonrpcResponse
-		if err := conn.ReadJSON(&resp); err != nil {
-			log.Printf("ws: failed to read connect response: %v", err)
+		msgType, payload, err := conn.ReadMessage()
+		if err != nil {
+			log.Printf("ws: handshake rejected: socket closed or timed out waiting for ping response: %v", err)
 			return HandshakeRetryableFailure
 		}
 
-		if resp.Method != "" {
-			if resp.Method == "ping" {
-				// Reply to ping
-				pingReply := map[string]any{
-					"jsonrpc": "2.0",
-					"id":      resp.ID,
-					"result":  map[string]any{"serial": params.Serial, "uuid": params.UUID},
+		if msgType == gws.TextMessage {
+			var resp map[string]any
+			if err := json.Unmarshal(payload, &resp); err == nil {
+				if _, hasPing := resp["ping"]; hasPing {
+					log.Printf("ws: received proprietary ping response, handshake accepted!")
+					break
 				}
-				conn.SetWriteDeadline(handshakeDeadline)
-				if err := conn.WriteJSON(pingReply); err != nil {
-					log.Printf("ws: failed to write ping reply during handshake: %v", err)
-					return HandshakeRetryableFailure
-				}
-			} else {
-				// Reject non-ping
-				rejectReply := map[string]any{
-					"jsonrpc": "2.0",
-					"id":      resp.ID,
-					"error": map[string]any{
-						"code":    -32603,
-						"message": "Protocol Verifying",
-						"data":    map[string]any{"application_code": 3},
-					},
-				}
-				conn.SetWriteDeadline(handshakeDeadline)
-				if err := conn.WriteJSON(rejectReply); err != nil {
-					log.Printf("ws: failed to write reject reply during handshake: %v", err)
-					return HandshakeRetryableFailure
-				}
+				// We ignore other commands (like upgrade) for now as requested
+				log.Printf("ws: received unexpected frame during handshake: %s", string(payload))
 			}
-			continue
-		}
-
-		if resp.ID == 1 {
-			if resp.Error != nil && resp.Error.Code == -32600 {
-				log.Printf("ws: fatal rejection from cloud: %v", resp.Error)
-				return HandshakeLongBackoffFailure
-			}
-			if resp.Error != nil {
-				log.Printf("ws: rejected by cloud (jsonrpc error): %v", resp.Error)
-				return HandshakeRejectedKeepOpen
-			}
-			if resp.Result == nil {
-				log.Printf("ws: handshake rejected: missing result field")
-				return HandshakeRetryableFailure
-			}
-
-			if resp.Result.Status == nil || resp.Result.Status.Error == nil {
-				log.Printf("ws: handshake rejected: missing required error field in result status")
-				return HandshakeRetryableFailure
-			}
-
-			if *resp.Result.Status.Error != 0 {
-				log.Printf("ws: rejected by cloud (result error %d): %s", *resp.Result.Status.Error, resp.Result.Status.Text)
-				return HandshakeRejectedKeepOpen
-			}
-
-			log.Printf("ws: connect handshake accepted by cloud")
-			return HandshakeAccepted
 		}
 	}
+
+	// Clear the deadline for future operations
+	conn.SetReadDeadline(time.Time{})
+	conn.SetWriteDeadline(time.Time{})
+
+	log.Printf("ws: connect handshake complete")
+	return HandshakeAccepted
 }
 
 func (c *WSClient) Close() error {

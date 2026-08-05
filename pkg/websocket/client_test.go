@@ -68,8 +68,6 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 			t.Errorf("expected connect method, got %v", req["method"])
 		}
 
-		
-
 		// Keep connection open so the read/write loops can start
 		time.Sleep(2 * time.Second)
 	}))
@@ -138,7 +136,7 @@ func TestWSClient_11MBFrameLimit(t *testing.T) {
 		_, payload, _ := conn.ReadMessage()
 		var req map[string]any
 		json.Unmarshal(payload, &req)
-		
+
 		time.Sleep(100 * time.Millisecond)
 
 		// Send 12MB frame (exceeds 11MB limit)
@@ -238,7 +236,6 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 		_, payload, _ := conn.ReadMessage()
 		var req map[string]any
 		json.Unmarshal(payload, &req)
-		
 
 		pingReceived := make(chan bool, 1)
 		conn.SetPingHandler(func(appData string) error {
@@ -377,7 +374,6 @@ func TestWSClient_ReconnectThrottling(t *testing.T) {
 		// Accept handshake
 		var req map[string]any
 		conn.ReadJSON(&req)
-		
 
 		// Immediately drop connection (less than 60s stable duration)
 		conn.Close()
@@ -428,7 +424,6 @@ func TestWSClient_PingControlDeadlineRefresh(t *testing.T) {
 
 		var req map[string]any
 		conn.ReadJSON(&req)
-		
 
 		// Send pings every 500ms to keep connection alive
 		go func() {
@@ -485,7 +480,6 @@ func TestWSClient_ConfiguredWriteTimeout(t *testing.T) {
 
 		var req map[string]any
 		conn.ReadJSON(&req)
-		
 
 		// Block reads completely so the client TCP buffer fills and writes block
 		time.Sleep(10 * time.Second)
@@ -594,7 +588,6 @@ func TestWSClient_StableSessionThreshold(t *testing.T) {
 		// Accept handshake
 		var req map[string]any
 		conn.ReadJSON(&req)
-		
 
 		// Sleep for 2 seconds to exceed the stable threshold of 1s
 		time.Sleep(2 * time.Second)

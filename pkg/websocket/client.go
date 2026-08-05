@@ -265,7 +265,6 @@ type PingResponse struct {
 	} `json:"ping"`
 }
 
-
 func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn, sessionID string) HandshakeResult {
 	if conn == nil {
 		return HandshakeRetryableFailure

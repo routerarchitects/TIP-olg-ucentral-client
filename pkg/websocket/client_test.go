@@ -189,10 +189,10 @@ func TestWSClient_PingValidation(t *testing.T) {
 				hsPingReceived := make(chan struct{})
 				conn.SetPingHandler(func(appData string) error {
 					select {
-			case <-hsPingReceived:
-			default:
-				close(hsPingReceived)
-			}
+					case <-hsPingReceived:
+					default:
+						close(hsPingReceived)
+					}
 					return conn.WriteControl(10, []byte(appData), time.Now().Add(time.Second))
 				})
 				go func() { conn.ReadMessage() }()

@@ -207,7 +207,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 			}
 			continue
 		}
-		
+
 		log.Printf("ws: session %s active, waiting for ping verification...", sessionID)
 		// Note: Protocol state remains ProtocolVerifying until startReaderLoop receives the Pong
 		sessionStartTime := time.Now()

@@ -43,7 +43,7 @@ type CloudConfig struct {
 	PingIntervalSeconds           int            `json:"ping_interval_seconds"`
 	PongTimeoutSeconds            int            `json:"pong_timeout_seconds"`
 	StableSessionThresholdSeconds int            `json:"stable_session_threshold_seconds"`
-	CompressionThresholdBytes     int            `json:"compression_threshold_bytes"` // Defines compression threshold mapped to permessage-deflate behavior
+	CompressionThresholdBytes     int            `json:"compression_threshold_bytes"`  // Defines compression threshold mapped to permessage-deflate behavior
 	MaxConsecutiveFrameErrors     int            `json:"max_consecutive_frame_errors"` // Default is 20 if set to 0.
 	TLS                           CloudTLSConfig `json:"tls"`
 }

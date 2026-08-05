@@ -241,8 +241,6 @@ func TestWSClient_DiscardPreAcceptanceCommands(t *testing.T) {
 	}
 }
 
-
-
 type mockEmptySerialProvider struct{}
 
 func (m *mockEmptySerialProvider) ConnectParams(ctx context.Context) (CloudConnectParams, error) {
@@ -587,7 +585,6 @@ func TestWSClient_ReconnectThrottling(t *testing.T) {
 		}
 		defer conn.Close()
 
-
 		mu.Lock()
 		connectTimes = append(connectTimes, time.Now())
 		count := len(connectTimes)
@@ -646,7 +643,6 @@ func TestWSClient_PingControlDeadlineRefresh(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-
 
 		var req map[string]any
 		conn.ReadJSON(&req)
@@ -806,7 +802,6 @@ func TestWSClient_StableSessionThreshold(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-
 
 		mu.Lock()
 		connectTimes = append(connectTimes, time.Now())

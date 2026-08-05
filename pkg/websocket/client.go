@@ -433,19 +433,19 @@ func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler 
 		if err != nil {
 			consecutiveErrors++
 			log.Printf("ws: frame handler error: %v (consecutive: %d)", err, consecutiveErrors)
-			
+
 			maxErrors := 20
 			if c.config.MaxConsecutiveFrameErrors > 0 {
 				maxErrors = c.config.MaxConsecutiveFrameErrors
 			}
-			
+
 			if consecutiveErrors >= maxErrors {
 				return fmt.Errorf("ws: fatal: exceeded maximum consecutive frame handler errors")
 			}
 		} else {
 			consecutiveErrors = 0
 		}
-		
+
 		if disp == FrameFatalCloseConnection {
 			return fmt.Errorf("handler requested fatal socket termination")
 		}

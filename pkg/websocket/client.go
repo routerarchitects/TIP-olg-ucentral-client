@@ -421,9 +421,6 @@ func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler 
 			return err
 		}
 
-		// Update deadline aggressively on any successful read (pong or payload)
-		conn.SetReadDeadline(time.Now().Add(pongTimeout))
-
 		frame := InboundFrame{
 			SessionID: sessID,
 			Type:      msgType,

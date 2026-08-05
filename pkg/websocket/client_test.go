@@ -175,11 +175,11 @@ func TestWSClient_DiscardPreAcceptanceCommands(t *testing.T) {
 		}()
 
 		<-hsPingReceived
-		
+
 		// Send a pre-acceptance command (e.g. upgrade) which should be aggressively dropped!
 		conn.WriteJSON(map[string]any{"jsonrpc": "2.0", "method": "upgrade", "params": map[string]any{}})
 		time.Sleep(50 * time.Millisecond)
-		
+
 		// Send the valid identity ping response to complete the handshake
 		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
 

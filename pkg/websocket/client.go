@@ -48,9 +48,9 @@ const (
 )
 
 // FrameHandler represents the upstream component that processes incoming frames.
-// SECURITY CONTRACT: The FrameHandler is only invoked after the transport layer 
-// has completed identity verification (ProtocolAccepted). It does not need to 
-// track ProtocolVerifying, as all pre-acceptance frames are owned and explicitly 
+// SECURITY CONTRACT: The FrameHandler is only invoked after the transport layer
+// has completed identity verification (ProtocolAccepted). It does not need to
+// track ProtocolVerifying, as all pre-acceptance frames are owned and explicitly
 // discarded by the transport's handshake routine. Pre-acceptance commands are
 // never buffered or replayed.
 type FrameHandler interface {

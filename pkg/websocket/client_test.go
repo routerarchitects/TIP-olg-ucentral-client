@@ -141,6 +141,77 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 	}
 }
 
+func TestWSClient_DiscardPreAcceptanceCommands(t *testing.T) {
+	upgrader := gws.Upgrader{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+
+		hsPingReceived := make(chan struct{})
+		conn.SetPingHandler(func(appData string) error {
+			select {
+			case <-hsPingReceived:
+			default:
+				close(hsPingReceived)
+			}
+			return conn.WriteControl(gws.PongMessage, []byte(appData), time.Now().Add(time.Second))
+		})
+
+		// Read the connect frame sent by the client
+		if _, _, err = conn.ReadMessage(); err != nil {
+			return
+		}
+
+		go func() {
+			for {
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+			}
+		}()
+
+		<-hsPingReceived
+		
+		// Send a pre-acceptance command (e.g. upgrade) which should be aggressively dropped!
+		conn.WriteJSON(map[string]any{"jsonrpc": "2.0", "method": "upgrade", "params": map[string]any{}})
+		time.Sleep(50 * time.Millisecond)
+		
+		// Send the valid identity ping response to complete the handshake
+		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
+
+		time.Sleep(1 * time.Second)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &config.CloudConfig{URL: wsURL, PingIntervalSeconds: 1, PongTimeoutSeconds: 5}
+	sched := queues.NewPriorityScheduler(10, 10)
+	meta := &mockMetadataProvider{}
+
+	client, err := NewWSClient(*cfg, sched, meta, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	handler := &mockFrameHandler{}
+	go client.ReconnectLoop(ctx, handler)
+
+	time.Sleep(500 * time.Millisecond)
+
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	if len(handler.frames) != 0 {
+		t.Errorf("expected 0 frames (pre-acceptance frames should be discarded), got %d: %v", len(handler.frames), handler.frames)
+	}
+}
+
 func TestWSClient_PingValidation(t *testing.T) {
 	cases := []struct {
 		name     string

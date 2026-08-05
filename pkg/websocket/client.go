@@ -48,9 +48,11 @@ const (
 )
 
 // FrameHandler represents the upstream component that processes incoming frames.
-// SECURITY CONTRACT: The FrameHandler implementation MUST track the current ProtocolState
-// (via the onStateChange callback). If the state is ProtocolVerifying or ProtocolRejected,
-// the handler MUST discard all JSON-RPC methods EXCEPT "ping", returning error -32603 (app_code=3).
+// SECURITY CONTRACT: The FrameHandler is only invoked after the transport layer 
+// has completed identity verification (ProtocolAccepted). It does not need to 
+// track ProtocolVerifying, as all pre-acceptance frames are owned and explicitly 
+// discarded by the transport's handshake routine. Pre-acceptance commands are
+// never buffered or replayed.
 type FrameHandler interface {
 	HandleFrame(ctx context.Context, frame InboundFrame) (FrameDisposition, error)
 }
@@ -350,8 +352,10 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn) 
 					return HandshakeRetryableFailure
 				}
 			}
-			// We ignore other commands (like upgrade) for now as requested
-			log.Printf("ws: received unexpected frame during handshake: %s", string(payload))
+			// Security: Pre-acceptance commands must NOT be buffered or replayed.
+			// The transport strictly owns and discards all non-ping application frames
+			// received before identity verification completes.
+			log.Printf("ws: discarded pre-acceptance application frame: %s", string(payload))
 		}
 	}
 

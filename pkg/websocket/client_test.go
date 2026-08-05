@@ -386,6 +386,7 @@ func TestWSClient_TLSVerification(t *testing.T) {
 }
 
 func TestWSClient_PingPongHeartbeat(t *testing.T) {
+	pingVerified := make(chan bool, 1)
 	upgrader := gws.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -397,14 +398,25 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 		var req map[string]any
 		json.Unmarshal(payload, &req)
 		hsPingReceived := make(chan struct{})
+		pingReceived := make(chan bool, 1)
+		
 		conn.SetPingHandler(func(appData string) error {
 			select {
 			case <-hsPingReceived:
+				select {
+				case pingReceived <- true:
+					select {
+					case pingVerified <- true:
+					default:
+					}
+				default:
+				}
 			default:
 				close(hsPingReceived)
 			}
-			return conn.WriteControl(10, []byte(appData), time.Now().Add(time.Second))
+			return conn.WriteControl(gws.PongMessage, []byte(appData), time.Now().Add(time.Second))
 		})
+		
 		go func() {
 			for {
 				if _, _, err := conn.ReadMessage(); err != nil {
@@ -412,24 +424,15 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 				}
 			}
 		}()
+		
 		<-hsPingReceived
 		conn.WriteJSON(map[string]any{"ping": map[string]any{"serialNumber": "SERIAL123"}})
 
-		pingReceived := make(chan bool, 1)
-		conn.SetPingHandler(func(appData string) error {
-			select {
-			case pingReceived <- true:
-			default:
-			}
-			return conn.WriteMessage(gws.PongMessage, []byte(appData))
-		})
-
 		select {
 		case <-pingReceived:
-			// Test passes!
 			return
 		case <-time.After(4 * time.Second):
-			t.Errorf("failed to receive ping heartbeat from client within 4 seconds")
+			return
 		}
 	}))
 	defer server.Close()
@@ -441,7 +444,12 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 	defer cancel()
 
 	go client.ReconnectLoop(ctx, &mockFrameHandler{})
-	time.Sleep(3 * time.Second)
+	select {
+	case <-pingVerified:
+		// Test passes!
+	case <-time.After(4 * time.Second):
+		t.Fatalf("failed to receive ping heartbeat from client within 4 seconds")
+	}
 }
 
 func TestWSClient_StalePriority0(t *testing.T) {

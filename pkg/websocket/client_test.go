@@ -966,3 +966,67 @@ func TestWSClient_TeardownOnReaderFailureAndWriterBlocked(t *testing.T) {
 		t.Fatal("ReconnectLoop did not exit cleanly upon parent context cancellation")
 	}
 }
+
+func TestWSClient_ConcurrentPingWhileBlocked(t *testing.T) {
+	upgrader := gws.Upgrader{}
+	pongReceived := make(chan struct{})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		// Read handshake request
+		var req map[string]any
+		conn.ReadJSON(&req)
+
+		conn.SetPongHandler(func(appData string) error {
+			if appData == "test-ping" {
+				close(pongReceived)
+			}
+			return nil
+		})
+
+		// Wait until the client has definitely acquired the write lock
+		time.Sleep(200 * time.Millisecond)
+		conn.WriteControl(gws.PingMessage, []byte("test-ping"), time.Now().Add(time.Second))
+
+		// Continually read so the server processes incoming control frames (Pongs)
+		for {
+			_, _, err := conn.ReadMessage()
+			if err != nil {
+				break
+			}
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &config.CloudConfig{URL: wsURL}
+
+	sched := queues.NewPriorityScheduler(1, 1)
+
+	client, _ := NewWSClient(*cfg, sched, &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go client.ReconnectLoop(ctx, &mockFrameHandler{})
+
+	// Wait for connection to establish, then immediately lock
+	time.Sleep(100 * time.Millisecond)
+
+	// Artificially lock the writer mutex to simulate a stalled application write
+	// (If PingHandler used the same mutex, it would deadlock here)
+	client.writeMu.Lock()
+	defer client.writeMu.Unlock()
+
+	select {
+	case <-pongReceived:
+		// Success! The PingHandler successfully bypassed the stalled writer loop.
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for pong while writer was blocked")
+	}
+}

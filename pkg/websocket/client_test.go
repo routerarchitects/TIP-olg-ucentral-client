@@ -828,7 +828,7 @@ func TestWSClient_TeardownOnContextCancel(t *testing.T) {
 	}()
 
 	time.Sleep(200 * time.Millisecond) // Let it connect
-	cancel() // Cancel the parent context
+	cancel()                           // Cancel the parent context
 
 	select {
 	case <-done:
@@ -847,15 +847,15 @@ func TestWSClient_TeardownOnReaderFailureAndWriterBlocked(t *testing.T) {
 		if err != nil {
 			return
 		}
-		
+
 		connMu.Lock()
 		connToClose = conn
 		connMu.Unlock()
-		
+
 		conn.SetPingHandler(func(appData string) error {
 			return conn.WriteControl(gws.PongMessage, []byte(appData), time.Now().Add(time.Second))
 		})
-		
+
 		for {
 			if _, _, err := conn.ReadMessage(); err != nil {
 				return

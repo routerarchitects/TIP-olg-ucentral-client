@@ -169,7 +169,7 @@ func DeriveConnectionState(cloud LinkState, nats LinkState, protocol ProtocolSta
 	if cloud == LinkConnecting && (protocol == ProtocolAccepted || protocol == ProtocolRejected) {
 		return "", fmt.Errorf("impossible state: cloud is %v, protocol is %v", cloud, protocol)
 	}
-	// Note: cloud == LinkConnected && (protocol == ProtocolUnknown || protocol == ProtocolVerifying) 
+	// Note: cloud == LinkConnected && (protocol == ProtocolUnknown || protocol == ProtocolVerifying)
 	// is a perfectly valid state! It happens during the normal handshake window after dialing.
 
 	if cloud == LinkConnecting || (cloud == LinkConnected && (protocol == ProtocolUnknown || protocol == ProtocolVerifying)) {

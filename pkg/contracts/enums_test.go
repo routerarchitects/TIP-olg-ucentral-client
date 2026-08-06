@@ -23,7 +23,7 @@ func TestTC_CON_003_VersionVerificationFallbackAndProtocolState(t *testing.T) {
 		{"Connected/Connecting/Verifying", LinkConnected, LinkConnecting, ProtocolVerifying, StateConnecting, false},
 		{"Connected/Connecting/Unknown", LinkConnected, LinkConnecting, ProtocolUnknown, StateConnecting, false},
 		{"Connected/Connected/Verifying", LinkConnected, LinkConnected, ProtocolVerifying, StateCloudDegraded, false},
-		
+
 		// Impossible combinations
 		{"Connecting with Protocol Accepted", LinkConnecting, LinkConnected, ProtocolAccepted, "", true},
 		{"Connecting with Protocol Rejected", LinkConnecting, LinkConnecting, ProtocolRejected, "", true},

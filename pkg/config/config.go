@@ -121,8 +121,10 @@ func (c *CloudConfig) Validate() error {
 	if c.StableSessionThresholdSeconds <= 0 {
 		return fmt.Errorf("cloud stable_session_threshold_seconds must be positive")
 	}
-	if c.CompressionThresholdBytes < 0 {
-		return fmt.Errorf("cloud compression_threshold_bytes must be zero or positive")
+	if c.CompressionThresholdBytes == 0 {
+		c.CompressionThresholdBytes = 2048
+	} else if c.CompressionThresholdBytes < 0 {
+		return fmt.Errorf("cloud compression_threshold_bytes must be positive")
 	}
 	if c.MaxFrameSizeBytes < 0 {
 		return fmt.Errorf("cloud max_frame_size_bytes must be zero or positive")

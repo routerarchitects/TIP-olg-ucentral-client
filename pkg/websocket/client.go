@@ -95,8 +95,6 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 		return errors.New("ws: frame handler cannot be nil")
 	}
 
-	defer c.onStateChange(contracts.LinkConnecting, contracts.ProtocolUnknown)
-
 	backoff := 2 * time.Second
 	maxBackoff := 60 * time.Second
 
@@ -128,9 +126,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 		dialerCopy := *gws.DefaultDialer
 		dialer := &dialerCopy
 
-		if c.config.CompressionThresholdBytes > 0 {
-			dialer.EnableCompression = true
-		}
+		dialer.EnableCompression = true
 
 		hasCA := c.config.TLS.CAFile != ""
 		hasCert := c.config.TLS.ClientCertFile != "" || c.config.TLS.ClientKeyFile != ""
@@ -330,7 +326,7 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn) 
 		return HandshakeRetryableFailure
 	}
 
-	if c.config.CompressionThresholdBytes > 0 && len(payload) >= c.config.CompressionThresholdBytes {
+	if len(payload) >= c.config.CompressionThresholdBytes {
 		conn.EnableWriteCompression(true)
 	} else {
 		conn.EnableWriteCompression(false)
@@ -540,7 +536,7 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 			conn.SetWriteDeadline(time.Now().Add(writeTimeout)) // Using configured write deadline
 
 			// Enable permessage-deflate compression if payload exceeds the configured threshold
-			if c.config.CompressionThresholdBytes > 0 && len(msg.Payload) >= c.config.CompressionThresholdBytes {
+			if len(msg.Payload) >= c.config.CompressionThresholdBytes {
 				conn.EnableWriteCompression(true)
 			} else {
 				conn.EnableWriteCompression(false)

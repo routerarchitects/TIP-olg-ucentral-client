@@ -311,8 +311,6 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn) 
 		Params:  paramsMap,
 	}
 
-
-
 	// Force-close the socket if context cancels during the blocking handshake!
 	watchCtx, cancelWatch := context.WithCancel(context.Background())
 	defer cancelWatch()

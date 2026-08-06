@@ -561,15 +561,25 @@ func TestWSClient_StalePriority0(t *testing.T) {
 	})
 
 	// We expect to only receive "valid-p0" then "valid-p1"
+	var received []string
 	for i := 0; i < 2; i++ {
 		select {
 		case msg := <-msgReceived:
-			if msg == "stale-p0" {
-				t.Errorf("client failed to drop stale Priority-0 message")
-			}
+			received = append(received, msg)
 		case <-time.After(2 * time.Second):
 			t.Fatalf("timed out waiting for outbound messages")
 		}
+	}
+
+	if len(received) != 2 || received[0] != "valid-p0" || received[1] != "valid-p1" {
+		t.Errorf("expected exact message sequence [valid-p0, valid-p1], got %v", received)
+	}
+
+	select {
+	case msg := <-msgReceived:
+		t.Errorf("received unexpected third message: %v", msg)
+	case <-time.After(50 * time.Millisecond):
+		// Success, no unexpected messages leaked
 	}
 }
 
@@ -706,7 +716,8 @@ func TestWSClient_ConfiguredWriteTimeout(t *testing.T) {
 		// Run a background reader to process the Ping and send the Pong,
 		// but ONLY read the first Connect frame so we stop reading and block the buffer.
 		go func() {
-			conn.ReadMessage()
+			conn.ReadMessage() // Read the connect event
+			conn.NextReader()  // Block waiting for next message, processing Ping in the background. We never read the payload, causing the buffer to fill.
 		}()
 
 		// Block reads completely so the client TCP buffer fills and writes block

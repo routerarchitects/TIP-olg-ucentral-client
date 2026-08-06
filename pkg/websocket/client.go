@@ -49,7 +49,7 @@ const (
 
 // FrameHandler represents the upstream component that processes incoming frames.
 // SECURITY CONTRACT: The FrameHandler is only invoked after the transport layer
-// has completed identity verification (ProtocolAccepted). It does not need to
+// has completed the WebSocket handshake verification (ProtocolAccepted). It does not need to
 // track ProtocolVerifying, as all pre-acceptance frames are owned and explicitly
 // discarded by the transport's handshake routine. Pre-acceptance commands are
 // never buffered or replayed.
@@ -227,12 +227,14 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 			return nil
 		})
 
+		verifiedCh := make(chan struct{})
+
 		g.Go(func() error {
-			return c.startReaderLoop(gCtx, conn, handler)
+			return c.startReaderLoop(gCtx, conn, handler, verifiedCh)
 		})
 
 		g.Go(func() error {
-			return c.startWriterLoop(gCtx, conn)
+			return c.startWriterLoop(gCtx, conn, verifiedCh)
 		})
 
 		err = g.Wait()
@@ -346,7 +348,7 @@ func (c *WSClient) Close() error {
 	return nil
 }
 
-func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler FrameHandler) error {
+func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler FrameHandler, verifiedCh chan struct{}) error {
 	pongTimeout := 60 * time.Second
 	if c.config.PongTimeoutSeconds > 0 {
 		pongTimeout = time.Duration(c.config.PongTimeoutSeconds) * time.Second
@@ -359,6 +361,7 @@ func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler 
 		conn.SetReadDeadline(time.Now().Add(pongTimeout))
 		if isVerifying {
 			isVerifying = false
+			close(verifiedCh) // Unlock the writer loop!
 			// Limitation: A Pong proves the WebSocket transport peer responded, but it does not definitively prove
 			// the gateway processed the connect JSON-RPC event since ucentralgw does not send a success response.
 			// Emitting ProtocolAccepted here asserts transport health.
@@ -438,15 +441,23 @@ func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler 
 	}
 }
 
-func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
+func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn, verifiedCh chan struct{}) error {
 	pingInterval := 30 * time.Second
 	if c.config.PingIntervalSeconds > 0 {
 		pingInterval = time.Duration(c.config.PingIntervalSeconds) * time.Second
 	}
 
-	writeTimeout := 60 * time.Second
+	writeTimeout := 10 * time.Second
 	if c.config.WriteTimeoutSeconds > 0 {
 		writeTimeout = time.Duration(c.config.WriteTimeoutSeconds) * time.Second
+	}
+
+	// Block the entire writer loop until the reader successfully processes the handshake Pong!
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-verifiedCh:
+		// Handshake verified, it is now safe to drain the queues.
 	}
 
 	pingTicker := time.NewTicker(pingInterval)

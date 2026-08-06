@@ -20,12 +20,13 @@ func TestTC_CON_003_VersionVerificationFallbackAndProtocolState(t *testing.T) {
 		{"Connected/Connecting/Rejected", LinkConnected, LinkConnecting, ProtocolRejected, StateProtocolFailure, false},
 		{"Connected/Connected/Rejected", LinkConnected, LinkConnected, ProtocolRejected, StateProtocolFailure, false},
 
+		{"Connected/Connecting/Verifying", LinkConnected, LinkConnecting, ProtocolVerifying, StateConnecting, false},
+		{"Connected/Connecting/Unknown", LinkConnected, LinkConnecting, ProtocolUnknown, StateConnecting, false},
+		{"Connected/Connected/Verifying", LinkConnected, LinkConnected, ProtocolVerifying, StateCloudDegraded, false},
+		
 		// Impossible combinations
 		{"Connecting with Protocol Accepted", LinkConnecting, LinkConnected, ProtocolAccepted, "", true},
 		{"Connecting with Protocol Rejected", LinkConnecting, LinkConnecting, ProtocolRejected, "", true},
-		// Impossible combinations (Cloud Connected but Protocol not yet settled)
-		{"Connected with Protocol Verifying", LinkConnected, LinkConnected, ProtocolVerifying, "", true},
-		{"Connected with Protocol Unknown", LinkConnected, LinkConnecting, ProtocolUnknown, "", true},
 		{
 			name:     "Invalid cloud enum",
 			cloud:    LinkState("invalid"),

@@ -514,6 +514,7 @@ func TestWSClient_ReconnectThrottling(t *testing.T) {
 	var mu sync.Mutex
 	var connectTimes []time.Time
 
+	connCh := make(chan struct{}, 10)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
@@ -525,6 +526,7 @@ func TestWSClient_ReconnectThrottling(t *testing.T) {
 		connectTimes = append(connectTimes, time.Now())
 		count := len(connectTimes)
 		mu.Unlock()
+		connCh <- struct{}{}
 
 		if count > 3 {
 			return
@@ -547,7 +549,15 @@ func TestWSClient_ReconnectThrottling(t *testing.T) {
 	defer cancel()
 
 	go client.ReconnectLoop(ctx, &mockFrameHandler{})
-	time.Sleep(10 * time.Second) // Wait for at least 3 attempts with backoff (2s + 4s)
+	
+	// Wait for exactly 3 connections deterministically
+	for i := 0; i < 3; i++ {
+		select {
+		case <-connCh:
+		case <-time.After(15 * time.Second):
+			t.Fatalf("timed out waiting for connection %d", i+1)
+		}
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -733,6 +743,7 @@ func TestWSClient_StableSessionThreshold(t *testing.T) {
 	var mu sync.Mutex
 	var connectTimes []time.Time
 
+	connCh := make(chan struct{}, 10)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
@@ -744,6 +755,7 @@ func TestWSClient_StableSessionThreshold(t *testing.T) {
 		connectTimes = append(connectTimes, time.Now())
 		count := len(connectTimes)
 		mu.Unlock()
+		connCh <- struct{}{}
 
 		if count > 3 {
 			return
@@ -770,7 +782,15 @@ func TestWSClient_StableSessionThreshold(t *testing.T) {
 	defer cancel()
 
 	go client.ReconnectLoop(ctx, &mockFrameHandler{})
-	time.Sleep(12 * time.Second)
+	
+	// Wait for exactly 3 connections deterministically
+	for i := 0; i < 3; i++ {
+		select {
+		case <-connCh:
+		case <-time.After(15 * time.Second):
+			t.Fatalf("timed out waiting for connection %d", i+1)
+		}
+	}
 
 	mu.Lock()
 	defer mu.Unlock()

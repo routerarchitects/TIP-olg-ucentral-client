@@ -70,6 +70,8 @@ type WSClient struct {
 	scheduler     queues.OutboundScheduler
 	metaProvider  ConnectMetadataProvider
 	onStateChange func(cloud contracts.LinkState, protocol contracts.ProtocolState)
+
+	writeMu sync.Mutex
 }
 
 func NewWSClient(cfg config.CloudConfig, scheduler queues.OutboundScheduler, metaProvider ConnectMetadataProvider, onStateChange func(contracts.LinkState, contracts.ProtocolState)) (*WSClient, error) {
@@ -372,6 +374,8 @@ func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler 
 	})
 	conn.SetPingHandler(func(appData string) error {
 		conn.SetReadDeadline(time.Now().Add(pongTimeout))
+		c.writeMu.Lock()
+		defer c.writeMu.Unlock()
 		err := conn.WriteControl(gws.PongMessage, []byte(appData), time.Now().Add(10*time.Second))
 		if err == gws.ErrCloseSent {
 			return nil
@@ -513,8 +517,10 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 		case <-pingTicker.C:
 			// Writer loop exclusively sends Ping
 			// Set deadline for writing the ping itself based on config
+			c.writeMu.Lock()
 			conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 			err := conn.WriteMessage(gws.PingMessage, nil)
+			c.writeMu.Unlock()
 			if err != nil {
 				return fmt.Errorf("failed to write ping: %v", err)
 			}
@@ -533,6 +539,7 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 				continue
 			}
 
+			c.writeMu.Lock()
 			conn.SetWriteDeadline(time.Now().Add(writeTimeout)) // Using configured write deadline
 
 			// Enable permessage-deflate compression if payload exceeds the configured threshold
@@ -543,6 +550,7 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 			}
 
 			err := conn.WriteMessage(gws.TextMessage, []byte(msg.Payload))
+			c.writeMu.Unlock()
 
 			if err != nil {
 				if msg.Priority != queues.PriorityHighest {

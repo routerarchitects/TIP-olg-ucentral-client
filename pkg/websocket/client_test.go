@@ -1030,3 +1030,51 @@ func TestWSClient_ConcurrentPingWhileBlocked(t *testing.T) {
 		t.Fatal("timed out waiting for pong while writer was blocked")
 	}
 }
+
+type blockingMetadataProvider struct{}
+
+func (m *blockingMetadataProvider) ConnectParams(ctx context.Context) (CloudConnectParams, error) {
+	<-ctx.Done()
+	return CloudConnectParams{}, ctx.Err()
+}
+
+func TestWSClient_HandshakeTimeout(t *testing.T) {
+	upgrader := gws.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &config.CloudConfig{
+		URL:                   wsURL,
+		ConnectTimeoutSeconds: 1, // 1 second timeout
+	}
+
+	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &blockingMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+
+	ctx := context.Background()
+
+	dialer := gws.DefaultDialer
+	conn, _, err := dialer.DialContext(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("failed to dial: %v", err)
+	}
+	defer conn.Close()
+
+	start := time.Now()
+	res := client.performConnectHandshake(ctx, conn)
+	duration := time.Since(start)
+
+	if res != HandshakeRetryableFailure {
+		t.Errorf("expected HandshakeRetryableFailure, got %v", res)
+	}
+
+	if duration < 1*time.Second || duration > 2*time.Second {
+		t.Errorf("expected timeout around 1s, got %v", duration)
+	}
+}

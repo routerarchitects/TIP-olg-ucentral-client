@@ -278,7 +278,15 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn) 
 		return HandshakeRetryableFailure
 	}
 
-	params, err := c.metaProvider.ConnectParams(ctx)
+	timeout := 10 * time.Second
+	if c.config.ConnectTimeoutSeconds > 0 {
+		timeout = time.Duration(c.config.ConnectTimeoutSeconds) * time.Second
+	}
+
+	handshakeCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	params, err := c.metaProvider.ConnectParams(handshakeCtx)
 	if err != nil {
 		log.Printf("ws: failed to get connect params: %v", err)
 		return HandshakeRetryableFailure
@@ -303,10 +311,7 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn) 
 		Params:  paramsMap,
 	}
 
-	timeout := 10 * time.Second
-	if c.config.ConnectTimeoutSeconds > 0 {
-		timeout = time.Duration(c.config.ConnectTimeoutSeconds) * time.Second
-	}
+
 
 	// Force-close the socket if context cancels during the blocking handshake!
 	watchCtx, cancelWatch := context.WithCancel(context.Background())
@@ -320,7 +325,15 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn) 
 		}
 	}()
 
-	handshakeDeadline := time.Now().Add(timeout)
+	deadline, ok := handshakeCtx.Deadline()
+	if !ok {
+		return HandshakeRetryableFailure
+	}
+
+	if err := conn.SetWriteDeadline(deadline); err != nil {
+		log.Printf("ws: failed to set handshake write deadline: %v", err)
+		return HandshakeRetryableFailure
+	}
 
 	payload, err := json.Marshal(req)
 	if err != nil {
@@ -334,7 +347,6 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn) 
 		conn.EnableWriteCompression(false)
 	}
 
-	conn.SetWriteDeadline(handshakeDeadline)
 	if err := conn.WriteMessage(gws.TextMessage, payload); err != nil {
 		log.Printf("ws: failed to write connect request: %v", err)
 		return HandshakeRetryableFailure

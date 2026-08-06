@@ -15,8 +15,8 @@ func TestTC_CON_003_VersionVerificationFallbackAndProtocolState(t *testing.T) {
 	}{
 		{"Connecting/Connecting/Verifying", LinkConnecting, LinkConnecting, ProtocolVerifying, StateConnecting, false},
 		{"Connecting/Connected/Verifying", LinkConnecting, LinkConnected, ProtocolVerifying, StateCloudDegraded, false},
-		{"Connected/Connecting/Accepted", LinkConnected, LinkConnecting, ProtocolAccepted, StateNATSDegraded, false},
-		{"Connected/Connected/Accepted", LinkConnected, LinkConnected, ProtocolAccepted, StateOperational, false},
+		{"Connected/Connecting/Accepted", LinkConnected, LinkConnecting, ProtocolTransportVerified, StateNATSDegraded, false},
+		{"Connected/Connected/Accepted", LinkConnected, LinkConnected, ProtocolTransportVerified, StateOperational, false},
 		{"Connected/Connecting/Rejected", LinkConnected, LinkConnecting, ProtocolRejected, StateProtocolFailure, false},
 		{"Connected/Connected/Rejected", LinkConnected, LinkConnected, ProtocolRejected, StateProtocolFailure, false},
 
@@ -25,20 +25,20 @@ func TestTC_CON_003_VersionVerificationFallbackAndProtocolState(t *testing.T) {
 		{"Connected/Connected/Verifying", LinkConnected, LinkConnected, ProtocolVerifying, StateCloudDegraded, false},
 
 		// Impossible combinations
-		{"Connecting with Protocol Accepted", LinkConnecting, LinkConnected, ProtocolAccepted, "", true},
+		{"Connecting with Protocol Accepted", LinkConnecting, LinkConnected, ProtocolTransportVerified, "", true},
 		{"Connecting with Protocol Rejected", LinkConnecting, LinkConnecting, ProtocolRejected, "", true},
 		{
 			name:     "Invalid cloud enum",
 			cloud:    LinkState("invalid"),
 			nats:     LinkConnected,
-			protocol: ProtocolAccepted,
+			protocol: ProtocolTransportVerified,
 			wantErr:  true,
 		},
 		{
 			name:     "Invalid NATS enum",
 			cloud:    LinkConnected,
 			nats:     LinkState("invalid"),
-			protocol: ProtocolAccepted,
+			protocol: ProtocolTransportVerified,
 			wantErr:  true,
 		},
 		{

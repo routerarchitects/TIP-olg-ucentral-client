@@ -497,7 +497,7 @@ TIP-olg-ucentral-client/
     const (
     	ProtocolUnknown   ProtocolState = "unknown"
     	ProtocolVerifying ProtocolState = "verifying"
-    	ProtocolAccepted  ProtocolState = "accepted"
+    	ProtocolTransportVerified  ProtocolState = "transport_verified"
     	ProtocolRejected  ProtocolState = "rejected"
     )
 
@@ -541,7 +541,7 @@ TIP-olg-ucentral-client/
     // 2. WSS connection opens, transmitting connect.capabilities:
     //    Cloud = Connecting, Protocol = ProtocolVerifying
     // 3. Cloud returns successful connect JSON-RPC response:
-    //    Cloud = Connected, Protocol = ProtocolAccepted
+    //    Cloud = Connected, Protocol = ProtocolTransportVerified
     // 4. Cloud returns explicit fatal rejection response:
     //    Cloud = Connected, Protocol = ProtocolRejected (DerivedStatus evaluates to ProtocolFailure)
     ```

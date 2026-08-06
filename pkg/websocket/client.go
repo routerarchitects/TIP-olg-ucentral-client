@@ -49,7 +49,7 @@ const (
 
 // FrameHandler represents the upstream component that processes incoming frames.
 // SECURITY CONTRACT: The FrameHandler is only invoked after the transport layer
-// has completed the WebSocket handshake verification (ProtocolAccepted). It does not need to
+// has completed the WebSocket handshake verification (ProtocolTransportVerified). It does not need to
 // track ProtocolVerifying, as all pre-acceptance frames are owned and explicitly
 // discarded by the transport's handshake routine. Pre-acceptance commands are
 // never buffered or replayed.
@@ -364,9 +364,9 @@ func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler 
 			close(verifiedCh) // Unlock the writer loop!
 			// Limitation: A Pong proves the WebSocket transport peer responded, but it does not definitively prove
 			// the gateway processed the connect JSON-RPC event since ucentralgw does not send a success response.
-			// Emitting ProtocolAccepted here asserts transport health.
+			// Emitting ProtocolTransportVerified here asserts transport health.
 			log.Printf("ws: received pong response, handshake transport verified!")
-			c.onStateChange(contracts.LinkConnected, contracts.ProtocolAccepted)
+			c.onStateChange(contracts.LinkConnected, contracts.ProtocolTransportVerified)
 		}
 		return nil
 	})

@@ -139,12 +139,12 @@ type ProtocolState string
 const (
 	ProtocolUnknown   ProtocolState = "unknown"
 	ProtocolVerifying ProtocolState = "verifying"
-	// ProtocolAccepted indicates the WebSocket transport layer successfully received a Pong
+	// ProtocolTransportVerified indicates the WebSocket transport layer successfully received a Pong
 	// response to the initial connect Ping. Note: Because the upstream ucentralgw does not
 	// send a JSON-RPC application-layer response to the connect event, this state proves
 	// the transport is healthy and wasn't immediately severed, but true application-layer
 	// acceptance is only implicitly proven when the gateway eventually sends a valid command.
-	ProtocolAccepted ProtocolState = "accepted"
+	ProtocolTransportVerified ProtocolState = "transport_verified"
 	ProtocolRejected ProtocolState = "rejected"
 )
 
@@ -162,11 +162,11 @@ func DeriveConnectionState(cloud LinkState, nats LinkState, protocol ProtocolSta
 	if nats != LinkConnecting && nats != LinkConnected {
 		return "", fmt.Errorf("invalid nats state: %v", nats)
 	}
-	if protocol != ProtocolUnknown && protocol != ProtocolVerifying && protocol != ProtocolAccepted && protocol != ProtocolRejected {
+	if protocol != ProtocolUnknown && protocol != ProtocolVerifying && protocol != ProtocolTransportVerified && protocol != ProtocolRejected {
 		return "", fmt.Errorf("invalid protocol state: %v", protocol)
 	}
 
-	if cloud == LinkConnecting && (protocol == ProtocolAccepted || protocol == ProtocolRejected) {
+	if cloud == LinkConnecting && (protocol == ProtocolTransportVerified || protocol == ProtocolRejected) {
 		return "", fmt.Errorf("impossible state: cloud is %v, protocol is %v", cloud, protocol)
 	}
 	// Note: cloud == LinkConnected && (protocol == ProtocolUnknown || protocol == ProtocolVerifying)
@@ -181,7 +181,7 @@ func DeriveConnectionState(cloud LinkState, nats LinkState, protocol ProtocolSta
 		}
 	}
 
-	if cloud == LinkConnected && protocol == ProtocolAccepted {
+	if cloud == LinkConnected && protocol == ProtocolTransportVerified {
 		if nats == LinkConnecting {
 			return StateNATSDegraded, nil
 		}

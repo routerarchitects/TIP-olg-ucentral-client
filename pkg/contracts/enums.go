@@ -145,7 +145,7 @@ const (
 	// the transport is healthy and wasn't immediately severed, but true application-layer
 	// acceptance is only implicitly proven when the gateway eventually sends a valid command.
 	ProtocolTransportVerified ProtocolState = "transport_verified"
-	ProtocolRejected ProtocolState = "rejected"
+	ProtocolRejected          ProtocolState = "rejected"
 )
 
 type ConnectionStatus struct {

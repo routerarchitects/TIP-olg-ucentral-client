@@ -44,6 +44,7 @@ type CloudConfig struct {
 	PongTimeoutSeconds            int            `json:"pong_timeout_seconds"`
 	StableSessionThresholdSeconds int            `json:"stable_session_threshold_seconds"`
 	CompressionThresholdBytes     int            `json:"compression_threshold_bytes"`  // Defines compression threshold mapped to permessage-deflate behavior
+	MaxFrameSizeBytes             int            `json:"max_frame_size_bytes"`         // Maximum allowed size of an incoming frame (default 11MB)
 	MaxConsecutiveFrameErrors     int            `json:"max_consecutive_frame_errors"` // Default is 20 if set to 0.
 	TLS                           CloudTLSConfig `json:"tls"`
 }
@@ -122,6 +123,9 @@ func (c *CloudConfig) Validate() error {
 	}
 	if c.CompressionThresholdBytes < 0 {
 		return fmt.Errorf("cloud compression_threshold_bytes must be zero or positive")
+	}
+	if c.MaxFrameSizeBytes < 0 {
+		return fmt.Errorf("cloud max_frame_size_bytes must be zero or positive")
 	}
 	if c.MaxConsecutiveFrameErrors < 0 {
 		return fmt.Errorf("cloud max_consecutive_frame_errors must be zero or positive")

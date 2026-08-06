@@ -576,6 +576,7 @@ TIP-olg-ucentral-client/
         PongTimeoutSeconds            int            `json:"pong_timeout_seconds"`
         StableSessionThresholdSeconds int            `json:"stable_session_threshold_seconds"`
         CompressionThresholdBytes     int            `json:"compression_threshold_bytes"` // Defines compression threshold mapped to permessage-deflate behavior
+        MaxFrameSizeBytes             int            `json:"max_frame_size_bytes"`        // Maximum allowed size of an incoming frame (default 11MB)
         TLS                           CloudTLSConfig `json:"tls"`
     }
 

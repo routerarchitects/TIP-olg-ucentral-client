@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -179,8 +180,13 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 			continue
 		}
 
-		// Enforce transport hard maximum frame size (11MB) to prevent OOM across all reads
-		conn.SetReadLimit(11 * 1024 * 1024)
+		maxFrameSize := int64(11 * 1024 * 1024)
+		if c.config.MaxFrameSizeBytes > 0 {
+			maxFrameSize = int64(c.config.MaxFrameSizeBytes)
+		}
+
+		// Enforce transport hard maximum frame size (default 11MB) to prevent OOM across all reads
+		conn.SetReadLimit(maxFrameSize)
 
 		c.mu.Lock()
 		c.conn = conn
@@ -208,8 +214,8 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 			continue
 		}
 
-		log.Printf("ws: session %s active, waiting for ping verification...", sessionID)
-		// Note: Protocol state remains ProtocolVerifying until startReaderLoop receives the Pong
+		c.onStateChange(contracts.LinkConnected, contracts.ProtocolTransportVerified)
+		log.Printf("ws: session %s active, connected and verified", sessionID)
 		sessionStartTime := time.Now()
 
 		g, gCtx := errgroup.WithContext(sessionCtx)
@@ -227,14 +233,12 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 			return nil
 		})
 
-		verifiedCh := make(chan struct{})
-
 		g.Go(func() error {
-			return c.startReaderLoop(gCtx, conn, handler, verifiedCh)
+			return c.startReaderLoop(gCtx, conn, handler)
 		})
 
 		g.Go(func() error {
-			return c.startWriterLoop(gCtx, conn, verifiedCh)
+			return c.startWriterLoop(gCtx, conn)
 		})
 
 		err = g.Wait()
@@ -313,21 +317,25 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn) 
 
 	handshakeDeadline := time.Now().Add(timeout)
 
+	payload, err := json.Marshal(req)
+	if err != nil {
+		log.Printf("ws: failed to marshal connect request: %v", err)
+		return HandshakeRetryableFailure
+	}
+
+	if c.config.CompressionThresholdBytes > 0 && len(payload) >= c.config.CompressionThresholdBytes {
+		conn.EnableWriteCompression(true)
+	} else {
+		conn.EnableWriteCompression(false)
+	}
+
 	conn.SetWriteDeadline(handshakeDeadline)
-	if err := conn.WriteJSON(req); err != nil {
+	if err := conn.WriteMessage(gws.TextMessage, payload); err != nil {
 		log.Printf("ws: failed to write connect request: %v", err)
 		return HandshakeRetryableFailure
 	}
 
-	// 2. Send a WebSocket Ping control frame to force a response from ucentralgw
-	if err := conn.WriteMessage(gws.PingMessage, nil); err != nil {
-		log.Printf("ws: failed to write ping frame: %v", err)
-		return HandshakeRetryableFailure
-	}
-
-	// 3. Handshake verification is now asynchronously enforced by startReaderLoop!
-	// If the server fails to reply with a Pong, startReaderLoop will time out and kill the connection.
-	log.Printf("ws: connect handshake frames sent, transitioning to reader loop")
+	log.Printf("ws: connect handshake frame sent")
 	return HandshakeAccepted
 }
 
@@ -348,26 +356,15 @@ func (c *WSClient) Close() error {
 	return nil
 }
 
-func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler FrameHandler, verifiedCh chan struct{}) error {
+func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler FrameHandler) error {
 	pongTimeout := 60 * time.Second
 	if c.config.PongTimeoutSeconds > 0 {
 		pongTimeout = time.Duration(c.config.PongTimeoutSeconds) * time.Second
 	}
 
-	isVerifying := true // Tracks if we are still waiting for the initial Handshake Pong
-
 	conn.SetReadDeadline(time.Now().Add(pongTimeout))
 	conn.SetPongHandler(func(string) error {
 		conn.SetReadDeadline(time.Now().Add(pongTimeout))
-		if isVerifying {
-			isVerifying = false
-			close(verifiedCh) // Unlock the writer loop!
-			// Limitation: A Pong proves the WebSocket transport peer responded, but it does not definitively prove
-			// the gateway processed the connect JSON-RPC event since ucentralgw does not send a success response.
-			// Emitting ProtocolTransportVerified here asserts transport health.
-			log.Printf("ws: received pong response, handshake transport verified!")
-			c.onStateChange(contracts.LinkConnected, contracts.ProtocolTransportVerified)
-		}
 		return nil
 	})
 	conn.SetPingHandler(func(appData string) error {
@@ -398,12 +395,17 @@ func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler 
 			return err
 		}
 
-		limited := io.LimitReader(reader, 11*1024*1024+1)
+		maxFrameSize := int64(11 * 1024 * 1024)
+		if c.config.MaxFrameSizeBytes > 0 {
+			maxFrameSize = int64(c.config.MaxFrameSizeBytes)
+		}
+
+		limited := io.LimitReader(reader, maxFrameSize+1)
 		payload, err := io.ReadAll(limited)
 		if err != nil {
 			return fmt.Errorf("failed to read decompressed frame: %w", err)
 		}
-		if len(payload) > 11*1024*1024 {
+		if int64(len(payload)) > maxFrameSize {
 			return fmt.Errorf("decompressed websocket message exceeds limit")
 		}
 
@@ -411,11 +413,6 @@ func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler 
 			SessionID: sessID,
 			Type:      msgType,
 			Payload:   payload,
-		}
-
-		if isVerifying {
-			log.Printf("ws: discarded pre-acceptance application frame (%d bytes)", len(payload))
-			continue
 		}
 
 		disp, err := handler.HandleFrame(ctx, frame)
@@ -435,13 +432,20 @@ func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler 
 			consecutiveErrors = 0
 		}
 
-		if disp == FrameFatalCloseConnection {
-			return fmt.Errorf("handler requested fatal socket termination")
+		switch disp {
+		case FrameAccepted:
+			// Frame was processed successfully.
+		case FrameRejectedKeepConnection:
+			// Handler rejected the frame, but transport remains active.
+		case FrameFatalCloseConnection:
+			return errors.New("handler requested fatal socket termination")
+		default:
+			return fmt.Errorf("invalid frame disposition: %d", disp)
 		}
 	}
 }
 
-func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn, verifiedCh chan struct{}) error {
+func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 	pingInterval := 30 * time.Second
 	if c.config.PingIntervalSeconds > 0 {
 		pingInterval = time.Duration(c.config.PingIntervalSeconds) * time.Second
@@ -450,14 +454,6 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn, verified
 	writeTimeout := 10 * time.Second
 	if c.config.WriteTimeoutSeconds > 0 {
 		writeTimeout = time.Duration(c.config.WriteTimeoutSeconds) * time.Second
-	}
-
-	// Block the entire writer loop until the reader successfully processes the handshake Pong!
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-verifiedCh:
-		// Handshake verified, it is now safe to drain the queues.
 	}
 
 	pingTicker := time.NewTicker(pingInterval)

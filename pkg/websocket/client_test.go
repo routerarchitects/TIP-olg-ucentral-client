@@ -52,15 +52,7 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 		}
 		defer conn.Close()
 
-		hsPingReceived := make(chan struct{})
-		conn.SetPingHandler(func(appData string) error {
-			select {
-			case <-hsPingReceived:
-			default:
-				close(hsPingReceived)
-			}
-			return conn.WriteControl(gws.PongMessage, []byte(appData), time.Now().Add(time.Second))
-		})
+
 
 		// Read the connect frame sent by the client
 		_, payload, err := conn.ReadMessage()
@@ -111,7 +103,6 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 			}
 		}()
 
-		<-hsPingReceived
 		time.Sleep(100 * time.Millisecond) // Give it a moment to complete
 		// Keep connection open so the read/write loops can start
 		time.Sleep(2 * time.Second)
@@ -169,77 +160,7 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 	}
 }
 
-func TestWSClient_DiscardPreAcceptanceCommands(t *testing.T) {
-	upgrader := gws.Upgrader{}
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer conn.Close()
-
-		hsPingReceived := make(chan struct{})
-		// Do not automatically send Pong here! We want to send invalid frames first.
-		conn.SetPingHandler(func(appData string) error {
-			select {
-			case <-hsPingReceived:
-			default:
-				close(hsPingReceived)
-			}
-			return nil
-		})
-
-		// Read the connect frame sent by the client
-		if _, _, err = conn.ReadMessage(); err != nil {
-			return
-		}
-
-		go func() {
-			for {
-				if _, _, err := conn.ReadMessage(); err != nil {
-					return
-				}
-			}
-		}()
-
-		<-hsPingReceived
-
-		// Send a pre-acceptance command (e.g. upgrade) which should be aggressively dropped!
-		conn.WriteJSON(map[string]any{"jsonrpc": "2.0", "method": "upgrade", "params": map[string]any{}})
-		time.Sleep(50 * time.Millisecond)
-
-		// Send the valid Pong control frame to complete the handshake
-		conn.WriteControl(gws.PongMessage, []byte{}, time.Now().Add(time.Second))
-
-		time.Sleep(1 * time.Second)
-	}))
-	defer server.Close()
-
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	cfg := &config.CloudConfig{URL: wsURL, PingIntervalSeconds: 1, PongTimeoutSeconds: 5}
-	sched := queues.NewPriorityScheduler(10, 10)
-	meta := &mockMetadataProvider{}
-
-	client, err := NewWSClient(*cfg, sched, meta, func(c contracts.LinkState, p contracts.ProtocolState) {})
-	if err != nil {
-		t.Fatalf("failed to create client: %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	handler := &mockFrameHandler{}
-	go client.ReconnectLoop(ctx, handler)
-
-	time.Sleep(500 * time.Millisecond)
-
-	handler.mu.Lock()
-	defer handler.mu.Unlock()
-	if len(handler.frames) != 0 {
-		t.Errorf("expected 0 frames (pre-acceptance frames should be discarded), got %d: %v", len(handler.frames), handler.frames)
-	}
-}
 
 type mockEmptySerialProvider struct{}
 
@@ -328,17 +249,7 @@ func TestWSClient_11MBFrameLimit(t *testing.T) {
 		_, payload, _ := conn.ReadMessage()
 		var req map[string]any
 		json.Unmarshal(payload, &req)
-		hsPingReceived := make(chan struct{})
-		conn.SetPingHandler(func(appData string) error {
-			select {
-			case <-hsPingReceived:
-			default:
-				close(hsPingReceived)
-			}
-			return conn.WriteControl(10, []byte(appData), time.Now().Add(time.Second))
-		})
 		go func() { conn.ReadMessage() }()
-		<-hsPingReceived
 
 		time.Sleep(100 * time.Millisecond)
 
@@ -439,24 +350,15 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 		_, payload, _ := conn.ReadMessage()
 		var req map[string]any
 		json.Unmarshal(payload, &req)
-		hsPingReceived := make(chan struct{})
 		pingReceived := make(chan bool, 1)
-
 		conn.SetPingHandler(func(appData string) error {
 			select {
-			case <-hsPingReceived:
-				// Second ping (heartbeat)
-				select {
-				case pingReceived <- true:
-				default:
-				}
-				select {
-				case pingVerified <- true:
-				default:
-				}
+			case pingReceived <- true:
 			default:
-				// First ping (handshake)
-				close(hsPingReceived)
+			}
+			select {
+			case pingVerified <- true:
+			default:
 			}
 			return conn.WriteControl(gws.PongMessage, []byte(appData), time.Now().Add(time.Second))
 		})
@@ -468,8 +370,6 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 				}
 			}
 		}()
-
-		<-hsPingReceived
 
 		select {
 		case <-pingReceived:
@@ -863,79 +763,5 @@ func TestWSClient_StableSessionThreshold(t *testing.T) {
 	}
 	if d2 < 3500*time.Millisecond || d2 > 5500*time.Millisecond {
 		t.Errorf("expected ~4s total delay for second reconnect (backoff reset), got %v", d2)
-	}
-}
-
-func TestWSClient_WriterBlockedBeforePong(t *testing.T) {
-	msgReceived := make(chan string, 1)
-	pongTrigger := make(chan struct{})
-
-	upgrader := gws.Upgrader{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-
-		conn.SetPingHandler(func(appData string) error {
-			// Do not block the read loop, send the Pong asynchronously when triggered
-			go func() {
-				<-pongTrigger
-				conn.WriteControl(gws.PongMessage, []byte(appData), time.Now().Add(time.Second))
-			}()
-			return nil
-		})
-
-		conn.ReadMessage() // Read the connect event
-
-		for {
-			_, payload, err := conn.ReadMessage()
-			if err != nil {
-				return
-			}
-			msgReceived <- string(payload)
-		}
-	}))
-	defer server.Close()
-
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	cfg := &config.CloudConfig{URL: wsURL}
-	scheduler := queues.NewPriorityScheduler(10, 10)
-	client, _ := NewWSClient(*cfg, scheduler, &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Push a message BEFORE connection starts
-	scheduler.Push(queues.OutboundMessage{
-		SessionID: "", // PriorityHigh ignores session filtering
-		Priority:  queues.PriorityHigh,
-		Payload:   []byte("test-payload"),
-	})
-
-	go client.ReconnectLoop(ctx, &mockFrameHandler{})
-
-	// Wait for connection and handshake to start
-	time.Sleep(1 * time.Second)
-
-	// Assert NO message arrives while Pong is withheld (writer loop should be blocked)
-	select {
-	case <-msgReceived:
-		t.Fatalf("writer loop transmitted application message before Pong verification")
-	case <-time.After(1 * time.Second):
-		// Success, writer is correctly blocked
-	}
-
-	// Send the Pong
-	close(pongTrigger)
-
-	// Assert the queued message is immediately delivered
-	select {
-	case msg := <-msgReceived:
-		if msg != "test-payload" {
-			t.Errorf("expected test-payload, got %s", msg)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatalf("timed out waiting for message after Pong")
 	}
 }

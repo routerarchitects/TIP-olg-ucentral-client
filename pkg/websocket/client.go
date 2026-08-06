@@ -49,11 +49,6 @@ const (
 )
 
 // FrameHandler represents the upstream component that processes incoming frames.
-// SECURITY CONTRACT: The FrameHandler is only invoked after the transport layer
-// has completed the WebSocket handshake verification (ProtocolTransportVerified). It does not need to
-// track ProtocolVerifying, as all pre-acceptance frames are owned and explicitly
-// discarded by the transport's handshake routine. Pre-acceptance commands are
-// never buffered or replayed.
 type FrameHandler interface {
 	HandleFrame(ctx context.Context, frame InboundFrame) (FrameDisposition, error)
 }
@@ -63,6 +58,7 @@ type HandshakeResult int
 const (
 	HandshakeAccepted HandshakeResult = iota
 	HandshakeRetryableFailure
+	HandshakeRejected
 )
 
 type WSClient struct {
@@ -210,10 +206,14 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 		c.mu.Unlock()
 
 		hsResult := c.performConnectHandshake(sessionCtx, conn)
-		if hsResult == HandshakeRetryableFailure {
+		if hsResult == HandshakeRejected {
+			log.Printf("ws: fatal: handshake rejected (e.g. invalid empty serial), aborting reconnect loop")
+			c.Close()
+			c.onStateChange(contracts.LinkConnected, contracts.ProtocolRejected)
+			return fmt.Errorf("ws: fatal: handshake rejected")
+		} else if hsResult == HandshakeRetryableFailure {
 			log.Printf("ws: handshake failed, closing connection and retrying")
 			c.Close()
-			sessionCancel()
 			c.onStateChange(contracts.LinkConnecting, contracts.ProtocolUnknown)
 			if !waitForRetry() {
 				return nil
@@ -289,7 +289,7 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn) 
 	params.Serial = strings.TrimSpace(params.Serial)
 	if params.Serial == "" {
 		log.Printf("ws: aborting handshake, local serial number is empty or whitespace")
-		return HandshakeRetryableFailure
+		return HandshakeRejected
 	}
 
 	paramsMap := map[string]any{

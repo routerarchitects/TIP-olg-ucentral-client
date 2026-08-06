@@ -180,7 +180,7 @@ func TestWSClient_EmptyLocalSerial(t *testing.T) {
 
 	res := client.performConnectHandshake(context.Background(), &gws.Conn{})
 
-	if res != HandshakeRetryableFailure {
+	if res != HandshakeRejected {
 		t.Errorf("expected handshake to be rejected due to empty serial, got %v", res)
 	}
 }

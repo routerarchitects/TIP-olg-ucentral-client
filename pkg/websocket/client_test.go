@@ -549,7 +549,7 @@ func TestWSClient_ReconnectThrottling(t *testing.T) {
 	defer cancel()
 
 	go client.ReconnectLoop(ctx, &mockFrameHandler{})
-	
+
 	// Wait for exactly 3 connections deterministically
 	for i := 0; i < 3; i++ {
 		select {
@@ -782,7 +782,7 @@ func TestWSClient_StableSessionThreshold(t *testing.T) {
 	defer cancel()
 
 	go client.ReconnectLoop(ctx, &mockFrameHandler{})
-	
+
 	// Wait for exactly 3 connections deterministically
 	for i := 0; i < 3; i++ {
 		select {

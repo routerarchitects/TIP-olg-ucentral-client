@@ -139,6 +139,11 @@ type ProtocolState string
 const (
 	ProtocolUnknown   ProtocolState = "unknown"
 	ProtocolVerifying ProtocolState = "verifying"
+	// ProtocolAccepted indicates the WebSocket transport layer successfully received a Pong 
+	// response to the initial connect Ping. Note: Because the upstream ucentralgw does not 
+	// send a JSON-RPC application-layer response to the connect event, this state proves 
+	// the transport is healthy and wasn't immediately severed, but true application-layer 
+	// acceptance is only implicitly proven when the gateway eventually sends a valid command.
 	ProtocolAccepted  ProtocolState = "accepted"
 	ProtocolRejected  ProtocolState = "rejected"
 )

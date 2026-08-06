@@ -359,7 +359,10 @@ func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler 
 		conn.SetReadDeadline(time.Now().Add(pongTimeout))
 		if isVerifying {
 			isVerifying = false
-			log.Printf("ws: received pong response, handshake fully verified!")
+			// Limitation: A Pong proves the WebSocket transport peer responded, but it does not definitively prove
+			// the gateway processed the connect JSON-RPC event since ucentralgw does not send a success response.
+			// Emitting ProtocolAccepted here asserts transport health.
+			log.Printf("ws: received pong response, handshake transport verified!")
 			c.onStateChange(contracts.LinkConnected, contracts.ProtocolAccepted)
 		}
 		return nil
@@ -463,12 +466,21 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 	go func() {
 		for {
 			msg, err := c.scheduler.Next(ctx)
-			select {
-			case <-ctx.Done():
-				return
-			case msgCh <- nextResult{msg: msg, err: err}:
-			}
-			if err != nil {
+			if err == nil {
+				select {
+				case <-ctx.Done():
+					if msg.Priority != queues.PriorityHighest {
+						c.scheduler.Push(msg)
+					}
+					return
+				case msgCh <- nextResult{msg: msg, err: err}:
+				}
+			} else {
+				select {
+				case <-ctx.Done():
+					return
+				case msgCh <- nextResult{msg: msg, err: err}:
+				}
 				return // Stop the goroutine on terminal queue errors
 			}
 		}
@@ -513,6 +525,10 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 			err := conn.WriteMessage(gws.TextMessage, []byte(msg.Payload))
 
 			if err != nil {
+				if msg.Priority != queues.PriorityHighest {
+					log.Printf("ws: requeuing priority-%d message after write failure", msg.Priority)
+					c.scheduler.Push(msg)
+				}
 				return fmt.Errorf("failed to write outbound message: %v", err)
 			}
 		}

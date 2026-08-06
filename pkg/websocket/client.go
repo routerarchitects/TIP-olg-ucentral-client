@@ -206,8 +206,8 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 		hsResult := c.performConnectHandshake(sessionCtx, conn)
 		if hsResult == HandshakeRejected {
 			log.Printf("ws: fatal: handshake rejected (e.g. invalid empty serial), aborting reconnect loop")
-			c.Close()
 			c.onStateChange(contracts.LinkConnected, contracts.ProtocolRejected)
+			c.Close()
 			return fmt.Errorf("ws: fatal: handshake rejected")
 		} else if hsResult == HandshakeRetryableFailure {
 			log.Printf("ws: handshake failed, closing connection and retrying")

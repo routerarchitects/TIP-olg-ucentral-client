@@ -761,3 +761,158 @@ func TestWSClient_StableSessionThreshold(t *testing.T) {
 		t.Errorf("expected ~4s total delay for second reconnect (backoff reset), got %v", d2)
 	}
 }
+
+type mockTestScheduler struct {
+	nextCalled    chan struct{}
+	nextUnblocked chan struct{}
+}
+
+func (m *mockTestScheduler) Push(msg queues.OutboundMessage) error {
+	return nil
+}
+
+func (m *mockTestScheduler) Next(ctx context.Context) (queues.OutboundMessage, error) {
+	select {
+	case m.nextCalled <- struct{}{}:
+	default:
+	}
+
+	<-ctx.Done()
+
+	select {
+	case m.nextUnblocked <- struct{}{}:
+	default:
+	}
+
+	return queues.OutboundMessage{}, ctx.Err()
+}
+
+func TestWSClient_TeardownOnContextCancel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := gws.Upgrader{}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		conn.SetPingHandler(func(appData string) error {
+			return conn.WriteControl(gws.PongMessage, []byte(appData), time.Now().Add(time.Second))
+		})
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	cfg := &config.CloudConfig{
+		URL:                           strings.Replace(server.URL, "http", "ws", 1),
+		ConnectTimeoutSeconds:         2,
+		PingIntervalSeconds:           1,
+		StableSessionThresholdSeconds: 1,
+	}
+
+	sched := queues.NewPriorityScheduler(10, 10)
+	meta := &mockMetadataProvider{}
+
+	client, _ := NewWSClient(*cfg, sched, meta, func(c contracts.LinkState, p contracts.ProtocolState) {})
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	handler := &mockFrameHandler{}
+
+	done := make(chan struct{})
+	go func() {
+		client.ReconnectLoop(ctx, handler)
+		close(done)
+	}()
+
+	time.Sleep(200 * time.Millisecond) // Let it connect
+	cancel() // Cancel the parent context
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ReconnectLoop did not exit cleanly upon parent context cancellation")
+	}
+}
+
+func TestWSClient_TeardownOnReaderFailureAndWriterBlocked(t *testing.T) {
+	var connToClose *gws.Conn
+	var connMu sync.Mutex
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := gws.Upgrader{}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		
+		connMu.Lock()
+		connToClose = conn
+		connMu.Unlock()
+		
+		conn.SetPingHandler(func(appData string) error {
+			return conn.WriteControl(gws.PongMessage, []byte(appData), time.Now().Add(time.Second))
+		})
+		
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	cfg := &config.CloudConfig{
+		URL:                           strings.Replace(server.URL, "http", "ws", 1),
+		ConnectTimeoutSeconds:         2,
+		PingIntervalSeconds:           1,
+		StableSessionThresholdSeconds: 1,
+	}
+
+	sched := &mockTestScheduler{
+		nextCalled:    make(chan struct{}, 1),
+		nextUnblocked: make(chan struct{}, 1),
+	}
+	meta := &mockMetadataProvider{}
+
+	client, _ := NewWSClient(*cfg, sched, meta, func(c contracts.LinkState, p contracts.ProtocolState) {})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	handler := &mockFrameHandler{}
+
+	done := make(chan struct{})
+	go func() {
+		client.ReconnectLoop(ctx, handler)
+		close(done)
+	}()
+
+	select {
+	case <-sched.nextCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("writer did not call Next()")
+	}
+
+	connMu.Lock()
+	if connToClose != nil {
+		connToClose.Close()
+	}
+	connMu.Unlock()
+
+	select {
+	case <-sched.nextUnblocked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("writer was not unblocked after socket dropped")
+	}
+
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ReconnectLoop did not exit cleanly upon parent context cancellation")
+	}
+}

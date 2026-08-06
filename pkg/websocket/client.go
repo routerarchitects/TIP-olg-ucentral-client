@@ -484,7 +484,9 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 				select {
 				case <-ctx.Done():
 					if msg.Priority != queues.PriorityHighest {
-						c.scheduler.Push(msg)
+						if err := c.scheduler.Push(msg); err != nil {
+							log.Printf("ws: fatal: failed to requeue priority-%d message (queue full), dropping payload: %v", msg.Priority, err)
+						}
 					}
 					return
 				case msgCh <- nextResult{msg: msg, err: err}:
@@ -541,7 +543,9 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 			if err != nil {
 				if msg.Priority != queues.PriorityHighest {
 					log.Printf("ws: requeuing priority-%d message after write failure", msg.Priority)
-					c.scheduler.Push(msg)
+					if pushErr := c.scheduler.Push(msg); pushErr != nil {
+						log.Printf("ws: fatal: failed to requeue priority-%d message (queue full), dropping payload: %v", msg.Priority, pushErr)
+					}
 				}
 				return fmt.Errorf("failed to write outbound message: %v", err)
 			}

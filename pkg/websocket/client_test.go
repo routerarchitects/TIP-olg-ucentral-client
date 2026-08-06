@@ -44,6 +44,8 @@ func (m *mockFrameHandler) HandleFrame(ctx context.Context, frame InboundFrame) 
 func TestWSClient_HandshakeSuccess(t *testing.T) {
 	upgrader := gws.Upgrader{}
 
+	handshakeReceived := make(chan struct{})
+
 	// Create a mock Cloud Server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -92,6 +94,8 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 			}
 		}
 
+		close(handshakeReceived)
+
 		// Read the next message in a goroutine so gorilla/websocket can process the Ping control frame
 		go func() {
 			for {
@@ -101,9 +105,8 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 			}
 		}()
 
-		time.Sleep(100 * time.Millisecond) // Give it a moment to complete
 		// Keep connection open so the read/write loops can start
-		time.Sleep(2 * time.Second)
+		<-r.Context().Done()
 	}))
 	defer server.Close()
 
@@ -120,11 +123,15 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 
 	var states []string
 	var mu sync.Mutex
+	stateReached := make(chan struct{})
 
 	onState := func(cloud contracts.LinkState, protocol contracts.ProtocolState) {
 		mu.Lock()
 		defer mu.Unlock()
 		states = append(states, string(cloud)+"-"+string(protocol))
+		if len(states) == 3 {
+			close(stateReached)
+		}
 	}
 
 	client, _ := NewWSClient(*cfg, sched, meta, onState)
@@ -134,11 +141,34 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 
 	handler := &mockFrameHandler{}
 
+	errCh := make(chan error, 1)
 	// Run the reconnect loop in the background
-	go client.ReconnectLoop(ctx, handler)
+	go func() {
+		errCh <- client.ReconnectLoop(ctx, handler)
+	}()
 
-	// Give the client time to connect and handshake
-	time.Sleep(1 * time.Second)
+	select {
+	case <-handshakeReceived:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for handshake")
+	}
+
+	select {
+	case <-stateReached:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for expected states")
+	}
+
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Errorf("ReconnectLoop returned unexpected error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for ReconnectLoop to exit")
+	}
 
 	mu.Lock()
 	defer mu.Unlock()

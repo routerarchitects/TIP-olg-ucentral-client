@@ -229,7 +229,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 
 		// Teardown watcher: violently close the physical socket to unblock
 		// ReadMessage/WriteMessage the instant any loop crashes or the context is canceled!
-		g.Go(func() error {
+		go func() error {
 			<-gCtx.Done()
 			conn.Close()
 			c.mu.Lock()
@@ -238,7 +238,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 			}
 			c.mu.Unlock()
 			return nil
-		})
+		}()
 
 		g.Go(func() error {
 			return c.startReaderLoop(gCtx, conn, handler)
@@ -423,6 +423,14 @@ func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler 
 		}
 
 		disp, err := handler.HandleFrame(ctx, frame)
+
+		if disp == FrameFatalCloseConnection {
+			if err != nil {
+				log.Printf("ws: fatal disposition accompanied by error (ignoring error): %v", err)
+			}
+			return errors.New("handler requested fatal socket termination")
+		}
+
 		if err != nil {
 			consecutiveErrors++
 			log.Printf("ws: frame handler error: %v (consecutive: %d)", err, consecutiveErrors)
@@ -435,17 +443,17 @@ func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler 
 			if consecutiveErrors >= maxErrors {
 				return fmt.Errorf("ws: fatal: exceeded maximum consecutive frame handler errors")
 			}
-		} else {
-			consecutiveErrors = 0
+			continue
 		}
+
+		// Precedence 3: Normal dispositions are evaluated only when err == nil
+		consecutiveErrors = 0
 
 		switch disp {
 		case FrameAccepted:
 			// Frame was processed successfully.
 		case FrameRejectedKeepConnection:
 			// Handler rejected the frame, but transport remains active.
-		case FrameFatalCloseConnection:
-			return errors.New("handler requested fatal socket termination")
 		default:
 			return fmt.Errorf("invalid frame disposition: %d", disp)
 		}

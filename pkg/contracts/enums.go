@@ -140,7 +140,7 @@ const (
 	ProtocolUnknown   ProtocolState = "unknown"
 	ProtocolVerifying ProtocolState = "verifying"
 	// ProtocolTransportVerified indicates that the WebSocket transport
-	// successfully received a Pong response to the initial Ping.
+	// connection is established and the initial handshake frame was sent.
 	// This state represents transport connectivity only and makes no
 	// assertion about higher-level uCentral application health.
 	ProtocolTransportVerified ProtocolState = "transport_verified"

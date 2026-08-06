@@ -521,28 +521,32 @@ TIP-olg-ucentral-client/
     // | Connected    | Connecting   | Rejected          | StateProtocolFailure  |
     // | Connected    | Connected    | Rejected          | StateProtocolFailure  |
     // | Connecting   | (Any)        | Accepted/Rejected | error (Impossible)    |
-    // | Connected    | (Any)        | Unknown/Verifying | error (Impossible)    |
+    // | Connected    | (Any)        | Unknown           | error (Impossible)    |
     func DeriveConnectionState(cloud LinkState, nats LinkState, protocol ProtocolState) (ConnectionState, error)
 
     // Note on Impossible States:
     // It is architecturally impossible for the Cloud link to be 'Connected' while the protocol
-    // is 'Unknown' or 'Verifying'. The Cloud LinkState MUST remain 'Connecting' while the WebSocket
-    // is open but the JSON-RPC negotiation is still verifying. It only transitions to 'Connected'
-    // AFTER a definitive JSON-RPC 'Accepted' or 'Rejected' response is received.
+    // is 'Unknown'. The Cloud LinkState transitions to 'Connected' as soon as the physical 
+    // WebSocket is dialed successfully, allowing the ProtocolState to briefly transition through 'Verifying' 
+    // before settling into 'ProtocolTransportVerified' once the connect notification is written.
 
+    // ProtocolUnknown implies the Cloud connection is severed. ProtocolVerifying implies the Cloud socket
+    // is open but the JSON-RPC handshake frame is actively being transmitted. It transitions to ProtocolTransportVerified
+    // immediately AFTER the JSON-RPC connect notification is successfully written to the socket.
+    
     // Protocol State Lifecycle:
     // Protocol state MUST be strictly scoped to a single Cloud session to prevent 
     // stale rejections from contaminating future reconnections. Note that `LinkConnected`
     // for the Cloud link indicates ONLY that the WSS transport is open and the JSON-RPC
-    // exchange has finished; it does NOT imply protocol acceptance.
+    // frame has been written; it does NOT imply application-layer protocol acceptance.
     // 
     // 1. Cloud connection drops/disconnects:
     //    Cloud = Connecting, Protocol = ProtocolUnknown
     // 2. WSS connection opens, transmitting connect.capabilities:
-    //    Cloud = Connecting, Protocol = ProtocolVerifying
-    // 3. Cloud returns successful connect JSON-RPC response:
+    //    Cloud = Connected, Protocol = ProtocolVerifying
+    // 3. Client successfully transmits connect JSON-RPC notification:
     //    Cloud = Connected, Protocol = ProtocolTransportVerified
-    // 4. Cloud returns explicit fatal rejection response:
+    // 4. Handshake fails locally (e.g., invalid empty serial):
     //    Cloud = Connected, Protocol = ProtocolRejected (DerivedStatus evaluates to ProtocolFailure)
     ```
 
@@ -577,6 +581,7 @@ TIP-olg-ucentral-client/
         StableSessionThresholdSeconds int            `json:"stable_session_threshold_seconds"`
         CompressionThresholdBytes     int            `json:"compression_threshold_bytes"` // Defines compression threshold mapped to permessage-deflate behavior
         MaxFrameSizeBytes             int            `json:"max_frame_size_bytes"`        // Maximum allowed size of an incoming frame (default 11MB)
+        MaxConsecutiveFrameErrors     int            `json:"max_consecutive_frame_errors"` // Default 20
         TLS                           CloudTLSConfig `json:"tls"`
     }
 
@@ -1232,6 +1237,8 @@ The uCentral client must not register a NATS responder for `ucentral.v1.device.<
         *   `cloud.tls.client_cert_file`: Required and readable file path
         *   `cloud.tls.client_key_file`: Required and readable file path
         *   `cloud.compression_threshold_bytes`: Default 2048; must be > 0
+        *   `cloud.max_frame_size_bytes`: Default 11534336 (11MB); must be >= 0
+        *   `cloud.max_consecutive_frame_errors`: Default 20; must be >= 0
         *   `cloud.stable_session_threshold_seconds`: Default 300; must be > 0
         *   `nats.servers`: At least one entry; each must use `tls://`
         *   `nats.credentials_file`: Required and readable file path

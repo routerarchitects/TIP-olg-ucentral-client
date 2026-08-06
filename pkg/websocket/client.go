@@ -170,7 +170,14 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 			dialer.TLSClientConfig = tlsConfig
 		}
 
-		conn, _, err := dialer.DialContext(ctx, c.config.URL, nil)
+		connectTimeout := 10 * time.Second
+		if c.config.ConnectTimeoutSeconds > 0 {
+			connectTimeout = time.Duration(c.config.ConnectTimeoutSeconds) * time.Second
+		}
+		dialCtx, cancelDial := context.WithTimeout(ctx, connectTimeout)
+
+		conn, _, err := dialer.DialContext(dialCtx, c.config.URL, nil)
+		cancelDial()
 		if err != nil {
 			log.Printf("ws: dial failed: %v", err)
 			c.onStateChange(contracts.LinkConnecting, contracts.ProtocolUnknown)

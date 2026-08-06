@@ -52,8 +52,6 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 		}
 		defer conn.Close()
 
-
-
 		// Read the connect frame sent by the client
 		_, payload, err := conn.ReadMessage()
 		if err != nil {
@@ -159,8 +157,6 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 		t.Errorf("expected connected-transport_verified, got %s", states[2])
 	}
 }
-
-
 
 type mockEmptySerialProvider struct{}
 

@@ -259,7 +259,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 			threshold = 60 * time.Second
 		}
 		if time.Since(sessionStartTime) > threshold {
-			backoff = 2 * time.Second
+			backoff = 1 * time.Second
 		}
 
 		// Apply backoff before the next dial to prevent rapid accept/drop churn

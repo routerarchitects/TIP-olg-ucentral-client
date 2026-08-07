@@ -1313,3 +1313,109 @@ func TestWSClient_FrameFatalCloseConnection(t *testing.T) {
 		t.Errorf("expected at least 2 connections (initial + reconnect), got %d. Session failed to tear down and reconnect.", count)
 	}
 }
+
+func TestWSClient_ServerPingsButNoPongs(t *testing.T) {
+	upgrader := gws.Upgrader{}
+	var mu sync.Mutex
+	connectCount := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		mu.Lock()
+		connectCount++
+		mu.Unlock()
+
+		// Read handshake request
+		var req map[string]any
+		conn.ReadJSON(&req)
+
+		// Create a context to cleanly stop the pinger goroutine
+		ctx, cancel := context.WithCancel(r.Context())
+		defer cancel()
+
+		// Aggressively send Pings to the client
+		go func() {
+			ticker := time.NewTicker(500 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					conn.WriteControl(gws.PingMessage, []byte("server-ping"), time.Now().Add(time.Second))
+				}
+			}
+		}()
+
+		// Disable the default ping handler so the server NEVER replies with a Pong
+		// (forcing the server to ignore the client's pings)
+		conn.SetPingHandler(func(string) error { return nil })
+
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &config.CloudConfig{
+		URL:                 wsURL,
+		PingIntervalSeconds: 1,
+		PongTimeoutSeconds:  1,
+	}
+
+	readyCh := make(chan struct{})
+	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {
+		if p == contracts.ProtocolTransportVerified {
+			select {
+			case <-readyCh:
+			default:
+				close(readyCh)
+			}
+		}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- client.ReconnectLoop(ctx, &mockFrameHandler{})
+	}()
+
+	select {
+	case <-readyCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for connect")
+	}
+
+	// Wait up to 6 seconds. The ping+pong timeout total is 2s.
+	// Even though the server is sending us Pings every 0.5s, the client should
+	// correctly time out and tear down the socket, then wait 2s to reconnect.
+	deadline := time.Now().Add(6 * time.Second)
+	reconnected := false
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		count := connectCount
+		mu.Unlock()
+		if count >= 2 {
+			reconnected = true
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	if !reconnected {
+		mu.Lock()
+		count := connectCount
+		mu.Unlock()
+		t.Errorf("expected socket to die and reconnect (count >= 2), but count is %d. Inbound pings falsely kept it alive!", count)
+	}
+}

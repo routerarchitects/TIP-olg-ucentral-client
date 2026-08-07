@@ -421,7 +421,6 @@ func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler 
 		return nil
 	})
 	conn.SetPingHandler(func(appData string) error {
-		conn.SetReadDeadline(time.Now().Add(readDeadlineDuration))
 
 		err := conn.WriteControl(
 			gws.PongMessage,

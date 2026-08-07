@@ -1101,7 +1101,7 @@ func TestWSClient_TeardownOnWriterFailureAndReaderBlocked(t *testing.T) {
 	// The writer loop should notice the socket is closed when it sends the next ping
 	// (within 1 second). It will fail, cancel the gCtx, which unblocks HandleFrame,
 	// tearing down the session. ReconnectLoop will then retry and spin up a new session.
-	
+
 	// Wait for a new session generation to spin up (meaning the old one was torn down)
 	deadline := time.Now().Add(5 * time.Second)
 	reconnected := false

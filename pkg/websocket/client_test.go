@@ -663,7 +663,7 @@ func TestWSClient_StalePriority0_Rollover(t *testing.T) {
 		StableSessionThresholdSeconds: 1, // ensure reconnect happens fast
 	}
 	scheduler := queues.NewPriorityScheduler(10, 10)
-	
+
 	readyCh := make(chan struct{}, 10)
 	client, _ := NewWSClient(*cfg, scheduler, &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {
 		if p == contracts.ProtocolTransportVerified {

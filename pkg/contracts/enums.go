@@ -171,7 +171,7 @@ func DeriveConnectionState(cloud LinkState, nats LinkState, protocol ProtocolSta
 	// Note: cloud == LinkConnected && (protocol == ProtocolUnknown || protocol == ProtocolVerifying)
 	// is a perfectly valid state! It happens during the normal handshake window after dialing.
 
-	if cloud == LinkConnecting || (cloud == LinkConnected && (protocol == ProtocolUnknown || protocol == ProtocolVerifying)) {
+	if cloud == LinkConnecting || (cloud == LinkConnected && protocol == ProtocolVerifying) {
 		if nats == LinkConnecting {
 			return StateConnecting, nil
 		}

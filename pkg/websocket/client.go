@@ -71,6 +71,7 @@ const (
 	defaultPingInterval              = 30 * time.Second
 	defaultInitialBackoff            = 2 * time.Second
 	defaultMaxBackoff                = 60 * time.Second
+	defaultStableSessionThresholdSeconds = 60 * time.Second
 )
 
 type WSClient struct {
@@ -282,10 +283,11 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 		// Only reset backoff if the session was stable
 		threshold := time.Duration(c.config.StableSessionThresholdSeconds) * time.Second
 		if threshold <= 0 {
-			threshold = 60 * time.Second
+			threshold = defaultStableSessionThresholdSeconds
 		}
 		if time.Since(sessionStartTime) > threshold {
-			backoff = 1 * time.Second
+			backoff = defaultInitialBackoff
+			continue
 		}
 
 		// Apply backoff before the next dial to prevent rapid accept/drop churn

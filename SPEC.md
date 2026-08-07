@@ -516,6 +516,7 @@ TIP-olg-ucentral-client/
     // |--------------|--------------|-------------------|-----------------------|
     // | Connecting   | Connecting   | Unknown/Verifying | StateConnecting       |
     // | Connecting   | Connected    | Unknown/Verifying | StateCloudDegraded    |
+    // | Connected    | Connecting   | Verifying         | StateConnecting       |
     // | Connected    | Connecting   | Accepted          | StateNATSDegraded     |
     // | Connected    | Connected    | Accepted          | StateOperational      |
     // | Connected    | Connecting   | Rejected          | StateProtocolFailure  |

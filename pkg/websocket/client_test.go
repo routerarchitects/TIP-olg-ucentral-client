@@ -1468,3 +1468,75 @@ func TestJitterAlgorithm(t *testing.T) {
 		t.Errorf("expected jitter to be highly randomized, but got only %d unique values", len(uniqueValues))
 	}
 }
+
+type nullMetadataProvider struct{}
+
+func (m *nullMetadataProvider) ConnectParams(ctx context.Context) (CloudConnectParams, error) {
+	return CloudConnectParams{
+		Serial:   "SERIAL123",
+		Firmware: "1.0.0",
+		UUID:     12345,
+		// Capabilities deliberately left nil
+	}, nil
+}
+
+func TestWSClient_NullCapabilities(t *testing.T) {
+	upgrader := gws.Upgrader{}
+	capsVerifiedCh := make(chan struct{})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		var req map[string]any
+		if err := conn.ReadJSON(&req); err != nil {
+			t.Errorf("server read json failed: %v", err)
+			return
+		}
+
+		params, ok := req["params"].(map[string]any)
+		if !ok {
+			t.Errorf("expected params to be a JSON object, got %T", req["params"])
+			return
+		}
+
+		caps, ok := params["capabilities"]
+		if !ok {
+			t.Errorf("expected capabilities key to be present in params")
+			return
+		}
+
+		if caps == nil {
+			t.Errorf("expected capabilities to be normalized to {}, but got null")
+		} else if capsMap, isMap := caps.(map[string]any); !isMap {
+			t.Errorf("expected capabilities to be an object, got %T", caps)
+		} else if len(capsMap) != 0 {
+			t.Errorf("expected capabilities to be an empty object, got %v", capsMap)
+		}
+
+		close(capsVerifiedCh)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &config.CloudConfig{
+		URL: wsURL,
+	}
+
+	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &nullMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go client.ReconnectLoop(ctx, &mockFrameHandler{})
+
+	select {
+	case <-capsVerifiedCh:
+		// Success
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for capabilities verification")
+	}
+}

@@ -344,6 +344,10 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn) 
 		return HandshakeRejected
 	}
 
+	if params.Capabilities == nil {
+		params.Capabilities = make(map[string]any)
+	}
+
 	paramsMap := map[string]any{
 		"serial":       params.Serial,
 		"uuid":         params.UUID,

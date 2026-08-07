@@ -817,15 +817,19 @@ func TestWSClient_ReconnectThrottling(t *testing.T) {
 	d1 := connectTimes[1].Sub(connectTimes[0])
 	d2 := connectTimes[2].Sub(connectTimes[1])
 
-	// First wait is base=2s. The jitter logic uses defaultInitialBackoff (2s) + rand(0, base).
-	// So it should be between 2.0s and 4.0s (plus a tiny bit of test overhead).
-	if d1 < 1900*time.Millisecond || d1 > 4500*time.Millisecond {
-		t.Errorf("expected first jittered backoff between 2s and 4s, got %v", d1)
+	// First wait is base=initialBackoff. The jitter logic uses initialBackoff + rand(0, base).
+	// So it should be between initialBackoff and initialBackoff*2 (plus a tiny bit of test overhead).
+	min1 := initialBackoff - 10*time.Millisecond
+	max1 := initialBackoff*2 + 500*time.Millisecond
+	if d1 < min1 || d1 > max1 {
+		t.Errorf("expected first jittered backoff between %v and %v, got %v", min1, max1, d1)
 	}
-	// Second wait is base=4s. The jitter logic uses defaultInitialBackoff (2s) + rand(0, base).
-	// So it should be between 2.0s and 6.0s (plus a tiny bit of test overhead).
-	if d2 < 1900*time.Millisecond || d2 > 6500*time.Millisecond {
-		t.Errorf("expected second jittered backoff between 2s and 6s, got %v", d2)
+	// Second wait is base=initialBackoff*2. The jitter logic uses initialBackoff + rand(0, base).
+	// So it should be between initialBackoff and initialBackoff*3 (plus a tiny bit of test overhead).
+	min2 := initialBackoff - 10*time.Millisecond
+	max2 := initialBackoff*3 + 500*time.Millisecond
+	if d2 < min2 || d2 > max2 {
+		t.Errorf("expected second jittered backoff between %v and %v, got %v", min2, max2, d2)
 	}
 }
 

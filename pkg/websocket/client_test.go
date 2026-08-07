@@ -229,7 +229,8 @@ func (m *mockWhitespaceSerialProvider) ConnectParams(ctx context.Context) (Cloud
 func TestWSClient_WhitespaceSerial(t *testing.T) {
 	upgrader := gws.Upgrader{}
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assertCh := make(chan struct{})
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			t.Fatal(err)
@@ -248,6 +249,7 @@ func TestWSClient_WhitespaceSerial(t *testing.T) {
 		if params["serial"] != "WHITESPACE123" {
 			t.Errorf("expected normalized serial 'WHITESPACE123', got '%v'", params["serial"])
 		}
+		close(assertCh)
 	}))
 	defer server.Close()
 
@@ -261,7 +263,12 @@ func TestWSClient_WhitespaceSerial(t *testing.T) {
 	defer cancel()
 
 	go client.ReconnectLoop(ctx, &mockFrameHandler{})
-	time.Sleep(500 * time.Millisecond)
+	
+	select {
+	case <-assertCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for handler assertion")
+	}
 }
 
 func TestWSClient_11MBFrameLimit(t *testing.T) {
@@ -454,12 +461,26 @@ func TestWSClient_StalePriority0(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
 	cfg := &config.CloudConfig{URL: wsURL}
 	scheduler := queues.NewPriorityScheduler(10, 10)
-	client, _ := NewWSClient(*cfg, scheduler, &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	readyCh := make(chan struct{})
+	client, _ := NewWSClient(*cfg, scheduler, &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {
+		if p == contracts.ProtocolTransportVerified {
+			select {
+			case <-readyCh:
+			default:
+				close(readyCh)
+			}
+		}
+	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	go client.ReconnectLoop(ctx, &mockFrameHandler{})
-	time.Sleep(1 * time.Second) // wait for connect
+	
+	select {
+	case <-readyCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for connect")
+	}
 
 	client.mu.Lock()
 	activeSess := fmt.Sprintf("sess-%d", client.generation)
@@ -657,7 +678,7 @@ func TestWSClient_ConfiguredWriteTimeout(t *testing.T) {
 		}()
 
 		// Block reads completely so the client TCP buffer fills and writes block
-		time.Sleep(10 * time.Second)
+		<-r.Context().Done()
 	}))
 	defer server.Close()
 
@@ -667,13 +688,27 @@ func TestWSClient_ConfiguredWriteTimeout(t *testing.T) {
 		WriteTimeoutSeconds: 1, // Fail fast on write
 	}
 	sched := queues.NewPriorityScheduler(10, 10)
-	client, _ := NewWSClient(*cfg, sched, &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	readyCh := make(chan struct{})
+	client, _ := NewWSClient(*cfg, sched, &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {
+		if p == contracts.ProtocolTransportVerified {
+			select {
+			case <-readyCh:
+			default:
+				close(readyCh)
+			}
+		}
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	go client.ReconnectLoop(ctx, &mockFrameHandler{})
-	time.Sleep(1 * time.Second)
+	
+	select {
+	case <-readyCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for connect")
+	}
 
 	client.mu.Lock()
 	sessID := fmt.Sprintf("sess-%d", client.generation)
@@ -865,7 +900,16 @@ func TestWSClient_TeardownOnContextCancel(t *testing.T) {
 	sched := queues.NewPriorityScheduler(10, 10)
 	meta := &mockMetadataProvider{}
 
-	client, _ := NewWSClient(*cfg, sched, meta, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	readyCh := make(chan struct{})
+	client, _ := NewWSClient(*cfg, sched, meta, func(c contracts.LinkState, p contracts.ProtocolState) {
+		if p == contracts.ProtocolTransportVerified {
+			select {
+			case <-readyCh:
+			default:
+				close(readyCh)
+			}
+		}
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -877,7 +921,11 @@ func TestWSClient_TeardownOnContextCancel(t *testing.T) {
 		close(done)
 	}()
 
-	time.Sleep(200 * time.Millisecond) // Let it connect
+	select {
+	case <-readyCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for connect")
+	}
 	cancel()                           // Cancel the parent context
 
 	select {
@@ -970,6 +1018,7 @@ func TestWSClient_TeardownOnReaderFailureAndWriterBlocked(t *testing.T) {
 func TestWSClient_ConcurrentPingWhileBlocked(t *testing.T) {
 	upgrader := gws.Upgrader{}
 	pongReceived := make(chan struct{})
+	clientLockedCh := make(chan struct{})
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -990,7 +1039,7 @@ func TestWSClient_ConcurrentPingWhileBlocked(t *testing.T) {
 		})
 
 		// Wait until the client has definitely acquired the write lock
-		time.Sleep(200 * time.Millisecond)
+		<-clientLockedCh
 		conn.WriteControl(gws.PingMessage, []byte("test-ping"), time.Now().Add(time.Second))
 
 		// Continually read so the server processes incoming control frames (Pongs)
@@ -1008,19 +1057,32 @@ func TestWSClient_ConcurrentPingWhileBlocked(t *testing.T) {
 
 	sched := queues.NewPriorityScheduler(1, 1)
 
-	client, _ := NewWSClient(*cfg, sched, &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	readyCh := make(chan struct{})
+	client, _ := NewWSClient(*cfg, sched, &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {
+		if p == contracts.ProtocolTransportVerified {
+			select {
+			case <-readyCh:
+			default:
+				close(readyCh)
+			}
+		}
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	go client.ReconnectLoop(ctx, &mockFrameHandler{})
 
-	// Wait for connection to establish, then immediately lock
-	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-readyCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for connect")
+	}
 
 	// Artificially lock the writer mutex to simulate a stalled application write
 	// (If PingHandler used the same mutex, it would deadlock here)
 	client.writeMu.Lock()
+	close(clientLockedCh)
 	defer client.writeMu.Unlock()
 
 	select {

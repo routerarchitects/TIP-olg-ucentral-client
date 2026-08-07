@@ -63,14 +63,14 @@ const (
 )
 
 const (
-	defaultCompressionThresholdBytes = 2048
-	defaultMaxFrameSize              = 11 * 1024 * 1024
-	defaultConnectTimeout            = 10 * time.Second
-	defaultWriteTimeout              = 10 * time.Second
-	defaultPongTimeout               = 60 * time.Second
-	defaultPingInterval              = 30 * time.Second
-	defaultInitialBackoff            = 2 * time.Second
-	defaultMaxBackoff                = 60 * time.Second
+	defaultCompressionThresholdBytes     = 2048
+	defaultMaxFrameSize                  = 11 * 1024 * 1024
+	defaultConnectTimeout                = 10 * time.Second
+	defaultWriteTimeout                  = 10 * time.Second
+	defaultPongTimeout                   = 60 * time.Second
+	defaultPingInterval                  = 30 * time.Second
+	defaultInitialBackoff                = 2 * time.Second
+	defaultMaxBackoff                    = 60 * time.Second
 	defaultStableSessionThresholdSeconds = 60 * time.Second
 )
 

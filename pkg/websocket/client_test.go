@@ -1143,12 +1143,19 @@ func TestWSClient_HandshakeTimeout(t *testing.T) {
 
 func TestWSClient_PingIntervalGreaterThanPongTimeout(t *testing.T) {
 	upgrader := gws.Upgrader{}
+	var mu sync.Mutex
+	connectCount := 0
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			return
 		}
 		defer conn.Close()
+
+		mu.Lock()
+		connectCount++
+		mu.Unlock()
 
 		// Read handshake request
 		var req map[string]any
@@ -1209,5 +1216,10 @@ func TestWSClient_PingIntervalGreaterThanPongTimeout(t *testing.T) {
 	case <-time.After(4 * time.Second):
 		// Success! The connection survived past the 1s PongTimeout, proving
 		// the deadline includes the PingInterval.
+		mu.Lock()
+		if connectCount != 1 {
+			t.Errorf("expected exactly 1 connection, but got %d (socket died and reconnected!)", connectCount)
+		}
+		mu.Unlock()
 	}
 }

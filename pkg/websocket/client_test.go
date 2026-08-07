@@ -1140,3 +1140,74 @@ func TestWSClient_HandshakeTimeout(t *testing.T) {
 		t.Errorf("expected timeout around 1s, got %v", duration)
 	}
 }
+
+func TestWSClient_PingIntervalGreaterThanPongTimeout(t *testing.T) {
+	upgrader := gws.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		// Read handshake request
+		var req map[string]any
+		conn.ReadJSON(&req)
+
+		// Echo pings as pongs
+		conn.SetPingHandler(func(appData string) error {
+			return conn.WriteControl(gws.PongMessage, []byte(appData), time.Now().Add(time.Second))
+		})
+
+		// Continually read
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &config.CloudConfig{
+		URL:                 wsURL,
+		PingIntervalSeconds: 3,
+		PongTimeoutSeconds:  1,
+	}
+
+	readyCh := make(chan struct{})
+	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {
+		if p == contracts.ProtocolTransportVerified {
+			select {
+			case <-readyCh:
+			default:
+				close(readyCh)
+			}
+		}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- client.ReconnectLoop(ctx, &mockFrameHandler{})
+	}()
+
+	select {
+	case <-readyCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for connect")
+	}
+
+	// Wait 4 seconds. The PongTimeout is 1s, but because PingInterval is 3s,
+	// the actual read deadline should be 4s. If the reader loop times out before this,
+	// the test fails because the socket died.
+	select {
+	case err := <-errCh:
+		t.Fatalf("ReconnectLoop exited prematurely (likely due to read timeout): %v", err)
+	case <-time.After(4 * time.Second):
+		// Success! The connection survived past the 1s PongTimeout, proving
+		// the deadline includes the PingInterval.
+	}
+}

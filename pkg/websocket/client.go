@@ -407,13 +407,21 @@ func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler 
 		pongTimeout = time.Duration(c.config.PongTimeoutSeconds) * time.Second
 	}
 
-	conn.SetReadDeadline(time.Now().Add(pongTimeout))
+	pingInterval := defaultPingInterval
+	if c.config.PingIntervalSeconds > 0 {
+		pingInterval = time.Duration(c.config.PingIntervalSeconds) * time.Second
+	}
+
+	// The reader must wait long enough for the writer to send a Ping, PLUS the PongTimeout
+	readDeadlineDuration := pingInterval + pongTimeout
+
+	conn.SetReadDeadline(time.Now().Add(readDeadlineDuration))
 	conn.SetPongHandler(func(string) error {
-		conn.SetReadDeadline(time.Now().Add(pongTimeout))
+		conn.SetReadDeadline(time.Now().Add(readDeadlineDuration))
 		return nil
 	})
 	conn.SetPingHandler(func(appData string) error {
-		conn.SetReadDeadline(time.Now().Add(pongTimeout))
+		conn.SetReadDeadline(time.Now().Add(readDeadlineDuration))
 
 		err := conn.WriteControl(
 			gws.PongMessage,
@@ -489,7 +497,6 @@ func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler 
 			continue
 		}
 
-		// Precedence 3: Normal dispositions are evaluated only when err == nil
 		consecutiveErrors = 0
 
 		switch disp {

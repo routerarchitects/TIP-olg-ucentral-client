@@ -1313,4 +1313,3 @@ func TestWSClient_FrameFatalCloseConnection(t *testing.T) {
 		t.Errorf("expected at least 2 connections (initial + reconnect), got %d. Session failed to tear down and reconnect.", count)
 	}
 }
-

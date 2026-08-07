@@ -93,7 +93,7 @@ type WSClient struct {
 	scheduler     queues.OutboundScheduler
 	metaProvider  ConnectMetadataProvider
 	onStateChange StateChangeFunc
-	pendingMsgs   []queues.OutboundMessage // Retains dequeued messages across reconnects if write fails
+	pendingMsg    *queues.OutboundMessage // Retains dequeued message across reconnects if write fails
 
 	writeMu sync.Mutex
 }
@@ -575,22 +575,27 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 
 	// Spawn a background reader for the blocking PriorityQueue
 	go func() {
-		// First drain any pending messages retained from a previous failed session write
+		// First drain any pending message retained from a previous failed session write
 		c.mu.Lock()
-		pending := c.pendingMsgs
-		c.pendingMsgs = nil
+		var pending *queues.OutboundMessage
+		if c.pendingMsg != nil {
+			msg := *c.pendingMsg
+			pending = &msg
+			c.pendingMsg = nil
+		}
 		c.mu.Unlock()
 
-		for i, msg := range pending {
+		if pending != nil {
 			select {
 			case <-ctx.Done():
-				// Session dropped before we could even attempt to write it, put it back in pending
+				// Session dropped before we could even attempt to write it, put it back
 				c.mu.Lock()
-				// Append unhandled messages to the back (since any concurrent writer failures are older and at the front)
-				c.pendingMsgs = append(c.pendingMsgs, pending[i:]...)
+				if c.pendingMsg == nil {
+					c.pendingMsg = pending
+				}
 				c.mu.Unlock()
 				return
-			case msgCh <- nextResult{msg: msg, err: nil}:
+			case msgCh <- nextResult{msg: *pending, err: nil}:
 			}
 		}
 
@@ -602,7 +607,9 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 					if msg.Priority != queues.PriorityHighest {
 						// Session is shutting down, retain it for the next session
 						c.mu.Lock()
-						c.pendingMsgs = append(c.pendingMsgs, msg)
+						if c.pendingMsg == nil {
+							c.pendingMsg = &msg
+						}
 						c.mu.Unlock()
 					}
 					return
@@ -665,7 +672,9 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 				if msg.Priority != queues.PriorityHighest {
 					log.Printf("ws: retaining priority-%d message for retry after write failure", msg.Priority)
 					c.mu.Lock()
-					c.pendingMsgs = append(c.pendingMsgs, msg)
+					if c.pendingMsg == nil {
+						c.pendingMsg = &msg
+					}
 					c.mu.Unlock()
 				}
 				return fmt.Errorf("failed to write outbound message: %v", err)

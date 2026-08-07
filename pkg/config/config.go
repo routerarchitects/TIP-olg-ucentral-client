@@ -10,6 +10,12 @@ import (
 	"time"
 )
 
+const (
+	DefaultCompressionThresholdBytes = 2048
+	DefaultMaxFrameSizeBytes         = 11 * 1024 * 1024
+	DefaultMaxConsecutiveFrameErrors = 20
+)
+
 func checkFile(path, name string) error {
 	if path == "" {
 		return fmt.Errorf("%s is required", name)
@@ -122,14 +128,18 @@ func (c *CloudConfig) Validate() error {
 		return fmt.Errorf("cloud stable_session_threshold_seconds must be positive")
 	}
 	if c.CompressionThresholdBytes == 0 {
-		c.CompressionThresholdBytes = 2048
+		c.CompressionThresholdBytes = DefaultCompressionThresholdBytes
 	} else if c.CompressionThresholdBytes < 0 {
 		return fmt.Errorf("cloud compression_threshold_bytes must be positive")
 	}
-	if c.MaxFrameSizeBytes < 0 {
+	if c.MaxFrameSizeBytes == 0 {
+		c.MaxFrameSizeBytes = DefaultMaxFrameSizeBytes
+	} else if c.MaxFrameSizeBytes < 0 {
 		return fmt.Errorf("cloud max_frame_size_bytes must be zero or positive")
 	}
-	if c.MaxConsecutiveFrameErrors < 0 {
+	if c.MaxConsecutiveFrameErrors == 0 {
+		c.MaxConsecutiveFrameErrors = DefaultMaxConsecutiveFrameErrors
+	} else if c.MaxConsecutiveFrameErrors < 0 {
 		return fmt.Errorf("cloud max_consecutive_frame_errors must be zero or positive")
 	}
 	if err := c.TLS.Validate(); err != nil {

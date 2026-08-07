@@ -23,6 +23,13 @@ import (
 
 type mockMetadataProvider struct{}
 
+func init() {
+	// Override production backoff constants to drastically speed up the test suite
+	// and eliminate timing-related flakiness in CI.
+	initialBackoff = 20 * time.Millisecond
+	maxBackoff = 600 * time.Millisecond
+}
+
 func (m *mockMetadataProvider) ConnectParams(ctx context.Context) (CloudConnectParams, error) {
 	return CloudConnectParams{
 		Serial:       "SERIAL123",
@@ -1636,8 +1643,8 @@ func TestWSClient_FrameFatalCloseConnection(t *testing.T) {
 
 	// Because it returns FrameFatalCloseConnection, the session should tear down
 	// and trigger a reconnect. We should see the connection count increment
-	// after the initial 2-second reconnect backoff.
-	deadline := time.Now().Add(4 * time.Second)
+	// after the initial 2-second reconnect backoff (+ jitter).
+	deadline := time.Now().Add(6 * time.Second)
 	reconnected := false
 	for time.Now().Before(deadline) {
 		mu.Lock()

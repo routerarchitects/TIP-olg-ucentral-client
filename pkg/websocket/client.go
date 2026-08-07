@@ -75,9 +75,12 @@ const (
 	defaultWriteTimeout                  = 10 * time.Second
 	defaultPongTimeout                   = 60 * time.Second
 	defaultPingInterval                  = 30 * time.Second
-	defaultInitialBackoff                = 2 * time.Second
-	defaultMaxBackoff                    = 60 * time.Second
 	defaultStableSessionThresholdSeconds = 60 * time.Second
+)
+
+var (
+	initialBackoff = 2 * time.Second
+	maxBackoff     = 60 * time.Second
 )
 
 type WSClient struct {
@@ -142,12 +145,11 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 		return errors.New("ws: frame handler cannot be nil")
 	}
 
-	backoff := defaultInitialBackoff
-	maxBackoff := defaultMaxBackoff
+	backoff := initialBackoff
 
 	waitForRetry := func() bool {
 		jitter := time.Duration(rand.Float64() * float64(backoff))
-		jitteredBackoff := defaultInitialBackoff + jitter
+		jitteredBackoff := initialBackoff + jitter
 		if jitteredBackoff > maxBackoff {
 			jitteredBackoff = maxBackoff
 		}
@@ -320,7 +322,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 			threshold = defaultStableSessionThresholdSeconds
 		}
 		if time.Since(sessionStartTime) > threshold {
-			backoff = defaultInitialBackoff
+			backoff = initialBackoff
 			continue
 		}
 

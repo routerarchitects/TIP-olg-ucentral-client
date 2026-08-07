@@ -591,13 +591,15 @@ func TestWSClient_ReconnectThrottling(t *testing.T) {
 	d1 := connectTimes[1].Sub(connectTimes[0])
 	d2 := connectTimes[2].Sub(connectTimes[1])
 
-	// First wait should be ~2s (allow 1.5 - 3.0s)
-	if d1 < 1500*time.Millisecond || d1 > 3500*time.Millisecond {
-		t.Errorf("expected 2s backoff, got %v", d1)
+	// First wait is base=2s. The jitter logic uses defaultInitialBackoff (2s) + rand(0, base).
+	// So it should be between 2.0s and 4.0s (plus a tiny bit of test overhead).
+	if d1 < 1900*time.Millisecond || d1 > 4500*time.Millisecond {
+		t.Errorf("expected first jittered backoff between 2s and 4s, got %v", d1)
 	}
-	// Second wait should be ~4s (allow 3.5 - 5.5s)
-	if d2 < 3500*time.Millisecond || d2 > 5500*time.Millisecond {
-		t.Errorf("expected 4s backoff, got %v", d2)
+	// Second wait is base=4s. The jitter logic uses defaultInitialBackoff (2s) + rand(0, base).
+	// So it should be between 2.0s and 6.0s (plus a tiny bit of test overhead).
+	if d2 < 1900*time.Millisecond || d2 > 6500*time.Millisecond {
+		t.Errorf("expected second jittered backoff between 2s and 6s, got %v", d2)
 	}
 }
 

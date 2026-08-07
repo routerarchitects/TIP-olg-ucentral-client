@@ -84,12 +84,21 @@ type WSClient struct {
 	config        config.CloudConfig
 	scheduler     queues.OutboundScheduler
 	metaProvider  ConnectMetadataProvider
-	onStateChange func(cloud contracts.LinkState, protocol contracts.ProtocolState)
+	onStateChange StateChangeFunc
 
 	writeMu sync.Mutex
 }
 
-func NewWSClient(cfg config.CloudConfig, scheduler queues.OutboundScheduler, metaProvider ConnectMetadataProvider, onStateChange func(contracts.LinkState, contracts.ProtocolState)) (*WSClient, error) {
+// StateChangeFunc is a callback invoked synchronously on the networking path whenever
+// the connection or protocol state changes. 
+//
+// To prevent stalling the reconnect engine, implementations MUST return promptly
+// and MUST NOT perform blocking I/O operations. Heavier processing (such as
+// NATS publishing or persistence) should be enqueued and handled asynchronously
+// outside the transport layer.
+type StateChangeFunc func(cloud contracts.LinkState, protocol contracts.ProtocolState)
+
+func NewWSClient(cfg config.CloudConfig, scheduler queues.OutboundScheduler, metaProvider ConnectMetadataProvider, onStateChange StateChangeFunc) (*WSClient, error) {
 	if scheduler == nil {
 		return nil, errors.New("scheduler cannot be nil")
 	}

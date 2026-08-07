@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -61,7 +62,19 @@ const (
 	HandshakeRejected
 )
 
+const (
+	defaultCompressionThresholdBytes = 2048
+	defaultMaxFrameSize              = 11 * 1024 * 1024
+	defaultConnectTimeout            = 10 * time.Second
+	defaultWriteTimeout              = 10 * time.Second
+	defaultPongTimeout               = 60 * time.Second
+	defaultPingInterval              = 30 * time.Second
+	defaultInitialBackoff            = 2 * time.Second
+	defaultMaxBackoff                = 60 * time.Second
+)
+
 type WSClient struct {
+	running       atomic.Bool
 	mu            sync.Mutex
 	conn          *gws.Conn
 	generation    uint64
@@ -84,6 +97,12 @@ func NewWSClient(cfg config.CloudConfig, scheduler queues.OutboundScheduler, met
 	if onStateChange == nil {
 		onStateChange = func(contracts.LinkState, contracts.ProtocolState) {}
 	}
+
+	// Normalize runtime default for compression threshold
+	if cfg.CompressionThresholdBytes == 0 {
+		cfg.CompressionThresholdBytes = defaultCompressionThresholdBytes
+	}
+
 	return &WSClient{
 		config:        cfg,
 		scheduler:     scheduler,
@@ -92,13 +111,22 @@ func NewWSClient(cfg config.CloudConfig, scheduler queues.OutboundScheduler, met
 	}, nil
 }
 
+// ReconnectLoop manages the persistent WebSocket connection to the cloud.
+// This function takes ownership of the physical connection state.
+// It is designed for single-run ownership and MUST NOT be called concurrently 
+// by multiple goroutines.
 func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) error {
+	if !c.running.CompareAndSwap(false, true) {
+		return fmt.Errorf("ws: ReconnectLoop is already running")
+	}
+	defer c.running.Store(false)
+
 	if handler == nil {
 		return errors.New("ws: frame handler cannot be nil")
 	}
 
-	backoff := 2 * time.Second
-	maxBackoff := 60 * time.Second
+	backoff := defaultInitialBackoff
+	maxBackoff := defaultMaxBackoff
 
 	waitForRetry := func() bool {
 		select {
@@ -164,7 +192,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 			dialer.TLSClientConfig = tlsConfig
 		}
 
-		connectTimeout := 10 * time.Second
+		connectTimeout := defaultConnectTimeout
 		if c.config.ConnectTimeoutSeconds > 0 {
 			connectTimeout = time.Duration(c.config.ConnectTimeoutSeconds) * time.Second
 		}
@@ -181,7 +209,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 			continue
 		}
 
-		maxFrameSize := int64(11 * 1024 * 1024)
+		maxFrameSize := int64(defaultMaxFrameSize)
 		if c.config.MaxFrameSizeBytes > 0 {
 			maxFrameSize = int64(c.config.MaxFrameSizeBytes)
 		}
@@ -278,7 +306,7 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn) 
 		return HandshakeRetryableFailure
 	}
 
-	timeout := 10 * time.Second
+	timeout := defaultConnectTimeout
 	if c.config.ConnectTimeoutSeconds > 0 {
 		timeout = time.Duration(c.config.ConnectTimeoutSeconds) * time.Second
 	}
@@ -372,7 +400,7 @@ func (c *WSClient) Close() error {
 }
 
 func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler FrameHandler) error {
-	pongTimeout := 60 * time.Second
+	pongTimeout := defaultPongTimeout
 	if c.config.PongTimeoutSeconds > 0 {
 		pongTimeout = time.Duration(c.config.PongTimeoutSeconds) * time.Second
 	}
@@ -415,7 +443,7 @@ func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler 
 			return err
 		}
 
-		maxFrameSize := int64(11 * 1024 * 1024)
+		maxFrameSize := int64(defaultMaxFrameSize)
 		if c.config.MaxFrameSizeBytes > 0 {
 			maxFrameSize = int64(c.config.MaxFrameSizeBytes)
 		}
@@ -474,12 +502,12 @@ func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler 
 }
 
 func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
-	pingInterval := 30 * time.Second
+	pingInterval := defaultPingInterval
 	if c.config.PingIntervalSeconds > 0 {
 		pingInterval = time.Duration(c.config.PingIntervalSeconds) * time.Second
 	}
 
-	writeTimeout := 10 * time.Second
+	writeTimeout := defaultWriteTimeout
 	if c.config.WriteTimeoutSeconds > 0 {
 		writeTimeout = time.Duration(c.config.WriteTimeoutSeconds) * time.Second
 	}

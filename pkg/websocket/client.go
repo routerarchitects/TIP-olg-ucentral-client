@@ -113,7 +113,7 @@ func NewWSClient(cfg config.CloudConfig, scheduler queues.OutboundScheduler, met
 
 // ReconnectLoop manages the persistent WebSocket connection to the cloud.
 // This function takes ownership of the physical connection state.
-// It is designed for single-run ownership and MUST NOT be called concurrently 
+// It is designed for single-run ownership and MUST NOT be called concurrently
 // by multiple goroutines.
 func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) error {
 	if !c.running.CompareAndSwap(false, true) {

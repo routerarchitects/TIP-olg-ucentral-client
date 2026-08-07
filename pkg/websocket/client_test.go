@@ -837,13 +837,13 @@ func TestWSClient_StableSessionThreshold(t *testing.T) {
 	d1 := connectTimes[1].Sub(connectTimes[0])
 	d2 := connectTimes[2].Sub(connectTimes[1])
 
-	// Both delays should be ~3s (2s server sleep + 1s reset backoff)
-	// (allow 2.5 - 4.5s)
-	if d1 < 2500*time.Millisecond || d1 > 4500*time.Millisecond {
-		t.Errorf("expected ~3s total delay for first reconnect, got %v", d1)
+	// Both delays should be ~2s (2s server sleep + instant reconnect)
+	// (allow 1.5 - 3.5s)
+	if d1 < 1500*time.Millisecond || d1 > 3500*time.Millisecond {
+		t.Errorf("expected ~2s total delay for first reconnect, got %v", d1)
 	}
-	if d2 < 2500*time.Millisecond || d2 > 4500*time.Millisecond {
-		t.Errorf("expected ~3s total delay for second reconnect (backoff reset), got %v", d2)
+	if d2 < 1500*time.Millisecond || d2 > 3500*time.Millisecond {
+		t.Errorf("expected ~2s total delay for second reconnect (backoff reset), got %v", d2)
 	}
 }
 

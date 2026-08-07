@@ -586,8 +586,8 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 			case <-ctx.Done():
 				// Session dropped before we could even attempt to write it, put it back in pending
 				c.mu.Lock()
-				// Prepend unhandled messages back to pendingMsgs (they are oldest)
-				c.pendingMsgs = append(pending[i:], c.pendingMsgs...)
+				// Append unhandled messages to the back (since any concurrent writer failures are older and at the front)
+				c.pendingMsgs = append(c.pendingMsgs, pending[i:]...)
 				c.mu.Unlock()
 				return
 			case msgCh <- nextResult{msg: msg, err: nil}:

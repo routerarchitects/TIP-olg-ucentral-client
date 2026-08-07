@@ -2,6 +2,8 @@ package websocket
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"math/rand"
@@ -437,6 +439,131 @@ func TestWSClient_TLSVerification(t *testing.T) {
 	}
 }
 
+func TestWSClient_MTLSSuccess(t *testing.T) {
+	caFile, serverCert, serverKey, clientCert, clientKey := generateMTLSCerts(t)
+
+	caCertPool := x509.NewCertPool()
+	caBytes, _ := os.ReadFile(caFile)
+	caCertPool.AppendCertsFromPEM(caBytes)
+	sCert, _ := tls.LoadX509KeyPair(serverCert, serverKey)
+
+	upgrader := gws.Upgrader{}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, payload, _ := conn.ReadMessage()
+		var req map[string]any
+		json.Unmarshal(payload, &req)
+	}))
+
+	server.TLS = &tls.Config{
+		Certificates: []tls.Certificate{sCert},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    caCertPool,
+	}
+	server.StartTLS()
+	defer server.Close()
+
+	wsURL := "wss" + strings.TrimPrefix(server.URL, "https")
+	cfg := &config.CloudConfig{
+		URL: wsURL,
+		TLS: config.CloudTLSConfig{
+			CAFile:         caFile,
+			ClientCertFile: clientCert,
+			ClientKeyFile:  clientKey,
+			ServerName:     "127.0.0.1",
+		},
+	}
+
+	stateCh := make(chan string, 1)
+	onState := func(cloud contracts.LinkState, protocol contracts.ProtocolState) {
+		if protocol == contracts.ProtocolTransportVerified {
+			select {
+			case stateCh <- "success":
+			default:
+			}
+		}
+	}
+
+	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, onState)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go client.ReconnectLoop(ctx, &mockFrameHandler{})
+
+	select {
+	case <-stateCh:
+		// Passed!
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for mTLS success")
+	}
+}
+
+func TestWSClient_MTLSClientRejected(t *testing.T) {
+	caFile, serverCert, serverKey, _, _ := generateMTLSCerts(t)
+
+	caCertPool := x509.NewCertPool()
+	caBytes, _ := os.ReadFile(caFile)
+	caCertPool.AppendCertsFromPEM(caBytes)
+	sCert, _ := tls.LoadX509KeyPair(serverCert, serverKey)
+
+	upgrader := gws.Upgrader{}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+	}))
+
+	server.TLS = &tls.Config{
+		Certificates: []tls.Certificate{sCert},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    caCertPool,
+	}
+	server.StartTLS()
+	defer server.Close()
+
+	wsURL := "wss" + strings.TrimPrefix(server.URL, "https")
+	// Client config OMITS the client certificates!
+	cfg := &config.CloudConfig{
+		URL: wsURL,
+		TLS: config.CloudTLSConfig{
+			CAFile:     caFile,
+			ServerName: "127.0.0.1",
+		},
+	}
+
+	var mu sync.Mutex
+	var states []string
+	onState := func(cloud contracts.LinkState, protocol contracts.ProtocolState) {
+		mu.Lock()
+		defer mu.Unlock()
+		states = append(states, string(cloud)+"-"+string(protocol))
+	}
+
+	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, onState)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go client.ReconnectLoop(ctx, &mockFrameHandler{})
+
+	time.Sleep(1 * time.Second)
+
+	mu.Lock()
+	defer mu.Unlock()
+	
+	// Should only transition to LinkConnecting -> ProtocolUnknown, and never hit TransportVerified!
+	for _, s := range states {
+		if s == "connected-verifying" || s == "connected-transport_verified" {
+			t.Errorf("expected only connecting-unknown state since mTLS was rejected, got: %v", states)
+		}
+	}
+}
+
 func TestWSClient_PingPongHeartbeat(t *testing.T) {
 	pingVerified := make(chan bool, 1)
 	upgrader := gws.Upgrader{}
@@ -828,17 +955,36 @@ func TestWSClient_TLSInvalidCAFile(t *testing.T) {
 		},
 	}
 
-	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	stateCh := make(chan string, 10)
+	onState := func(cloud contracts.LinkState, protocol contracts.ProtocolState) {
+		select {
+		case stateCh <- string(cloud) + "-" + string(protocol):
+		default:
+		}
+	}
+
+	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, onState)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	err = client.ReconnectLoop(ctx, &mockFrameHandler{})
-	if err == nil {
-		t.Fatalf("expected error from ReconnectLoop, got nil")
+	go client.ReconnectLoop(ctx, &mockFrameHandler{})
+
+	// Wait to verify it gracefully catches the CA failure and retries
+	count := 0
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case s := <-stateCh:
+			if s == "connecting-unknown" {
+				count++
+				if count >= 2 {
+					return // Success! It gracefully caught the CA read error and applied backoff
+				}
+			}
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
-	if !strings.Contains(err.Error(), "failed to parse any valid certificates from CA file") {
-		t.Fatalf("expected parse error, got: %v", err)
-	}
+	t.Fatalf("expected client to retry and emit connecting-unknown multiple times due to bad CA file, got count %d", count)
 }
 
 func TestWSClient_StableSessionThreshold(t *testing.T) {

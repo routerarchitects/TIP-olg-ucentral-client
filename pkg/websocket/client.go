@@ -191,11 +191,19 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 			if hasCA {
 				caCert, err := os.ReadFile(c.config.TLS.CAFile)
 				if err != nil {
-					return fmt.Errorf("ws: fatal: failed to read CA file: %w", err)
+					log.Printf("ws: failed to read CA file: %v", err)
+					if !waitForRetry() {
+						return nil
+					}
+					continue
 				}
 				caCertPool := x509.NewCertPool()
 				if !caCertPool.AppendCertsFromPEM(caCert) {
-					return errors.New("ws: fatal: failed to parse any valid certificates from CA file")
+					log.Printf("ws: failed to parse any valid certificates from CA file")
+					if !waitForRetry() {
+						return nil
+					}
+					continue
 				}
 				tlsConfig.RootCAs = caCertPool
 			}
@@ -206,7 +214,11 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 				}
 				cert, err := tls.LoadX509KeyPair(c.config.TLS.ClientCertFile, c.config.TLS.ClientKeyFile)
 				if err != nil {
-					return fmt.Errorf("ws: fatal: failed to load client cert: %w", err)
+					log.Printf("ws: failed to load client cert: %v", err)
+					if !waitForRetry() {
+						return nil
+					}
+					continue
 				}
 				tlsConfig.Certificates = []tls.Certificate{cert}
 			}

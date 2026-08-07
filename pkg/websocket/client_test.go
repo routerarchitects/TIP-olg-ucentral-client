@@ -555,7 +555,7 @@ func TestWSClient_MTLSClientRejected(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	
+
 	// Should only transition to LinkConnecting -> ProtocolUnknown, and never hit TransportVerified!
 	for _, s := range states {
 		if s == "connected-verifying" || s == "connected-transport_verified" {

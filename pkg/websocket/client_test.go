@@ -621,15 +621,22 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 	}
 }
 
-func TestWSClient_StalePriority0(t *testing.T) {
-	msgReceived := make(chan string, 2)
+func TestWSClient_StalePriority0_Rollover(t *testing.T) {
+	msgReceived := make(chan string, 5)
 	upgrader := gws.Upgrader{}
+
+	var connToClose *gws.Conn
+	var connMu sync.Mutex
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+
+		connMu.Lock()
+		connToClose = conn
+		connMu.Unlock()
 
 		conn.SetPingHandler(func(appData string) error {
 			return conn.WriteControl(gws.PongMessage, []byte(appData), time.Now().Add(time.Second))
@@ -643,7 +650,6 @@ func TestWSClient_StalePriority0(t *testing.T) {
 		for {
 			_, payload, err := conn.ReadMessage()
 			if err != nil {
-				fmt.Printf("MOCK SERVER READ ERROR: %v\n", err)
 				return
 			}
 			msgReceived <- string(payload)
@@ -652,16 +658,16 @@ func TestWSClient_StalePriority0(t *testing.T) {
 	defer server.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	cfg := &config.CloudConfig{URL: wsURL}
+	cfg := &config.CloudConfig{
+		URL:                           wsURL,
+		StableSessionThresholdSeconds: 1, // ensure reconnect happens fast
+	}
 	scheduler := queues.NewPriorityScheduler(10, 10)
-	readyCh := make(chan struct{})
+	
+	readyCh := make(chan struct{}, 10)
 	client, _ := NewWSClient(*cfg, scheduler, &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {
 		if p == contracts.ProtocolTransportVerified {
-			select {
-			case <-readyCh:
-			default:
-				close(readyCh)
-			}
+			readyCh <- struct{}{}
 		}
 	})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -669,6 +675,7 @@ func TestWSClient_StalePriority0(t *testing.T) {
 
 	go client.ReconnectLoop(ctx, &mockFrameHandler{})
 
+	// Wait for Session N
 	select {
 	case <-readyCh:
 	case <-time.After(3 * time.Second):
@@ -676,50 +683,70 @@ func TestWSClient_StalePriority0(t *testing.T) {
 	}
 
 	client.mu.Lock()
-	activeSess := fmt.Sprintf("sess-%d", client.generation)
+	sessN := fmt.Sprintf("sess-%d", client.generation)
 	client.mu.Unlock()
 
-	// Push a stale P0 message
+	// Sever connection N
+	connMu.Lock()
+	connToClose.Close()
+	connMu.Unlock()
+
+	// Queue P0 for Session N (stale) while disconnected
 	scheduler.Push(queues.OutboundMessage{
-		SessionID: "sess-old",
+		SessionID: sessN,
 		Priority:  queues.PriorityHighest,
 		Payload:   []byte("stale-p0"),
 	})
 
-	// Push a valid P1 message
-	scheduler.Push(queues.OutboundMessage{
-		SessionID: "sess-old", // P1 ignores session ID filtering
-		Priority:  queues.PriorityHigh,
-		Payload:   []byte("valid-p1"),
-	})
+	// Wait for Session N+1 to connect
+	select {
+	case <-readyCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for reconnect")
+	}
 
-	// Push a valid P0 message
+	client.mu.Lock()
+	sessN1 := fmt.Sprintf("sess-%d", client.generation)
+	client.mu.Unlock()
+
+	if sessN == sessN1 {
+		t.Fatal("generation did not roll over")
+	}
+
+	// Queue P0 for Session N+1 (valid)
 	scheduler.Push(queues.OutboundMessage{
-		SessionID: activeSess,
+		SessionID: sessN1,
 		Priority:  queues.PriorityHighest,
 		Payload:   []byte("valid-p0"),
 	})
 
-	// We expect to only receive "valid-p0" then "valid-p1"
+	// Queue P1 message to ensure order (P1 doesn't filter on sess ID)
+	scheduler.Push(queues.OutboundMessage{
+		SessionID: sessN, // ignored
+		Priority:  queues.PriorityHigh,
+		Payload:   []byte("valid-p1"),
+	})
+
+	// We expect "valid-p0" then "valid-p1", and NEVER "stale-p0"
 	var received []string
 	for i := 0; i < 2; i++ {
 		select {
 		case msg := <-msgReceived:
 			received = append(received, msg)
-		case <-time.After(2 * time.Second):
+		case <-time.After(3 * time.Second):
 			t.Fatalf("timed out waiting for outbound messages")
 		}
 	}
 
-	if len(received) != 2 || received[0] != "valid-p0" || received[1] != "valid-p1" {
-		t.Errorf("expected exact message sequence [valid-p0, valid-p1], got %v", received)
+	if received[0] != "valid-p0" || received[1] != "valid-p1" {
+		t.Errorf("expected [valid-p0 valid-p1], got %v", received)
 	}
 
+	// Verify no stray messages trickle in
 	select {
 	case msg := <-msgReceived:
-		t.Errorf("received unexpected third message: %v", msg)
-	case <-time.After(50 * time.Millisecond):
-		// Success, no unexpected messages leaked
+		t.Fatalf("received unexpected message: %s", msg)
+	case <-time.After(500 * time.Millisecond):
 	}
 }
 

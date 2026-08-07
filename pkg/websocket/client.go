@@ -90,7 +90,7 @@ type WSClient struct {
 }
 
 // StateChangeFunc is a callback invoked synchronously on the networking path whenever
-// the connection or protocol state changes. 
+// the connection or protocol state changes.
 //
 // To prevent stalling the reconnect engine, implementations MUST return promptly
 // and MUST NOT perform blocking I/O operations. Heavier processing (such as

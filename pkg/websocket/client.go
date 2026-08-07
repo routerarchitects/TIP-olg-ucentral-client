@@ -93,7 +93,7 @@ type WSClient struct {
 	scheduler     queues.OutboundScheduler
 	metaProvider  ConnectMetadataProvider
 	onStateChange StateChangeFunc
-	pendingMsg    *queues.OutboundMessage // Retains dequeued message across reconnects if write fails
+	pendingMsgs   []queues.OutboundMessage // Retains dequeued messages across reconnects if write fails
 
 	writeMu sync.Mutex
 }
@@ -575,23 +575,23 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 
 	// Spawn a background reader for the blocking PriorityQueue
 	go func() {
-		// First check if there's a pending message retained from a previous failed session write
+		// First drain any pending messages retained from a previous failed session write
 		c.mu.Lock()
-		if c.pendingMsg != nil {
-			msg := *c.pendingMsg
-			c.pendingMsg = nil
-			c.mu.Unlock()
+		pending := c.pendingMsgs
+		c.pendingMsgs = nil
+		c.mu.Unlock()
+
+		for i, msg := range pending {
 			select {
 			case <-ctx.Done():
 				// Session dropped before we could even attempt to write it, put it back in pending
 				c.mu.Lock()
-				c.pendingMsg = &msg
+				// Prepend unhandled messages back to pendingMsgs (they are oldest)
+				c.pendingMsgs = append(pending[i:], c.pendingMsgs...)
 				c.mu.Unlock()
 				return
 			case msgCh <- nextResult{msg: msg, err: nil}:
 			}
-		} else {
-			c.mu.Unlock()
 		}
 
 		for {
@@ -602,7 +602,7 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 					if msg.Priority != queues.PriorityHighest {
 						// Session is shutting down, retain it for the next session
 						c.mu.Lock()
-						c.pendingMsg = &msg
+						c.pendingMsgs = append(c.pendingMsgs, msg)
 						c.mu.Unlock()
 					}
 					return
@@ -665,7 +665,7 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 				if msg.Priority != queues.PriorityHighest {
 					log.Printf("ws: retaining priority-%d message for retry after write failure", msg.Priority)
 					c.mu.Lock()
-					c.pendingMsg = &msg
+					c.pendingMsgs = append(c.pendingMsgs, msg)
 					c.mu.Unlock()
 				}
 				return fmt.Errorf("failed to write outbound message: %v", err)

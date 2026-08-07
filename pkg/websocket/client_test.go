@@ -333,6 +333,71 @@ func TestWSClient_11MBFrameLimit(t *testing.T) {
 	}
 }
 
+func TestWSClient_ZipBombDecompressionLimit(t *testing.T) {
+	upgrader := gws.Upgrader{
+		EnableCompression: true, // Crucial: negotiate permessage-deflate
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, payload, _ := conn.ReadMessage()
+		var req map[string]any
+		json.Unmarshal(payload, &req)
+		go func() { conn.ReadMessage() }()
+
+		time.Sleep(100 * time.Millisecond)
+
+		// Create a highly compressible 12MB payload (e.g. all zeros)
+		// With permessage-deflate, this will be tiny on the wire, but expand to 12MB
+		// triggering the read limit dynamically during decompression.
+		largePayload := make([]byte, 12*1024*1024)
+		conn.WriteMessage(gws.TextMessage, largePayload)
+		time.Sleep(1 * time.Second)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &config.CloudConfig{URL: wsURL}
+
+	var states []string
+	var mu sync.Mutex
+	stateCh := make(chan string, 10)
+
+	onState := func(cloud contracts.LinkState, protocol contracts.ProtocolState) {
+		mu.Lock()
+		defer mu.Unlock()
+		s := string(cloud) + "-" + string(protocol)
+		states = append(states, s)
+		stateCh <- s
+	}
+
+	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, onState)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go client.ReconnectLoop(ctx, &mockFrameHandler{})
+
+	// We expect: connecting-unknown -> connected-verifying -> connected-transport_verified -> (crash) -> connecting-unknown
+	crashObserved := false
+	for i := 0; i < 4; i++ {
+		select {
+		case s := <-stateCh:
+			if i == 3 && s == "connecting-unknown" {
+				crashObserved = true
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("timed out waiting for state transitions. Current states: %v", states)
+		}
+	}
+
+	if !crashObserved {
+		t.Errorf("expected socket to crash and return to connecting-unknown after decompressed 12MB frame. States: %v", states)
+	}
+}
+
 func TestWSClient_TLSVerification(t *testing.T) {
 	upgrader := gws.Upgrader{}
 	// NewTLSServer uses a self-signed certificate!

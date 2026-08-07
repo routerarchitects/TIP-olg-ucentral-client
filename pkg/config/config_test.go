@@ -246,7 +246,7 @@ func TestConfig_Validation(t *testing.T) {
 
 		cfg.Cloud.MaxFrameSizeBytes = 0
 		cfg.Cloud.MaxConsecutiveFrameErrors = 0
-		
+
 		if err := cfg.Validate(); err != nil {
 			t.Fatalf("Validation failed: %v", err)
 		}
@@ -267,7 +267,7 @@ func TestConfig_Validation(t *testing.T) {
 
 		cfg.Cloud.MaxFrameSizeBytes = 5000000
 		cfg.Cloud.MaxConsecutiveFrameErrors = 50
-		
+
 		if err := cfg.Validate(); err != nil {
 			t.Fatalf("Validation failed: %v", err)
 		}

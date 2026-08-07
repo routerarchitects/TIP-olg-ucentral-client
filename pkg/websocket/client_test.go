@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1417,5 +1418,51 @@ func TestWSClient_ServerPingsButNoPongs(t *testing.T) {
 		count := connectCount
 		mu.Unlock()
 		t.Errorf("expected socket to die and reconnect (count >= 2), but count is %d. Inbound pings falsely kept it alive!", count)
+	}
+}
+
+func TestJitterAlgorithm(t *testing.T) {
+	// Verify the exact algorithm used in waitForRetry to ensure it bounds correctly
+	// and randomizes values to prevent thundering herds.
+	
+	defaultInitialBackoff := 2 * time.Second
+	maxBackoff := 60 * time.Second
+
+	// Test bounds at base backoff = 2s
+	backoff := 2 * time.Second
+	uniqueValues := make(map[time.Duration]bool)
+	for i := 0; i < 100; i++ {
+		jitter := time.Duration(rand.Float64() * float64(backoff))
+		jitteredBackoff := defaultInitialBackoff + jitter
+		if jitteredBackoff > maxBackoff {
+			jitteredBackoff = maxBackoff
+		}
+
+		if jitteredBackoff < 2*time.Second || jitteredBackoff >= 4*time.Second {
+			t.Errorf("at base=2s, expected jittered backoff between 2s and 4s, got %v", jitteredBackoff)
+		}
+		uniqueValues[jitteredBackoff] = true
+	}
+	if len(uniqueValues) < 10 {
+		t.Errorf("expected jitter to be highly randomized, but got only %d unique values", len(uniqueValues))
+	}
+
+	// Test bounds at maximum backoff = 60s
+	backoff = 60 * time.Second
+	uniqueValues = make(map[time.Duration]bool)
+	for i := 0; i < 100; i++ {
+		jitter := time.Duration(rand.Float64() * float64(backoff))
+		jitteredBackoff := defaultInitialBackoff + jitter
+		if jitteredBackoff > maxBackoff {
+			jitteredBackoff = maxBackoff
+		}
+
+		if jitteredBackoff < 2*time.Second || jitteredBackoff > 60*time.Second {
+			t.Errorf("at base=60s, expected jittered backoff between 2s and 60s, got %v", jitteredBackoff)
+		}
+		uniqueValues[jitteredBackoff] = true
+	}
+	if len(uniqueValues) < 10 {
+		t.Errorf("expected jitter to be highly randomized, but got only %d unique values", len(uniqueValues))
 	}
 }

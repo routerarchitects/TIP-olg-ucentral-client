@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"os"
 	"strings"
 	"sync"
@@ -130,10 +131,16 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 	maxBackoff := defaultMaxBackoff
 
 	waitForRetry := func() bool {
+		jitter := time.Duration(rand.Float64() * float64(backoff))
+		jitteredBackoff := defaultInitialBackoff + jitter
+		if jitteredBackoff > maxBackoff {
+			jitteredBackoff = maxBackoff
+		}
+
 		select {
 		case <-ctx.Done():
 			return false
-		case <-time.After(backoff):
+		case <-time.After(jitteredBackoff):
 		}
 		backoff *= 2
 		if backoff > maxBackoff {

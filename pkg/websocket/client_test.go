@@ -1223,3 +1223,94 @@ func TestWSClient_PingIntervalGreaterThanPongTimeout(t *testing.T) {
 		mu.Unlock()
 	}
 }
+
+type fatalFrameHandler struct {
+	handled chan struct{}
+}
+
+func (h *fatalFrameHandler) HandleFrame(ctx context.Context, frame InboundFrame) (FrameDisposition, error) {
+	select {
+	case <-h.handled:
+	default:
+		close(h.handled)
+	}
+	return FrameFatalCloseConnection, nil
+}
+
+func TestWSClient_FrameFatalCloseConnection(t *testing.T) {
+	upgrader := gws.Upgrader{}
+	var mu sync.Mutex
+	connectCount := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		mu.Lock()
+		connectCount++
+		mu.Unlock()
+
+		// Read handshake request
+		var req map[string]any
+		conn.ReadJSON(&req)
+
+		// Send a dummy frame to trigger the handler
+		conn.WriteMessage(gws.TextMessage, []byte("dummy-frame"))
+
+		// Continually read to keep connection alive
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &config.CloudConfig{
+		URL: wsURL,
+	}
+
+	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	handler := &fatalFrameHandler{handled: make(chan struct{})}
+
+	go client.ReconnectLoop(ctx, handler)
+
+	// Wait for handler to receive the frame and trigger fatal disposition
+	select {
+	case <-handler.handled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for frame handler to execute")
+	}
+
+	// Because it returns FrameFatalCloseConnection, the session should tear down
+	// and trigger a reconnect. We should see the connection count increment
+	// after the initial 2-second reconnect backoff.
+	deadline := time.Now().Add(4 * time.Second)
+	reconnected := false
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		count := connectCount
+		mu.Unlock()
+		if count >= 2 {
+			reconnected = true
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	if !reconnected {
+		mu.Lock()
+		count := connectCount
+		mu.Unlock()
+		t.Errorf("expected at least 2 connections (initial + reconnect), got %d. Session failed to tear down and reconnect.", count)
+	}
+}
+

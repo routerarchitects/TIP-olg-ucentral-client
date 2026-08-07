@@ -1018,6 +1018,109 @@ func TestWSClient_TeardownOnReaderFailureAndWriterBlocked(t *testing.T) {
 	}
 }
 
+type blockedContextFrameHandler struct {
+	called chan struct{}
+	once   sync.Once
+}
+
+func (h *blockedContextFrameHandler) HandleFrame(ctx context.Context, frame InboundFrame) (FrameDisposition, error) {
+	h.once.Do(func() { close(h.called) })
+	// Block until context is canceled by the errgroup
+	<-ctx.Done()
+	return FrameAccepted, ctx.Err()
+}
+
+func TestWSClient_TeardownOnWriterFailureAndReaderBlocked(t *testing.T) {
+	var connToClose *gws.Conn
+	var connMu sync.Mutex
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := gws.Upgrader{}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+
+		connMu.Lock()
+		connToClose = conn
+		connMu.Unlock()
+
+		// Send a dummy frame immediately so the client's HandleFrame is invoked
+		conn.WriteMessage(gws.TextMessage, []byte(`{"jsonrpc":"2.0","method":"test"}`))
+
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	cfg := &config.CloudConfig{
+		URL:                           strings.Replace(server.URL, "http", "ws", 1),
+		ConnectTimeoutSeconds:         2,
+		PingIntervalSeconds:           1,
+		StableSessionThresholdSeconds: 1,
+	}
+
+	sched := &mockTestScheduler{
+		nextCalled:    make(chan struct{}, 1),
+		nextUnblocked: make(chan struct{}, 1),
+	}
+	meta := &mockMetadataProvider{}
+
+	client, _ := NewWSClient(*cfg, sched, meta, func(c contracts.LinkState, p contracts.ProtocolState) {})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	handler := &blockedContextFrameHandler{
+		called: make(chan struct{}),
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- client.ReconnectLoop(ctx, handler)
+	}()
+
+	// Wait for the handler to be called and block
+	select {
+	case <-handler.called:
+	case <-time.After(2 * time.Second):
+		t.Fatal("HandleFrame was never called")
+	}
+
+	// At this point, the reader is blocked inside HandleFrame.
+	// Force the writer side to fail by closing the server connection.
+	connMu.Lock()
+	if connToClose != nil {
+		connToClose.Close()
+	}
+	connMu.Unlock()
+
+	// The writer loop should notice the socket is closed when it sends the next ping
+	// (within 1 second). It will fail, cancel the gCtx, which unblocks HandleFrame,
+	// tearing down the session. ReconnectLoop will then retry and spin up a new session.
+	
+	// Wait for a new session generation to spin up (meaning the old one was torn down)
+	deadline := time.Now().Add(5 * time.Second)
+	reconnected := false
+	for time.Now().Before(deadline) {
+		client.mu.Lock()
+		gen := client.generation
+		client.mu.Unlock()
+		if gen > 1 {
+			reconnected = true
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	if !reconnected {
+		t.Fatal("session did not tear down and reconnect; reader was likely permanently blocked")
+	}
+}
+
 func TestWSClient_ConcurrentPingWhileBlocked(t *testing.T) {
 	upgrader := gws.Upgrader{}
 	pongReceived := make(chan struct{})

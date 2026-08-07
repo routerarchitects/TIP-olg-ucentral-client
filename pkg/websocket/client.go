@@ -51,6 +51,11 @@ const (
 )
 
 // FrameHandler represents the upstream component that processes incoming frames.
+//
+// HandleFrame is invoked synchronously by the WebSocket reader loop. To ensure
+// the session can be cleanly torn down on failure, implementations MUST promptly
+// return when the provided context is canceled and MUST propagate the context
+// to any blocking operations.
 type FrameHandler interface {
 	HandleFrame(ctx context.Context, frame InboundFrame) (FrameDisposition, error)
 }

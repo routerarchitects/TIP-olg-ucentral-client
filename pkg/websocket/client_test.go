@@ -229,8 +229,8 @@ func (m *mockWhitespaceSerialProvider) ConnectParams(ctx context.Context) (Cloud
 func TestWSClient_WhitespaceSerial(t *testing.T) {
 	upgrader := gws.Upgrader{}
 
-		assertCh := make(chan struct{})
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	assertCh := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			t.Fatal(err)
@@ -263,7 +263,7 @@ func TestWSClient_WhitespaceSerial(t *testing.T) {
 	defer cancel()
 
 	go client.ReconnectLoop(ctx, &mockFrameHandler{})
-	
+
 	select {
 	case <-assertCh:
 	case <-time.After(3 * time.Second):
@@ -475,7 +475,7 @@ func TestWSClient_StalePriority0(t *testing.T) {
 	defer cancel()
 
 	go client.ReconnectLoop(ctx, &mockFrameHandler{})
-	
+
 	select {
 	case <-readyCh:
 	case <-time.After(3 * time.Second):
@@ -703,7 +703,7 @@ func TestWSClient_ConfiguredWriteTimeout(t *testing.T) {
 	defer cancel()
 
 	go client.ReconnectLoop(ctx, &mockFrameHandler{})
-	
+
 	select {
 	case <-readyCh:
 	case <-time.After(3 * time.Second):
@@ -926,7 +926,7 @@ func TestWSClient_TeardownOnContextCancel(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for connect")
 	}
-	cancel()                           // Cancel the parent context
+	cancel() // Cancel the parent context
 
 	select {
 	case <-done:

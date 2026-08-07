@@ -538,8 +538,8 @@ TIP-olg-ucentral-client/
     // Protocol State Lifecycle:
     // Protocol state MUST be strictly scoped to a single Cloud session to prevent 
     // stale rejections from contaminating future reconnections. Note that `LinkConnected`
-    // for the Cloud link indicates ONLY that the WSS transport is open and the JSON-RPC
-    // frame has been written; it does NOT imply application-layer protocol acceptance.
+    // for the Cloud link indicates ONLY that the WSS transport is successfully established;
+    // it does NOT imply the JSON-RPC frame has been written or accepted.
     // 
     // 1. Cloud connection drops/disconnects:
     //    Cloud = Connecting, Protocol = ProtocolUnknown

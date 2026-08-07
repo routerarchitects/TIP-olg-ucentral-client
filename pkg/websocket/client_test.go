@@ -1424,7 +1424,7 @@ func TestWSClient_ServerPingsButNoPongs(t *testing.T) {
 func TestJitterAlgorithm(t *testing.T) {
 	// Verify the exact algorithm used in waitForRetry to ensure it bounds correctly
 	// and randomizes values to prevent thundering herds.
-	
+
 	defaultInitialBackoff := 2 * time.Second
 	maxBackoff := 60 * time.Second
 

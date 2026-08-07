@@ -1240,7 +1240,7 @@ The uCentral client must not register a NATS responder for `ucentral.v1.device.<
         *   `cloud.compression_threshold_bytes`: Default 2048; must be > 0
         *   `cloud.max_frame_size_bytes`: Default 11534336 (11MB); must be >= 0
         *   `cloud.max_consecutive_frame_errors`: Default 20; must be >= 0
-        *   `cloud.stable_session_threshold_seconds`: Default 300; must be > 0
+        *   `cloud.stable_session_threshold_seconds`: Default 60; must be > 0
         *   `nats.servers`: At least one entry; each must use `tls://`
         *   `nats.credentials_file`: Required and readable file path
         *   `nats.ca_file`: Required and readable file path

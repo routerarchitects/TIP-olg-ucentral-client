@@ -565,6 +565,7 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 		err error
 	}
 	msgCh := make(chan nextResult)
+	ackCh := make(chan struct{})
 
 	// Spawn a background reader for the blocking PriorityQueue
 	go func() {
@@ -590,6 +591,12 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 				return
 			case msgCh <- nextResult{msg: *pending, err: nil}:
 			}
+			
+			select {
+			case <-ctx.Done():
+				return
+			case <-ackCh:
+			}
 		}
 
 		for {
@@ -607,6 +614,12 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 					}
 					return
 				case msgCh <- nextResult{msg: msg, err: err}:
+				}
+				
+				select {
+				case <-ctx.Done():
+					return
+				case <-ackCh:
 				}
 			} else {
 				select {
@@ -642,9 +655,13 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 			}
 			msg := res.msg
 
-			// Discard Priority-0 OutboundMessages whose SessionID does not match the active connection
 			if msg.Priority == queues.PriorityHighest && msg.SessionID != sessID {
 				log.Printf("ws: discarding stale Priority-0 message from session %s", msg.SessionID)
+				select {
+				case ackCh <- struct{}{}:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 				continue
 			}
 
@@ -671,6 +688,12 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 					c.mu.Unlock()
 				}
 				return fmt.Errorf("failed to write outbound message: %v", err)
+			}
+			
+			select {
+			case ackCh <- struct{}{}:
+			case <-ctx.Done():
+				return ctx.Err()
 			}
 		}
 	}

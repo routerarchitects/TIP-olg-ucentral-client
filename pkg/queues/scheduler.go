@@ -32,6 +32,9 @@ type OutboundScheduler interface {
 	// Push transfers ownership only when it returns nil.
 	// On error, ownership remains with the caller.
 	Push(msg OutboundMessage) error
+
+	// Next blocks until a message is available or ctx is cancelled.
+	// Implementations must promptly return ctx.Err() after cancellation.
 	Next(ctx context.Context) (OutboundMessage, error)
 }
 

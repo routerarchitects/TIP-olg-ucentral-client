@@ -208,6 +208,8 @@ func TestConfig_Validation(t *testing.T) {
 		{"Invalid URL scheme", func(c *Config) { c.Cloud.URL = "ws://insecure" }},
 		{"Negative timeout", func(c *Config) { c.Cloud.ConnectTimeoutSeconds = -1 }},
 		{"Zero ping interval", func(c *Config) { c.Cloud.PingIntervalSeconds = 0 }},
+		{"Negative max frame size", func(c *Config) { c.Cloud.MaxFrameSizeBytes = -1 }},
+		{"Negative max consecutive errors", func(c *Config) { c.Cloud.MaxConsecutiveFrameErrors = -1 }},
 		{"Missing TLS CA", func(c *Config) { c.Cloud.TLS.CAFile = "/missing/ca.pem" }},
 		{"Directory TLS CA", func(c *Config) { c.Cloud.TLS.CAFile = tmpDir }},
 		{"Malformed NATS URL", func(c *Config) { c.NATS.Servers = []string{"tls://"} }},
@@ -234,4 +236,46 @@ func TestConfig_Validation(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("Applies defaults to zero", func(t *testing.T) {
+		cfg := validConfig
+		cfg.Cloud = validCloud
+		cfg.Cloud.TLS = validTLS
+		cfg.NATS = validNATS
+		cfg.Queues = validQueues
+
+		cfg.Cloud.MaxFrameSizeBytes = 0
+		cfg.Cloud.MaxConsecutiveFrameErrors = 0
+
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validation failed: %v", err)
+		}
+		if cfg.Cloud.MaxFrameSizeBytes != DefaultMaxFrameSizeBytes {
+			t.Errorf("Expected max frame size default %d, got %d", DefaultMaxFrameSizeBytes, cfg.Cloud.MaxFrameSizeBytes)
+		}
+		if cfg.Cloud.MaxConsecutiveFrameErrors != DefaultMaxConsecutiveFrameErrors {
+			t.Errorf("Expected max errors default %d, got %d", DefaultMaxConsecutiveFrameErrors, cfg.Cloud.MaxConsecutiveFrameErrors)
+		}
+	})
+
+	t.Run("Preserves explicit overrides", func(t *testing.T) {
+		cfg := validConfig
+		cfg.Cloud = validCloud
+		cfg.Cloud.TLS = validTLS
+		cfg.NATS = validNATS
+		cfg.Queues = validQueues
+
+		cfg.Cloud.MaxFrameSizeBytes = 5000000
+		cfg.Cloud.MaxConsecutiveFrameErrors = 50
+
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validation failed: %v", err)
+		}
+		if cfg.Cloud.MaxFrameSizeBytes != 5000000 {
+			t.Errorf("Expected preserved max frame size 5000000, got %d", cfg.Cloud.MaxFrameSizeBytes)
+		}
+		if cfg.Cloud.MaxConsecutiveFrameErrors != 50 {
+			t.Errorf("Expected preserved max errors 50, got %d", cfg.Cloud.MaxConsecutiveFrameErrors)
+		}
+	})
 }

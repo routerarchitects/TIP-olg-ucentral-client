@@ -482,7 +482,6 @@ TIP-olg-ucentral-client/
     	StateOperational     ConnectionState = "operational"
     	StateCloudDegraded   ConnectionState = "cloud_degraded"
     	StateNATSDegraded    ConnectionState = "nats_degraded"
-    	StateProtocolFailure ConnectionState = "protocol_failure"
     )
 
     type LinkState string
@@ -492,19 +491,9 @@ TIP-olg-ucentral-client/
     	LinkConnected  LinkState = "connected"
     )
 
-    type ProtocolState string
-
-    const (
-    	ProtocolUnknown   ProtocolState = "unknown"
-    	ProtocolVerifying ProtocolState = "verifying"
-    	ProtocolAccepted  ProtocolState = "accepted"
-    	ProtocolRejected  ProtocolState = "rejected"
-    )
-
     type ConnectionStatus struct {
     	Cloud       LinkState
     	NATS        LinkState
-    	Protocol    ProtocolState
     }
 
     // DeriveConnectionState evaluates the pure derived status from the independent loops.
@@ -512,38 +501,16 @@ TIP-olg-ucentral-client/
     // or if an architecturally impossible state combination is provided.
     //
     // Truth Table:
-    // | Cloud        | NATS         | Protocol          | Returns               |
-    // |--------------|--------------|-------------------|-----------------------|
-    // | Connecting   | Connecting   | Unknown/Verifying | StateConnecting       |
-    // | Connecting   | Connected    | Unknown/Verifying | StateCloudDegraded    |
-    // | Connected    | Connecting   | Accepted          | StateNATSDegraded     |
-    // | Connected    | Connected    | Accepted          | StateOperational      |
-    // | Connected    | Connecting   | Rejected          | StateProtocolFailure  |
-    // | Connected    | Connected    | Rejected          | StateProtocolFailure  |
-    // | Connecting   | (Any)        | Accepted/Rejected | error (Impossible)    |
-    // | Connected    | (Any)        | Unknown/Verifying | error (Impossible)    |
-    func DeriveConnectionState(cloud LinkState, nats LinkState, protocol ProtocolState) (ConnectionState, error)
+    // | Cloud        | NATS         | Returns               |
+    // |--------------|--------------|-----------------------|
+    // | Connecting   | Connecting   | StateConnecting       |
+    // | Connecting   | Connected    | StateCloudDegraded    |
+    // | Connected    | Connecting   | StateNATSDegraded     |
+    // | Connected    | Connected    | StateOperational      |
+    func DeriveConnectionState(cloud LinkState, nats LinkState) (ConnectionState, error)
 
     // Note on Impossible States:
-    // It is architecturally impossible for the Cloud link to be 'Connected' while the protocol
-    // is 'Unknown' or 'Verifying'. The Cloud LinkState MUST remain 'Connecting' while the WebSocket
-    // is open but the JSON-RPC negotiation is still verifying. It only transitions to 'Connected'
-    // AFTER a definitive JSON-RPC 'Accepted' or 'Rejected' response is received.
-
-    // Protocol State Lifecycle:
-    // Protocol state MUST be strictly scoped to a single Cloud session to prevent 
-    // stale rejections from contaminating future reconnections. Note that `LinkConnected`
-    // for the Cloud link indicates ONLY that the WSS transport is open and the JSON-RPC
-    // exchange has finished; it does NOT imply protocol acceptance.
-    // 
-    // 1. Cloud connection drops/disconnects:
-    //    Cloud = Connecting, Protocol = ProtocolUnknown
-    // 2. WSS connection opens, transmitting connect.capabilities:
-    //    Cloud = Connecting, Protocol = ProtocolVerifying
-    // 3. Cloud returns successful connect JSON-RPC response:
-    //    Cloud = Connected, Protocol = ProtocolAccepted
-    // 4. Cloud returns explicit fatal rejection response:
-    //    Cloud = Connected, Protocol = ProtocolRejected (DerivedStatus evaluates to ProtocolFailure)
+    // Cloud and NATS link states are evaluated together to produce a composite ConnectionState.
     ```
 
 ---
@@ -576,6 +543,8 @@ TIP-olg-ucentral-client/
         PongTimeoutSeconds            int            `json:"pong_timeout_seconds"`
         StableSessionThresholdSeconds int            `json:"stable_session_threshold_seconds"`
         CompressionThresholdBytes     int            `json:"compression_threshold_bytes"` // Defines compression threshold mapped to permessage-deflate behavior
+        MaxFrameSizeBytes             int            `json:"max_frame_size_bytes"`        // Maximum allowed size of an incoming frame (default 11MB)
+        MaxConsecutiveFrameErrors     int            `json:"max_consecutive_frame_errors"` // Default 20
         TLS                           CloudTLSConfig `json:"tls"`
     }
 
@@ -1092,10 +1061,10 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     	config        config.CloudConfig
     	scheduler     queues.OutboundScheduler
     	metaProvider  ConnectMetadataProvider
-    	onStateChange func(cloud contracts.LinkState, protocol contracts.ProtocolState)
+    	onStateChange func(cloud contracts.LinkState)
     }
 
-    func NewWSClient(cfg config.CloudConfig, scheduler queues.OutboundScheduler, metaProvider ConnectMetadataProvider, onStateChange func(contracts.LinkState, contracts.ProtocolState)) *WSClient
+    func NewWSClient(cfg config.CloudConfig, scheduler queues.OutboundScheduler, metaProvider ConnectMetadataProvider, onStateChange func(contracts.LinkState)) *WSClient
     
     // ReconnectLoop continuously dials the WSS transport (with strict TLS chain and hostname validation) 
     // and negotiates the JSON-RPC connect handshake.
@@ -1231,7 +1200,9 @@ The uCentral client must not register a NATS responder for `ucentral.v1.device.<
         *   `cloud.tls.client_cert_file`: Required and readable file path
         *   `cloud.tls.client_key_file`: Required and readable file path
         *   `cloud.compression_threshold_bytes`: Default 2048; must be > 0
-        *   `cloud.stable_session_threshold_seconds`: Default 300; must be > 0
+        *   `cloud.max_frame_size_bytes`: Default 11534336 (11MB); must be >= 0
+        *   `cloud.max_consecutive_frame_errors`: Default 20; must be >= 0
+        *   `cloud.stable_session_threshold_seconds`: Default 60; must be > 0
         *   `nats.servers`: At least one entry; each must use `tls://`
         *   `nats.credentials_file`: Required and readable file path
         *   `nats.ca_file`: Required and readable file path

@@ -203,11 +203,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 				}
 				caCertPool := x509.NewCertPool()
 				if !caCertPool.AppendCertsFromPEM(caCert) {
-					log.Printf("ws: failed to parse any valid certificates from CA file")
-					if !waitForRetry() {
-						return nil
-					}
-					continue
+					return errors.New("ws: fatal: failed to parse any valid certificates from CA file")
 				}
 				tlsConfig.RootCAs = caCertPool
 			}

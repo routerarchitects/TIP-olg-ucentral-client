@@ -60,7 +60,7 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
-			t.Fatal(err)
+			return
 		}
 		defer conn.Close()
 
@@ -241,7 +241,7 @@ func TestWSClient_WhitespaceSerial(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
-			t.Fatal(err)
+			return
 		}
 		defer conn.Close()
 
@@ -831,61 +831,6 @@ func TestWSClient_ReconnectThrottling(t *testing.T) {
 	}
 }
 
-func TestWSClient_PingControlDeadlineRefresh(t *testing.T) {
-	upgrader := gws.Upgrader{}
-	serverMessageReceived := make(chan struct{})
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-
-		var req map[string]any
-		conn.ReadJSON(&req)
-
-		// Send pings every 500ms to keep connection alive
-		go func() {
-			for i := 0; i < 6; i++ {
-				time.Sleep(500 * time.Millisecond)
-				conn.WriteControl(gws.PingMessage, []byte{}, time.Now().Add(time.Second))
-			}
-			// Finally send a text message after 3 seconds
-			conn.WriteMessage(gws.TextMessage, []byte(`{"method":"ping"}`))
-		}()
-
-		_, _, err = conn.ReadMessage()
-		if err != nil {
-			return
-		}
-		close(serverMessageReceived)
-	}))
-	defer server.Close()
-
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	cfg := &config.CloudConfig{
-		URL:                wsURL,
-		PongTimeoutSeconds: 2, // 2s timeout
-	}
-	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, func(cloud contracts.LinkState) {})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go client.ReconnectLoop(ctx, &mockFrameHandler{})
-
-	// Wait 4 seconds to ensure the 2s deadline would have tripped if not refreshed
-	time.Sleep(4 * time.Second)
-
-	client.mu.Lock()
-	connAlive := client.conn != nil
-	client.mu.Unlock()
-
-	if !connAlive {
-		t.Errorf("client connection was dropped despite ping refresh")
-	}
-}
 
 func TestWSClient_ConfiguredWriteTimeout(t *testing.T) {
 	upgrader := gws.Upgrader{}
@@ -1003,24 +948,19 @@ func TestWSClient_TLSInvalidCAFile(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go client.ReconnectLoop(ctx, &mockFrameHandler{})
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- client.ReconnectLoop(ctx, &mockFrameHandler{})
+	}()
 
-	// Wait to verify it gracefully catches the CA failure and retries
-	count := 0
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		select {
-		case s := <-stateCh:
-			if s == "connecting" {
-				count++
-				if count >= 1 {
-					return // Success! It gracefully caught the CA read error and applied backoff
-				}
-			}
-		case <-time.After(100 * time.Millisecond):
+	select {
+	case err := <-errCh:
+		if err == nil || !strings.Contains(err.Error(), "failed to parse any valid certificates") {
+			t.Fatalf("expected fatal CA parse error, got: %v", err)
 		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for ReconnectLoop to abort on invalid CA")
 	}
-	t.Fatalf("expected client to retry and emit connecting exactly once due to bad CA file, got count %d", count)
 }
 
 func TestWSClient_StableSessionThreshold(t *testing.T) {

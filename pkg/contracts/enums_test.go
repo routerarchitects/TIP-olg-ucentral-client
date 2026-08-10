@@ -9,50 +9,31 @@ func TestTC_CON_003_VersionVerificationFallbackAndProtocolState(t *testing.T) {
 		name      string
 		cloud     LinkState
 		nats      LinkState
-		protocol  ProtocolState
 		wantState ConnectionState
 		wantErr   bool
 	}{
-		{"Connecting/Connecting/Verifying", LinkConnecting, LinkConnecting, ProtocolVerifying, StateConnecting, false},
-		{"Connecting/Connected/Verifying", LinkConnecting, LinkConnected, ProtocolVerifying, StateCloudDegraded, false},
-		{"Connected/Connecting/TransportVerified", LinkConnected, LinkConnecting, ProtocolTransportVerified, StateNATSDegraded, false},
-		{"Connected/Connected/TransportVerified", LinkConnected, LinkConnected, ProtocolTransportVerified, StateOperational, false},
-		{"Connected/Connecting/Rejected", LinkConnected, LinkConnecting, ProtocolRejected, StateProtocolFailure, false},
-		{"Connected/Connected/Rejected", LinkConnected, LinkConnected, ProtocolRejected, StateProtocolFailure, false},
+		{"Connecting/Connecting", LinkConnecting, LinkConnecting, StateConnecting, false},
+		{"Connecting/Connected", LinkConnecting, LinkConnected, StateCloudDegraded, false},
+		{"Connected/Connecting", LinkConnected, LinkConnecting, StateNATSDegraded, false},
+		{"Connected/Connected", LinkConnected, LinkConnected, StateOperational, false},
 
-		{"Connected/Connecting/Verifying", LinkConnected, LinkConnecting, ProtocolVerifying, StateConnecting, false},
-		{"Connected/Connected/Verifying", LinkConnected, LinkConnected, ProtocolVerifying, StateCloudDegraded, false},
-
-		// Impossible combinations
-		{"Connected/Connecting/Unknown", LinkConnected, LinkConnecting, ProtocolUnknown, "", true},
-		{"Connecting with Protocol TransportVerified", LinkConnecting, LinkConnected, ProtocolTransportVerified, "", true},
-		{"Connecting with Protocol Rejected", LinkConnecting, LinkConnecting, ProtocolRejected, "", true},
 		{
 			name:     "Invalid cloud enum",
 			cloud:    LinkState("invalid"),
 			nats:     LinkConnected,
-			protocol: ProtocolTransportVerified,
 			wantErr:  true,
 		},
 		{
 			name:     "Invalid NATS enum",
 			cloud:    LinkConnected,
 			nats:     LinkState("invalid"),
-			protocol: ProtocolTransportVerified,
-			wantErr:  true,
-		},
-		{
-			name:     "Invalid protocol enum",
-			cloud:    LinkConnected,
-			nats:     LinkConnected,
-			protocol: ProtocolState("invalid"),
 			wantErr:  true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := DeriveConnectionState(tt.cloud, tt.nats, tt.protocol)
+			got, err := DeriveConnectionState(tt.cloud, tt.nats)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("DeriveConnectionState() error = %v, wantErr %v", err, tt.wantErr)
 				return

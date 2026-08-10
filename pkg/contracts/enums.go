@@ -124,7 +124,6 @@ const (
 	StateOperational     ConnectionState = "operational"
 	StateCloudDegraded   ConnectionState = "cloud_degraded"
 	StateNATSDegraded    ConnectionState = "nats_degraded"
-	StateProtocolFailure ConnectionState = "protocol_failure"
 )
 
 type LinkState string
@@ -134,44 +133,21 @@ const (
 	LinkConnected  LinkState = "connected"
 )
 
-type ProtocolState string
-
-const (
-	ProtocolUnknown   ProtocolState = "unknown"
-	ProtocolVerifying ProtocolState = "verifying"
-	// ProtocolTransportVerified indicates that the WebSocket transport
-	// connection is established and the initial handshake frame was sent.
-	// This state represents transport connectivity only and makes no
-	// assertion about higher-level uCentral application health.
-	ProtocolTransportVerified ProtocolState = "transport_verified"
-	ProtocolRejected          ProtocolState = "rejected"
-)
-
 type ConnectionStatus struct {
-	Cloud    LinkState
-	NATS     LinkState
-	Protocol ProtocolState
+	Cloud LinkState
+	NATS  LinkState
 }
 
 // DeriveConnectionState evaluates the pure derived status from the independent loops.
-func DeriveConnectionState(cloud LinkState, nats LinkState, protocol ProtocolState) (ConnectionState, error) {
+func DeriveConnectionState(cloud LinkState, nats LinkState) (ConnectionState, error) {
 	if cloud != LinkConnecting && cloud != LinkConnected {
 		return "", fmt.Errorf("invalid cloud state: %v", cloud)
 	}
 	if nats != LinkConnecting && nats != LinkConnected {
 		return "", fmt.Errorf("invalid nats state: %v", nats)
 	}
-	if protocol != ProtocolUnknown && protocol != ProtocolVerifying && protocol != ProtocolTransportVerified && protocol != ProtocolRejected {
-		return "", fmt.Errorf("invalid protocol state: %v", protocol)
-	}
 
-	if cloud == LinkConnecting && (protocol == ProtocolTransportVerified || protocol == ProtocolRejected) {
-		return "", fmt.Errorf("impossible state: cloud is %v, protocol is %v", cloud, protocol)
-	}
-	// Note: cloud == LinkConnected && protocol == ProtocolVerifying
-	// is a perfectly valid state! It happens during the normal handshake window after dialing.
-
-	if cloud == LinkConnecting || (cloud == LinkConnected && protocol == ProtocolVerifying) {
+	if cloud == LinkConnecting {
 		if nats == LinkConnecting {
 			return StateConnecting, nil
 		}
@@ -180,7 +156,7 @@ func DeriveConnectionState(cloud LinkState, nats LinkState, protocol ProtocolSta
 		}
 	}
 
-	if cloud == LinkConnected && protocol == ProtocolTransportVerified {
+	if cloud == LinkConnected {
 		if nats == LinkConnecting {
 			return StateNATSDegraded, nil
 		}
@@ -189,9 +165,5 @@ func DeriveConnectionState(cloud LinkState, nats LinkState, protocol ProtocolSta
 		}
 	}
 
-	if cloud == LinkConnected && protocol == ProtocolRejected {
-		return StateProtocolFailure, nil
-	}
-
-	return "", fmt.Errorf("unrecognized state combination: cloud=%v, nats=%v, protocol=%v", cloud, nats, protocol)
+	return "", fmt.Errorf("unrecognized state combination: cloud=%v, nats=%v", cloud, nats)
 }

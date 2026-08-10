@@ -99,13 +99,13 @@ type WSClient struct {
 }
 
 // StateChangeFunc is a callback invoked synchronously on the networking path whenever
-// the connection or protocol state changes.
+// the connection state changes.
 //
 // To prevent stalling the reconnect engine, implementations MUST return promptly
 // and MUST NOT perform blocking I/O operations. Heavier processing (such as
 // NATS publishing or persistence) should be enqueued and handled asynchronously
 // outside the transport layer.
-type StateChangeFunc func(cloud contracts.LinkState, protocol contracts.ProtocolState)
+type StateChangeFunc func(cloud contracts.LinkState)
 
 func NewWSClient(cfg config.CloudConfig, scheduler queues.OutboundScheduler, metaProvider ConnectMetadataProvider, onStateChange StateChangeFunc) (*WSClient, error) {
 	if scheduler == nil {
@@ -115,7 +115,7 @@ func NewWSClient(cfg config.CloudConfig, scheduler queues.OutboundScheduler, met
 		return nil, errors.New("metadata provider cannot be nil")
 	}
 	if onStateChange == nil {
-		onStateChange = func(contracts.LinkState, contracts.ProtocolState) {}
+		onStateChange = func(contracts.LinkState) {}
 	}
 
 	// Normalize runtime default for compression threshold
@@ -174,7 +174,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 		default:
 		}
 
-		c.onStateChange(contracts.LinkConnecting, contracts.ProtocolUnknown)
+		c.onStateChange(contracts.LinkConnecting)
 		log.Printf("ws: dialing %s", c.config.URL)
 
 		// Create dialer
@@ -239,7 +239,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 		cancelDial()
 		if err != nil {
 			log.Printf("ws: dial failed: %v", err)
-			c.onStateChange(contracts.LinkConnecting, contracts.ProtocolUnknown)
+			c.onStateChange(contracts.LinkConnecting)
 			if !waitForRetry() {
 				return nil
 			}
@@ -259,7 +259,6 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 		c.generation++
 		c.mu.Unlock()
 
-		c.onStateChange(contracts.LinkConnected, contracts.ProtocolVerifying)
 		log.Printf("ws: connected, performing handshake...")
 
 		sessionCtx, sessionCancel := context.WithCancel(ctx)
@@ -271,20 +270,19 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 		hsResult := c.performConnectHandshake(sessionCtx, conn)
 		if hsResult == HandshakeRejected {
 			log.Printf("ws: fatal: handshake rejected (e.g. invalid empty serial), aborting reconnect loop")
-			c.onStateChange(contracts.LinkConnected, contracts.ProtocolRejected)
 			c.Close()
 			return fmt.Errorf("ws: fatal: handshake rejected")
 		} else if hsResult == HandshakeRetryableFailure {
 			log.Printf("ws: handshake failed, closing connection and retrying")
 			c.Close()
-			c.onStateChange(contracts.LinkConnecting, contracts.ProtocolUnknown)
+			c.onStateChange(contracts.LinkConnecting)
 			if !waitForRetry() {
 				return nil
 			}
 			continue
 		}
 
-		c.onStateChange(contracts.LinkConnected, contracts.ProtocolTransportVerified)
+		c.onStateChange(contracts.LinkConnected)
 		log.Printf("ws: session %s active, connected and verified", sessionID)
 		sessionStartTime := time.Now()
 
@@ -313,7 +311,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 
 		err = g.Wait()
 		sessionCancel()
-		c.onStateChange(contracts.LinkConnecting, contracts.ProtocolUnknown)
+		c.onStateChange(contracts.LinkConnecting)
 		log.Printf("ws: session %s ended: %v", sessionID, err)
 
 		// Only reset backoff if the session was stable

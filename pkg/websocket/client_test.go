@@ -135,11 +135,11 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 	var mu sync.Mutex
 	stateReached := make(chan struct{})
 
-	onState := func(cloud contracts.LinkState, protocol contracts.ProtocolState) {
+	onState := func(cloud contracts.LinkState) {
 		mu.Lock()
 		defer mu.Unlock()
-		states = append(states, string(cloud)+"-"+string(protocol))
-		if len(states) == 3 {
+		states = append(states, string(cloud))
+		if len(states) == 2 {
 			close(stateReached)
 		}
 	}
@@ -184,18 +184,16 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 	defer mu.Unlock()
 
 	// Validate the exact state machine transitions
-	if len(states) < 3 {
+	if len(states) < 2 {
 		t.Fatalf("expected at least 3 state transitions, got %v", states)
 	}
-	if states[0] != "connecting-unknown" {
+	if states[0] != "connecting" {
 		t.Errorf("expected connecting-unknown, got %s", states[0])
 	}
-	if states[1] != "connected-verifying" {
+	if states[1] != "connected" {
 		t.Errorf("expected connected-verifying, got %s", states[1])
 	}
-	if states[2] != "connected-transport_verified" {
-		t.Errorf("expected connected-transport_verified, got %s", states[2])
-	}
+	
 }
 
 type mockEmptySerialProvider struct{}
@@ -216,7 +214,7 @@ func TestWSClient_EmptyLocalSerial(t *testing.T) {
 	}
 
 	sched := queues.NewPriorityScheduler(10, 10)
-	client, _ := NewWSClient(*cfg, sched, &mockEmptySerialProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	client, _ := NewWSClient(*cfg, sched, &mockEmptySerialProvider{}, func(cloud contracts.LinkState) {})
 
 	res := client.performConnectHandshake(context.Background(), &gws.Conn{})
 
@@ -267,7 +265,7 @@ func TestWSClient_WhitespaceSerial(t *testing.T) {
 	cfg := &config.CloudConfig{URL: wsURL, PingIntervalSeconds: 1, PongTimeoutSeconds: 5}
 	sched := queues.NewPriorityScheduler(10, 10)
 
-	client, _ := NewWSClient(*cfg, sched, &mockWhitespaceSerialProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	client, _ := NewWSClient(*cfg, sched, &mockWhitespaceSerialProvider{}, func(cloud contracts.LinkState) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -310,10 +308,10 @@ func TestWSClient_11MBFrameLimit(t *testing.T) {
 	var mu sync.Mutex
 	stateCh := make(chan string, 10)
 
-	onState := func(cloud contracts.LinkState, protocol contracts.ProtocolState) {
+	onState := func(cloud contracts.LinkState) {
 		mu.Lock()
 		defer mu.Unlock()
-		s := string(cloud) + "-" + string(protocol)
+		s := string(cloud)
 		states = append(states, s)
 		stateCh <- s
 	}
@@ -329,7 +327,7 @@ func TestWSClient_11MBFrameLimit(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		select {
 		case s := <-stateCh:
-			if i == 3 && s == "connecting-unknown" {
+			if i == 3 && s == "connecting" {
 				crashObserved = true
 			}
 		case <-time.After(3 * time.Second):
@@ -375,10 +373,10 @@ func TestWSClient_ZipBombDecompressionLimit(t *testing.T) {
 	var mu sync.Mutex
 	stateCh := make(chan string, 10)
 
-	onState := func(cloud contracts.LinkState, protocol contracts.ProtocolState) {
+	onState := func(cloud contracts.LinkState) {
 		mu.Lock()
 		defer mu.Unlock()
-		s := string(cloud) + "-" + string(protocol)
+		s := string(cloud)
 		states = append(states, s)
 		stateCh <- s
 	}
@@ -394,7 +392,7 @@ func TestWSClient_ZipBombDecompressionLimit(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		select {
 		case s := <-stateCh:
-			if i == 3 && s == "connecting-unknown" {
+			if i == 3 && s == "connecting" {
 				crashObserved = true
 			}
 		case <-time.After(3 * time.Second):
@@ -423,10 +421,10 @@ func TestWSClient_TLSVerification(t *testing.T) {
 
 	var mu sync.Mutex
 	var states []string
-	onState := func(cloud contracts.LinkState, protocol contracts.ProtocolState) {
+	onState := func(cloud contracts.LinkState) {
 		mu.Lock()
 		defer mu.Unlock()
-		states = append(states, string(cloud)+"-"+string(protocol))
+		states = append(states, string(cloud))
 	}
 
 	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, onState)
@@ -440,7 +438,7 @@ func TestWSClient_TLSVerification(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	for _, s := range states {
-		if s == "connected-verifying" {
+		if s == "connected" {
 			t.Errorf("client successfully dialed a self-signed TLS server! Expected strict rejection.")
 		}
 	}
@@ -486,8 +484,8 @@ func TestWSClient_MTLSSuccess(t *testing.T) {
 	}
 
 	stateCh := make(chan string, 1)
-	onState := func(cloud contracts.LinkState, protocol contracts.ProtocolState) {
-		if protocol == contracts.ProtocolTransportVerified {
+	onState := func(cloud contracts.LinkState) {
+		if cloud == contracts.LinkConnected {
 			select {
 			case stateCh <- "success":
 			default:
@@ -546,10 +544,10 @@ func TestWSClient_MTLSClientRejected(t *testing.T) {
 
 	var mu sync.Mutex
 	var states []string
-	onState := func(cloud contracts.LinkState, protocol contracts.ProtocolState) {
+	onState := func(cloud contracts.LinkState) {
 		mu.Lock()
 		defer mu.Unlock()
-		states = append(states, string(cloud)+"-"+string(protocol))
+		states = append(states, string(cloud))
 	}
 
 	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, onState)
@@ -565,7 +563,7 @@ func TestWSClient_MTLSClientRejected(t *testing.T) {
 
 	// Should only transition to LinkConnecting -> ProtocolUnknown, and never hit TransportVerified!
 	for _, s := range states {
-		if s == "connected-verifying" || s == "connected-transport_verified" {
+		if s == "connected" {
 			t.Errorf("expected only connecting-unknown state since mTLS was rejected, got: %v", states)
 		}
 	}
@@ -615,7 +613,7 @@ func TestWSClient_PingPongHeartbeat(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
 	cfg := &config.CloudConfig{URL: wsURL, PingIntervalSeconds: 1, PongTimeoutSeconds: 5}
-	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(10, 10), &mockMetadataProvider{}, func(cloud contracts.LinkState) {})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -672,8 +670,8 @@ func TestWSClient_StalePriority0_Rollover(t *testing.T) {
 	scheduler := queues.NewPriorityScheduler(10, 10)
 
 	readyCh := make(chan struct{}, 10)
-	client, _ := NewWSClient(*cfg, scheduler, &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {
-		if p == contracts.ProtocolTransportVerified {
+	client, _ := NewWSClient(*cfg, scheduler, &mockMetadataProvider{}, func(cloud contracts.LinkState) {
+		if cloud == contracts.LinkConnected {
 			readyCh <- struct{}{}
 		}
 	})
@@ -791,7 +789,7 @@ func TestWSClient_ReconnectThrottling(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
 	cfg := &config.CloudConfig{URL: wsURL}
-	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, func(cloud contracts.LinkState) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -870,7 +868,7 @@ func TestWSClient_PingControlDeadlineRefresh(t *testing.T) {
 		URL:                wsURL,
 		PongTimeoutSeconds: 2, // 2s timeout
 	}
-	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, func(cloud contracts.LinkState) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -922,8 +920,8 @@ func TestWSClient_ConfiguredWriteTimeout(t *testing.T) {
 	}
 	sched := queues.NewPriorityScheduler(10, 10)
 	readyCh := make(chan struct{})
-	client, _ := NewWSClient(*cfg, sched, &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {
-		if p == contracts.ProtocolTransportVerified {
+	client, _ := NewWSClient(*cfg, sched, &mockMetadataProvider{}, func(cloud contracts.LinkState) {
+		if cloud == contracts.LinkConnected {
 			select {
 			case <-readyCh:
 			default:
@@ -994,9 +992,9 @@ func TestWSClient_TLSInvalidCAFile(t *testing.T) {
 	}
 
 	stateCh := make(chan string, 10)
-	onState := func(cloud contracts.LinkState, protocol contracts.ProtocolState) {
+	onState := func(cloud contracts.LinkState) {
 		select {
-		case stateCh <- string(cloud) + "-" + string(protocol):
+		case stateCh <- string(cloud):
 		default:
 		}
 	}
@@ -1013,7 +1011,7 @@ func TestWSClient_TLSInvalidCAFile(t *testing.T) {
 	for time.Now().Before(deadline) {
 		select {
 		case s := <-stateCh:
-			if s == "connecting-unknown" {
+			if s == "connecting" {
 				count++
 				if count >= 2 {
 					return // Success! It gracefully caught the CA read error and applied backoff
@@ -1063,7 +1061,7 @@ func TestWSClient_StableSessionThreshold(t *testing.T) {
 		URL:                           wsURL,
 		StableSessionThresholdSeconds: 1,
 	}
-	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, func(cloud contracts.LinkState) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1153,8 +1151,8 @@ func TestWSClient_TeardownOnContextCancel(t *testing.T) {
 	meta := &mockMetadataProvider{}
 
 	readyCh := make(chan struct{})
-	client, _ := NewWSClient(*cfg, sched, meta, func(c contracts.LinkState, p contracts.ProtocolState) {
-		if p == contracts.ProtocolTransportVerified {
+	client, _ := NewWSClient(*cfg, sched, meta, func(cloud contracts.LinkState) {
+		if cloud == contracts.LinkConnected {
 			select {
 			case <-readyCh:
 			default:
@@ -1227,7 +1225,7 @@ func TestWSClient_TeardownOnReaderFailureAndWriterBlocked(t *testing.T) {
 	}
 	meta := &mockMetadataProvider{}
 
-	client, _ := NewWSClient(*cfg, sched, meta, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	client, _ := NewWSClient(*cfg, sched, meta, func(cloud contracts.LinkState) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1318,7 +1316,7 @@ func TestWSClient_TeardownOnWriterFailureAndReaderBlocked(t *testing.T) {
 	}
 	meta := &mockMetadataProvider{}
 
-	client, _ := NewWSClient(*cfg, sched, meta, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	client, _ := NewWSClient(*cfg, sched, meta, func(cloud contracts.LinkState) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1413,8 +1411,8 @@ func TestWSClient_ConcurrentPingWhileBlocked(t *testing.T) {
 	sched := queues.NewPriorityScheduler(1, 1)
 
 	readyCh := make(chan struct{})
-	client, _ := NewWSClient(*cfg, sched, &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {
-		if p == contracts.ProtocolTransportVerified {
+	client, _ := NewWSClient(*cfg, sched, &mockMetadataProvider{}, func(cloud contracts.LinkState) {
+		if cloud == contracts.LinkConnected {
 			select {
 			case <-readyCh:
 			default:
@@ -1472,7 +1470,7 @@ func TestWSClient_HandshakeTimeout(t *testing.T) {
 		ConnectTimeoutSeconds: 1, // 1 second timeout
 	}
 
-	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &blockingMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &blockingMetadataProvider{}, func(cloud contracts.LinkState) {})
 
 	ctx := context.Background()
 
@@ -1538,8 +1536,8 @@ func TestWSClient_PingIntervalGreaterThanPongTimeout(t *testing.T) {
 	}
 
 	readyCh := make(chan struct{})
-	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {
-		if p == contracts.ProtocolTransportVerified {
+	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, func(cloud contracts.LinkState) {
+		if cloud == contracts.LinkConnected {
 			select {
 			case <-readyCh:
 			default:
@@ -1629,7 +1627,7 @@ func TestWSClient_FrameFatalCloseConnection(t *testing.T) {
 		URL: wsURL,
 	}
 
-	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, func(cloud contracts.LinkState) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1727,8 +1725,8 @@ func TestWSClient_ServerPingsButNoPongs(t *testing.T) {
 	}
 
 	readyCh := make(chan struct{})
-	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {
-		if p == contracts.ProtocolTransportVerified {
+	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &mockMetadataProvider{}, func(cloud contracts.LinkState) {
+		if cloud == contracts.LinkConnected {
 			select {
 			case <-readyCh:
 			default:
@@ -1878,7 +1876,7 @@ func TestWSClient_NullCapabilities(t *testing.T) {
 		URL: wsURL,
 	}
 
-	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &nullMetadataProvider{}, func(c contracts.LinkState, p contracts.ProtocolState) {})
+	client, _ := NewWSClient(*cfg, queues.NewPriorityScheduler(1, 1), &nullMetadataProvider{}, func(cloud contracts.LinkState) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

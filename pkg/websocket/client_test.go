@@ -831,7 +831,6 @@ func TestWSClient_ReconnectThrottling(t *testing.T) {
 	}
 }
 
-
 func TestWSClient_ConfiguredWriteTimeout(t *testing.T) {
 	upgrader := gws.Upgrader{}
 

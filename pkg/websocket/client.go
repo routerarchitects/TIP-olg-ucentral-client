@@ -591,7 +591,7 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 				return
 			case msgCh <- nextResult{msg: *pending, err: nil}:
 			}
-			
+
 			select {
 			case <-ctx.Done():
 				return
@@ -615,7 +615,7 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 					return
 				case msgCh <- nextResult{msg: msg, err: err}:
 				}
-				
+
 				select {
 				case <-ctx.Done():
 					return
@@ -689,7 +689,7 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 				}
 				return fmt.Errorf("failed to write outbound message: %v", err)
 			}
-			
+
 			select {
 			case ackCh <- struct{}{}:
 			case <-ctx.Done():

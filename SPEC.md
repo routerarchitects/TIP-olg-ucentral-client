@@ -482,7 +482,6 @@ TIP-olg-ucentral-client/
     	StateOperational     ConnectionState = "operational"
     	StateCloudDegraded   ConnectionState = "cloud_degraded"
     	StateNATSDegraded    ConnectionState = "nats_degraded"
-    	StateProtocolFailure ConnectionState = "protocol_failure"
     )
 
     type LinkState string
@@ -492,19 +491,9 @@ TIP-olg-ucentral-client/
     	LinkConnected  LinkState = "connected"
     )
 
-    type ProtocolState string
-
-    const (
-    	ProtocolUnknown   ProtocolState = "unknown"
-    	ProtocolVerifying ProtocolState = "verifying"
-    	ProtocolTransportVerified  ProtocolState = "transport_verified"
-    	ProtocolRejected  ProtocolState = "rejected"
-    )
-
     type ConnectionStatus struct {
     	Cloud       LinkState
     	NATS        LinkState
-    	Protocol    ProtocolState
     }
 
     // DeriveConnectionState evaluates the pure derived status from the independent loops.
@@ -512,43 +501,19 @@ TIP-olg-ucentral-client/
     // or if an architecturally impossible state combination is provided.
     //
     // Truth Table:
-    // | Cloud        | NATS         | Protocol          | Returns               |
+    // | Cloud        | NATS         | Returns               |
     // |--------------|--------------|-------------------|-----------------------|
     // | Connecting   | Connecting   | Unknown/Verifying | StateConnecting       |
     // | Connecting   | Connected    | Unknown/Verifying | StateCloudDegraded    |
     // | Connected    | Connecting   | Verifying         | StateConnecting       |
     // | Connected    | Connecting   | Accepted          | StateNATSDegraded     |
     // | Connected    | Connected    | Accepted          | StateOperational      |
-    // | Connected    | Connecting   | Rejected          | StateProtocolFailure  |
-    // | Connected    | Connected    | Rejected          | StateProtocolFailure  |
     // | Connecting   | (Any)        | Accepted/Rejected | error (Impossible)    |
     // | Connected    | (Any)        | Unknown           | error (Impossible)    |
-    func DeriveConnectionState(cloud LinkState, nats LinkState, protocol ProtocolState) (ConnectionState, error)
+    func DeriveConnectionState(cloud LinkState, nats LinkState) (ConnectionState, error)
 
     // Note on Impossible States:
-    // It is architecturally impossible for the Cloud link to be 'Connected' while the protocol
-    // is 'Unknown'. The Cloud LinkState transitions to 'Connected' as soon as the physical 
-    // WebSocket is dialed successfully, allowing the ProtocolState to briefly transition through 'Verifying' 
-    // before settling into 'ProtocolTransportVerified' once the connect notification is written.
-
-    // ProtocolUnknown implies the Cloud connection is severed. ProtocolVerifying implies the Cloud socket
-    // is open but the JSON-RPC handshake frame is actively being transmitted. It transitions to ProtocolTransportVerified
-    // immediately AFTER the JSON-RPC connect notification is successfully written to the socket.
-    
-    // Protocol State Lifecycle:
-    // Protocol state MUST be strictly scoped to a single Cloud session to prevent 
-    // stale rejections from contaminating future reconnections. Note that `LinkConnected`
-    // for the Cloud link indicates ONLY that the WSS transport is successfully established;
-    // it does NOT imply the JSON-RPC frame has been written or accepted.
-    // 
-    // 1. Cloud connection drops/disconnects:
-    //    Cloud = Connecting, Protocol = ProtocolUnknown
-    // 2. WSS connection opens, transmitting connect.capabilities:
-    //    Cloud = Connected, Protocol = ProtocolVerifying
-    // 3. Client successfully transmits connect JSON-RPC notification:
-    //    Cloud = Connected, Protocol = ProtocolTransportVerified
-    // 4. Handshake fails locally (e.g., invalid empty serial):
-    //    Cloud = Connected, Protocol = ProtocolRejected (DerivedStatus evaluates to ProtocolFailure)
+    // Cloud and NATS link states are evaluated together to produce a composite ConnectionState.
     ```
 
 ---
@@ -1099,10 +1064,10 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     	config        config.CloudConfig
     	scheduler     queues.OutboundScheduler
     	metaProvider  ConnectMetadataProvider
-    	onStateChange func(cloud contracts.LinkState, protocol contracts.ProtocolState)
+    	onStateChange func(cloud contracts.LinkState)
     }
 
-    func NewWSClient(cfg config.CloudConfig, scheduler queues.OutboundScheduler, metaProvider ConnectMetadataProvider, onStateChange func(contracts.LinkState, contracts.ProtocolState)) *WSClient
+    func NewWSClient(cfg config.CloudConfig, scheduler queues.OutboundScheduler, metaProvider ConnectMetadataProvider, onStateChange func(contracts.LinkState)) *WSClient
     
     // ReconnectLoop continuously dials the WSS transport (with strict TLS chain and hostname validation) 
     // and negotiates the JSON-RPC connect handshake.

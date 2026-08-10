@@ -147,6 +147,8 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 
 	backoff := initialBackoff
 
+	c.onStateChange(contracts.LinkConnecting)
+
 	waitForRetry := func() bool {
 		jitter := time.Duration(rand.Float64() * float64(backoff))
 		jitteredBackoff := initialBackoff + jitter
@@ -174,7 +176,6 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 		default:
 		}
 
-		c.onStateChange(contracts.LinkConnecting)
 		log.Printf("ws: dialing %s", c.config.URL)
 
 		// Create dialer
@@ -239,7 +240,6 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 		cancelDial()
 		if err != nil {
 			log.Printf("ws: dial failed: %v", err)
-			c.onStateChange(contracts.LinkConnecting)
 			if !waitForRetry() {
 				return nil
 			}
@@ -275,7 +275,6 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 		} else if hsResult == HandshakeRetryableFailure {
 			log.Printf("ws: handshake failed, closing connection and retrying")
 			c.Close()
-			c.onStateChange(contracts.LinkConnecting)
 			if !waitForRetry() {
 				return nil
 			}

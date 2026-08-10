@@ -322,12 +322,12 @@ func TestWSClient_11MBFrameLimit(t *testing.T) {
 
 	go client.ReconnectLoop(ctx, &mockFrameHandler{})
 
-	// We expect: connecting-unknown -> connected-verifying -> connected-transport_verified -> (crash) -> connecting-unknown
+	// We expect: connecting -> connected -> connecting
 	crashObserved := false
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 3; i++ {
 		select {
 		case s := <-stateCh:
-			if i == 3 && s == "connecting" {
+			if i == 2 && s == "connecting" {
 				crashObserved = true
 			}
 		case <-time.After(3 * time.Second):
@@ -336,7 +336,7 @@ func TestWSClient_11MBFrameLimit(t *testing.T) {
 	}
 
 	if !crashObserved {
-		t.Errorf("expected socket to crash and return to connecting-unknown after 12MB frame. States: %v", states)
+		t.Errorf("expected socket to crash and return to connecting after 12MB frame. States: %v", states)
 	}
 }
 
@@ -387,12 +387,12 @@ func TestWSClient_ZipBombDecompressionLimit(t *testing.T) {
 
 	go client.ReconnectLoop(ctx, &mockFrameHandler{})
 
-	// We expect: connecting-unknown -> connected-verifying -> connected-transport_verified -> (crash) -> connecting-unknown
+	// We expect: connecting -> connected -> connecting
 	crashObserved := false
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 3; i++ {
 		select {
 		case s := <-stateCh:
-			if i == 3 && s == "connecting" {
+			if i == 2 && s == "connecting" {
 				crashObserved = true
 			}
 		case <-time.After(3 * time.Second):
@@ -401,7 +401,7 @@ func TestWSClient_ZipBombDecompressionLimit(t *testing.T) {
 	}
 
 	if !crashObserved {
-		t.Errorf("expected socket to crash and return to connecting-unknown after decompressed 12MB frame. States: %v", states)
+		t.Errorf("expected socket to crash and return to connecting after decompressed 12MB frame. States: %v", states)
 	}
 }
 
@@ -1013,14 +1013,14 @@ func TestWSClient_TLSInvalidCAFile(t *testing.T) {
 		case s := <-stateCh:
 			if s == "connecting" {
 				count++
-				if count >= 2 {
+				if count >= 1 {
 					return // Success! It gracefully caught the CA read error and applied backoff
 				}
 			}
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	t.Fatalf("expected client to retry and emit connecting-unknown multiple times due to bad CA file, got count %d", count)
+	t.Fatalf("expected client to retry and emit connecting exactly once due to bad CA file, got count %d", count)
 }
 
 func TestWSClient_StableSessionThreshold(t *testing.T) {

@@ -325,7 +325,7 @@ stateDiagram-v2
     
     note right of Cloud_Connection_Loop
         DerivedStatus is continuously evaluated:
-        if cloudConnected && protocolRejected: ProtocolFailure
+
         else if cloudConnected && natsConnected: Operational
         else if !cloudConnected && natsConnected: CloudDegraded
         else if cloudConnected && !natsConnected: NATSDegraded
@@ -334,7 +334,7 @@ stateDiagram-v2
 ```
 
 *   **Two-State Machine Philosophy:** The connection lifecycle is driven by strictly **two actual state machines** (the Cloud loop and the NATS loop). The `DerivedStatus` is not a state machine that drives behavior; it is simply a read-only computed projection used for logs, diagnostics, and high-level request circuit-breaking. 
-*   **Cloud Connected Semantics:** `CloudConnected` means that both the WSS transport is open AND the uCentral `connect` JSON-RPC exchange has completed successfully (or encountered a fatal version rejection). Until that exchange concludes, the Cloud link remains `Connecting`. If a fatal version rejection occurs, the WSS transport remains open, the Cloud link enters `Connected`, `protocolRejected` is set to true, and the Derived Status evaluates to `ProtocolFailure`.
+*   **Cloud Connected Semantics:** `CloudConnected` means that both the WSS transport is open AND the uCentral `connect` JSON-RPC exchange has completed successfully. Until that exchange concludes, the Cloud link remains `Connecting`.
 *   **Asynchronous Reconnection:** If the Cloud connection drops, the Cloud link transitions to `Connecting`. The derived status becomes `CloudDegraded` when NATS remains connected, or `Connecting` when NATS is also connecting. The client attempts to reconnect to the Cloud in the background using backoff while NATS continues to function. **No daemon restart is required** for intermittent WAN outages.
 *   **Independence:** The client attempts to establish a Cloud connection even if NATS is temporarily unavailable or unreachable after startup validation succeeds. Invalid or missing NATS configuration is fatal and prevents both Cloud and NATS loops from starting. While NATS is `Connecting`, the derived status is `NATSDegraded` if Cloud is connected, or `Connecting` if Cloud is also connecting.
 *   **Reconnect Backoff (Cloud):** 
@@ -436,7 +436,7 @@ The uCentral client must not subscribe to or respond on this subject. Its own da
 *   **Coexistence:** Multiple version namespaces (e.g., `v1` and `v2`) can coexist on the same NATS broker. Different implementations subscribe to their specific major version prefix.
 *   **Backward Compatibility:** Within a major version namespace, backward compatibility is required. Undefined fields must be ignored by consumers, and new optional fields must be defined with safe defaults.
 *   **Version Verification & Fallback:** During the `connect` handshake, the uCentral client transmits its supported subject versions (e.g. `v1`) within the `capabilities` payload. Because OWGW does not define a formal negotiation exchange, a successful `connect` response is treated as verification success.
-    *   *Fallback rule:* Only if a future Cloud extension explicitly returns a fatal version-rejection error to `connect` does the client fall back to a `ProtocolFailure` state, remaining connected for health/error reporting but rejecting all configuration and action requests with error code -32603 (`local_service_unavailable`, application_code 3).
+
 
 ---
 

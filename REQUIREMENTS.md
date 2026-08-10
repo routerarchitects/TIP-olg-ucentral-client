@@ -7,15 +7,15 @@ This document lists the strict, numbered requirements for the Go-based uCentral 
 ## 1. Network Connectivity & Lifecycles
 
 *   **REQ-001 (Concurrent Startup Loops):** The daemon must launch separate, independent, concurrent connection loops to NATS and the Cloud WebSocket at boot. A failure or delay in NATS connection must not block the Cloud connection, and vice versa.
-*   **REQ-002 (Decoupled Connection State Machine):** The daemon must manage the Cloud and NATS connection lifecycles entirely independently. Their individual connection states (`Connecting` $\leftrightarrow$ `Connected`) must be evaluated continuously to form a composite Derived Status consisting of five distinct, globally observable connection states:
+*   **REQ-002 (Decoupled Connection State Machine):** The daemon must manage the Cloud and NATS connection lifecycles entirely independently. Their individual connection states (`Connecting` $\leftrightarrow$ `Connected`) must be evaluated continuously to form a composite Derived Status consisting of four distinct, globally observable connection states:
     *(Note: Capitalized names below are used for architectural documentation; the actual wire/log values strictly serialize as lowercase snake_case, e.g., `operational`, `cloud_degraded`).*
     *   `Operational`: Cloud is `Connected`, NATS is `Connected`.
-    *   `CloudDegraded`: Cloud is `Connecting`, but NATS is `Connected`. (Daemon safely buffers telemetry locally; reconnects to Cloud with randomized exponential backoff of 2s-300s).
+    *   `CloudDegraded`: Cloud is `Connecting`, but NATS is `Connected`. (Daemon safely buffers telemetry locally; reconnects to Cloud with randomized exponential backoff of 2s-60s).
     *   `NATSDegraded`: NATS is `Connecting`, but Cloud is `Connected`. (Daemon fast-fails incoming Cloud commands with `local_service_unavailable`).
     *   `Connecting`: Both Cloud and NATS are `Connecting` (neutral startup/reconnect status).
 
     *   No daemon restart is allowed for connection recovery on either network layer.
-*   **REQ-003 (Version Verification Fallback):** The daemon must transmit its supported protocol versions in the free-form `connect.capabilities` JSON payload. Since the OWGW protocol does not define a formal negotiation response, the daemon assumes protocol verification success if the WebSocket `connect` succeeds (error=0). The composite derived status must still be evaluated from both link states; therefore, it becomes `Operational` only when NATS is also connected, otherwise it remains `NATSDegraded`.
+*   **REQ-003 (Version Verification):** The daemon must transmit its supported protocol versions in the free-form `connect.capabilities` JSON payload. Since the OWGW protocol does not define a formal negotiation response, the daemon assumes protocol verification success immediately upon successfully writing the `connect` JSON-RPC event to the socket. The composite derived status must still be evaluated from both link states; therefore, it becomes `Operational` only when NATS is also connected, otherwise it remains `NATSDegraded`.
 
 ---
 

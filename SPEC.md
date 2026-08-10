@@ -502,14 +502,11 @@ TIP-olg-ucentral-client/
     //
     // Truth Table:
     // | Cloud        | NATS         | Returns               |
-    // |--------------|--------------|-------------------|-----------------------|
-    // | Connecting   | Connecting   | Unknown/Verifying | StateConnecting       |
-    // | Connecting   | Connected    | Unknown/Verifying | StateCloudDegraded    |
-    // | Connected    | Connecting   | Verifying         | StateConnecting       |
-    // | Connected    | Connecting   | Accepted          | StateNATSDegraded     |
-    // | Connected    | Connected    | Accepted          | StateOperational      |
-    // | Connecting   | (Any)        | Accepted/Rejected | error (Impossible)    |
-    // | Connected    | (Any)        | Unknown           | error (Impossible)    |
+    // |--------------|--------------|-----------------------|
+    // | Connecting   | Connecting   | StateConnecting       |
+    // | Connecting   | Connected    | StateCloudDegraded    |
+    // | Connected    | Connecting   | StateNATSDegraded     |
+    // | Connected    | Connected    | StateOperational      |
     func DeriveConnectionState(cloud LinkState, nats LinkState) (ConnectionState, error)
 
     // Note on Impossible States:

@@ -189,6 +189,18 @@ type DeviceCapabilities struct {
 	Firmware     string          `json:"firmware"`
 }
 
+type CloudCapabilitiesQuery struct{}
+
+func (q *CloudCapabilitiesQuery) Validate() error { return nil }
+
+type CloudDeviceStatusQuery struct{}
+
+func (q *CloudDeviceStatusQuery) Validate() error { return nil }
+
+type DeviceStatus struct {
+	Status json.RawMessage `json:"status"`
+}
+
 // ValidateStatusEnvelope verifies a StatusEnvelope is well-formed.
 func ValidateStatusEnvelope(s *agentcore.StatusEnvelope) error {
 	if s.Version != EnvelopeVersion {

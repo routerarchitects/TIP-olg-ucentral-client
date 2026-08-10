@@ -193,7 +193,7 @@ func TestWSClient_HandshakeSuccess(t *testing.T) {
 	if states[1] != "connected" {
 		t.Errorf("expected connected-verifying, got %s", states[1])
 	}
-	
+
 }
 
 type mockEmptySerialProvider struct{}

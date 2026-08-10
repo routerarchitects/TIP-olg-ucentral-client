@@ -18,16 +18,16 @@ func TestTC_CON_003_VersionVerificationFallbackAndProtocolState(t *testing.T) {
 		{"Connected/Connected", LinkConnected, LinkConnected, StateOperational, false},
 
 		{
-			name:     "Invalid cloud enum",
-			cloud:    LinkState("invalid"),
-			nats:     LinkConnected,
-			wantErr:  true,
+			name:    "Invalid cloud enum",
+			cloud:   LinkState("invalid"),
+			nats:    LinkConnected,
+			wantErr: true,
 		},
 		{
-			name:     "Invalid NATS enum",
-			cloud:    LinkConnected,
-			nats:     LinkState("invalid"),
-			wantErr:  true,
+			name:    "Invalid NATS enum",
+			cloud:   LinkConnected,
+			nats:    LinkState("invalid"),
+			wantErr: true,
 		},
 	}
 

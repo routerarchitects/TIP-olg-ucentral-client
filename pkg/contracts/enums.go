@@ -120,10 +120,10 @@ func ValidCommandAction(command CommandType, action ActionType) bool {
 type ConnectionState string
 
 const (
-	StateConnecting      ConnectionState = "connecting"
-	StateOperational     ConnectionState = "operational"
-	StateCloudDegraded   ConnectionState = "cloud_degraded"
-	StateNATSDegraded    ConnectionState = "nats_degraded"
+	StateConnecting    ConnectionState = "connecting"
+	StateOperational   ConnectionState = "operational"
+	StateCloudDegraded ConnectionState = "cloud_degraded"
+	StateNATSDegraded  ConnectionState = "nats_degraded"
 )
 
 type LinkState string

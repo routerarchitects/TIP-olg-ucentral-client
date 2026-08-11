@@ -25,9 +25,9 @@ graph TD
     NATS_Client <-->|Pub/Sub & JetStream KV| NATS_Bus[NATS Message Bus]
 
     %% Other Client Microservices
-    NATS_Bus <-->|"ucentral.v1.device.<own-serial>.config.apply"| VyOS_Client[VyOS NATS Client]
-    NATS_Bus <-->|"ucentral.v1.device.<own-serial>.state"| Telemetry_Service[State/Telemetry Collectors]
-    NATS_Bus <-->|"ucentral.v1.device.<own-serial>.log"| Logging_Service[System Log Forwarder]
+    NATS_Bus <-->|"cmd.configure.<own-serial>"| VyOS_Client[VyOS NATS Client]
+    NATS_Bus <-->|"status.<own-serial>"| Telemetry_Service[State/Telemetry Collectors]
+    NATS_Bus <-->|"logs.<own-serial>"| Logging_Service[System Log Forwarder]
 ```
 
 ### 1.1 Ownership Boundaries
@@ -125,14 +125,15 @@ The `rpc_id` field in all envelopes acts as the central correlation ID for NATS 
 ### 2.3 Versioned Subject Schema
 To facilitate future protocol evolutions and enforce strict security boundaries, all NATS subjects are versioned under a `v1` prefix:
 
-*   **Configure Trigger:** `ucentral.v1.device.<own-serial>.config.apply` (Request-Reply)
-*   **Action Command:** `ucentral.v1.device.<own-serial>.action.<command>` (Request-Reply)
-*   **State Publish:** `ucentral.v1.device.<own-serial>.state` (Pub-Sub)
-*   **Telemetry Publish:** `ucentral.v1.device.<own-serial>.telemetry` (Pub-Sub)
-*   **Log Publish:** `ucentral.v1.device.<own-serial>.log` (Pub-Sub)
-*   **Health Publish:** `ucentral.v1.device.<own-serial>.health` (Pub-Sub)
-*   **Capability Discovery:** `ucentral.v1.device.<own-serial>.capabilities.get` (Request-Reply)
-*   **Device Status Query:** `ucentral.v1.device.<own-serial>.status.get` (Request-Reply)
+*   **Configure Trigger:** `cmd.configure.<own-serial>` (Request-Reply)
+*   **Action Command:** `cmd.action.<own-serial>.<command>` (Request-Reply)
+*   **State Publish:** `status.<own-serial>` (Pub-Sub)
+*   **Telemetry Publish:** `telemetry.<own-serial>` (Pub-Sub)
+*   **Log Publish:** `logs.<own-serial>` (Pub-Sub)
+*   **Health Publish:** `health.<own-serial>` (Pub-Sub)
+*   **Command Result:** `result.<own-serial>` (Pub-Sub)
+*   **Capability Discovery:** `capabilities.get.<own-serial>` (Request-Reply)
+*   **Device Status Query:** `status.get.<own-serial>` (Request-Reply)
 
 The `status.get` subject is owned by the downstream device/local agent. The uCentral client publishes request-reply queries to this subject for current device/platform status and upgrade recovery. The uCentral client must not subscribe to or respond on this subject.
 
@@ -397,8 +398,8 @@ Exposes a priority-aware message dispatch queue writing to the WebSocket connect
 *   **Authentication:** Authenticates with the NATS bus using **NKeys/Seed files** or **JWT Tokens** specified in the daemon configuration file.
 *   **TLS Requirements:** TLS v1.3 is enforced on the NATS connection with CA certificates validation.
 *   **Authorization & Access Control (ACLs):** The client runs under restricted NATS credentials enforcing target isolation:
-    *   *Publish:* `ucentral.v1.device.<own-serial>.config.apply`, `ucentral.v1.device.<own-serial>.action.*`, `ucentral.v1.device.<own-serial>.capabilities.get`, `ucentral.v1.device.<own-serial>.status.get`
-    *   *Subscribe:* `ucentral.v1.device.<own-serial>.state`, `ucentral.v1.device.<own-serial>.telemetry`, `ucentral.v1.device.<own-serial>.log`, `ucentral.v1.device.<own-serial>.health`, `_INBOX.>`
+    *   *Publish:* `cmd.configure.<own-serial>`, `cmd.action.<own-serial>.*`, `capabilities.get.<own-serial>`, `status.get.<own-serial>`
+    *   *Subscribe:* `status.<own-serial>`, `telemetry.<own-serial>`, `logs.<own-serial>`, `health.<own-serial>`, `result.<own-serial>`, `_INBOX.>`
     
     *Security Constraint:* The client is explicitly restricted from accessing wildcard subjects `ucentral.v1.device.*` to prevent accidental cross-device actions.
 

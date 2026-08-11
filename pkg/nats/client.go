@@ -24,7 +24,7 @@ type NATSClient struct {
 // NewNATSClient initializes a NATS connection.
 // SECURITY CONTRACT: This constructor MUST enforce tls.Config{MinVersion: tls.VersionTLS13}.
 // It must return a fatal error if CAFile is empty, or if any Server URL is insecure.
-func NewNATSClient(cfg config.NATSConfig) (*NATSClient, error) {
+func NewNATSClient(cfg config.NATSConfig, onStateChange func(contracts.LinkState)) (*NATSClient, error) {
 	if cfg.CAFile == "" {
 		return nil, errors.New("nats: fatal: CAFile is required")
 	}
@@ -53,6 +53,17 @@ func NewNATSClient(cfg config.NATSConfig) (*NATSClient, error) {
 		nats.UserCredentials(cfg.CredentialsFile),
 		nats.Secure(tlsConfig),
 		nats.MaxReconnects(-1), // Keep reconnecting forever
+		nats.ReconnectBufSize(0), // REQ-012: Fail-fast immediately if disconnected
+		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
+			if onStateChange != nil {
+				onStateChange(contracts.LinkConnecting)
+			}
+		}),
+		nats.ReconnectHandler(func(nc *nats.Conn) {
+			if onStateChange != nil {
+				onStateChange(contracts.LinkConnected)
+			}
+		}),
 	}
 
 	serverURLs := ""
@@ -127,7 +138,7 @@ func (n *NATSClient) SubscribeResults(serial string, handler func(msg *nats.Msg)
 
 // QueryCapabilities performs a synchronous request to fetch the device capabilities.
 func (n *NATSClient) QueryCapabilities(ctx context.Context, query *contracts.CloudCapabilitiesQuery, targetSerial string) (*agentcore.ResultEnvelope, error) {
-	subject := fmt.Sprintf("ucentral.v1.device.%s.capabilities.get", targetSerial)
+	subject := fmt.Sprintf("capabilities.get.%s", targetSerial)
 	msg, err := n.conn.RequestWithContext(ctx, subject, []byte("{}"))
 	if err != nil {
 		return nil, fmt.Errorf("request to %s failed: %w", subject, err)
@@ -142,7 +153,7 @@ func (n *NATSClient) QueryCapabilities(ctx context.Context, query *contracts.Clo
 
 // QueryDeviceStatus performs a synchronous request to fetch the device status.
 func (n *NATSClient) QueryDeviceStatus(ctx context.Context, query *contracts.CloudDeviceStatusQuery, targetSerial string) (*contracts.DeviceStatus, error) {
-	subject := fmt.Sprintf("ucentral.v1.device.%s.status.get", targetSerial)
+	subject := fmt.Sprintf("status.get.%s", targetSerial)
 	msg, err := n.conn.RequestWithContext(ctx, subject, []byte("{}"))
 	if err != nil {
 		return nil, fmt.Errorf("request to %s failed: %w", subject, err)
@@ -157,13 +168,13 @@ func (n *NATSClient) QueryDeviceStatus(ctx context.Context, query *contracts.Clo
 
 // SubscribeTelemetry subscribes to local device telemetry.
 func (n *NATSClient) SubscribeTelemetry(serial string, handler func(msg *nats.Msg)) (*nats.Subscription, error) {
-	subject := fmt.Sprintf("ucentral.v1.device.%s.telemetry", serial)
+	subject := fmt.Sprintf("telemetry.%s", serial)
 	return n.conn.Subscribe(subject, handler)
 }
 
 // SubscribeLogs subscribes to local device logs.
 func (n *NATSClient) SubscribeLogs(serial string, handler func(msg *nats.Msg)) (*nats.Subscription, error) {
-	subject := fmt.Sprintf("ucentral.v1.device.%s.logs", serial)
+	subject := fmt.Sprintf("logs.%s", serial)
 	return n.conn.Subscribe(subject, handler)
 }
 

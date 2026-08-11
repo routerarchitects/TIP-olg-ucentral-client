@@ -75,7 +75,7 @@ W4O2v2e+V4M9K5B1z5e+K9S+Z+A+J8m8Z+C1n4o+R7c8W4X9D9y9M6O4+Y9V6X8Q
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewNATSClient(tt.cfg)
+			_, err := NewNATSClient(tt.cfg, nil)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("NewNATSClient() error = %v, wantErr %v", err, tt.wantErr)
 			}

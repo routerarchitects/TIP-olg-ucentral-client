@@ -1,10 +1,17 @@
 package nats
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/Telecominfraproject/olg-nats-agent-core/agentcore"
+	"github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go"
 	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/config"
 )
 
@@ -39,11 +46,23 @@ W4O2v2e+V4M9K5B1z5e+K9S+Z+A+J8m8Z+C1n4o+R7c8W4X9D9y9M6O4+Y9V6X8Q
 	os.WriteFile(validCAFile, []byte(dummyPEM), 0644)
 	os.WriteFile(validCredsFile, []byte("some-creds"), 0644)
 
+	invalidCAFile := filepath.Join(tmpDir, "invalid-ca.pem")
+	os.WriteFile(invalidCAFile, []byte("-----BEGIN CERTIFICATE-----\nNOT A REAL CERT\n-----END CERTIFICATE-----"), 0644)
+
 	tests := []struct {
 		name    string
 		cfg     config.NATSConfig
 		wantErr bool
 	}{
+		{
+			name: "invalid ca pem",
+			cfg: config.NATSConfig{
+				Servers:         []string{"tls://127.0.0.1:4222"},
+				CredentialsFile: validCredsFile,
+				CAFile:          invalidCAFile,
+			},
+			wantErr: true,
+		},
 		{
 			name: "missing ca file",
 			cfg: config.NATSConfig{
@@ -80,5 +99,138 @@ W4O2v2e+V4M9K5B1z5e+K9S+Z+A+J8m8Z+C1n4o+R7c8W4X9D9y9M6O4+Y9V6X8Q
 				t.Errorf("NewNATSClient() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestExecuteAction_FailsFastWhenDisconnected(t *testing.T) {
+	// 1. Start a basic in-memory NATS server on a random port
+	opts := &server.Options{
+		Host: "127.0.0.1",
+		Port: -1,
+	}
+	s, err := server.NewServer(opts)
+	if err != nil {
+		t.Fatalf("Failed to create NATS server: %v", err)
+	}
+	go s.Start()
+	if !s.ReadyForConnections(5 * time.Second) {
+		t.Fatalf("NATS server failed to start")
+	}
+	defer s.Shutdown()
+
+	// 2. Connect a client manually (bypassing the strict TLS NewNATSClient for testing)
+	clientOpts := []nats.Option{
+		nats.MaxReconnects(-1),
+		nats.ReconnectBufSize(0), // The critical setting for REQ-012
+	}
+	conn, err := nats.Connect(s.ClientURL(), clientOpts...)
+	if err != nil {
+		t.Fatalf("Failed to connect to test server: %v", err)
+	}
+	defer conn.Close()
+
+	client := &NATSClient{
+		conn: conn,
+	}
+
+	// 3. Brutally shutdown the server to force the connection to drop
+	s.Shutdown()
+
+	// Wait for the client to detect the disconnect and go into RECONNECTING state
+	timeout := time.After(2 * time.Second)
+	disconnected := false
+	for {
+		select {
+		case <-timeout:
+			t.Fatalf("Client did not enter reconnecting state in time")
+		default:
+			if conn.Status() == nats.RECONNECTING || conn.Status() == nats.DISCONNECTED {
+				disconnected = true
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if disconnected {
+			break
+		}
+	}
+
+	// 4. Attempt to publish. Because ReconnectBufSize is 0, this MUST instantly fail-fast.
+	cmd := &agentcore.ActionCommand{
+		Version: "1.0",
+		RPCID:   "test-123",
+		Target:  "vyos",
+		Action:  "reboot",
+	}
+
+	err = client.ExecuteAction(context.Background(), cmd)
+	if err == nil {
+		t.Fatalf("Expected ExecuteAction to instantly fail-fast while disconnected, but it succeeded (secretly buffered)!")
+	}
+}
+
+func TestNATSClient_ConcurrentKVInit(t *testing.T) {
+	// 1. Start a basic in-memory NATS server with JetStream enabled
+	opts := &server.Options{
+		Host:      "127.0.0.1",
+		Port:      -1,
+		JetStream: true,
+		StoreDir:  t.TempDir(),
+	}
+	s, err := server.NewServer(opts)
+	if err != nil {
+		t.Fatalf("Failed to create NATS server: %v", err)
+	}
+	go s.Start()
+	if !s.ReadyForConnections(5 * time.Second) {
+		t.Fatalf("NATS server failed to start")
+	}
+	defer s.Shutdown()
+
+	// 2. Connect a client manually
+	conn, err := nats.Connect(s.ClientURL())
+	if err != nil {
+		t.Fatalf("Failed to connect to test server: %v", err)
+	}
+	defer conn.Close()
+
+	js, err := conn.JetStream()
+	if err != nil {
+		t.Fatalf("Failed to initialize JetStream: %v", err)
+	}
+
+	client := &NATSClient{
+		conn: conn,
+		js:   js,
+	}
+
+	// 3. Concurrently call KV methods to trigger race condition on initialization
+	var wg sync.WaitGroup
+	errCh := make(chan error, 100)
+	
+	for i := 0; i < 50; i++ {
+		wg.Add(2)
+		go func(idx int) {
+			defer wg.Done()
+			_, err := client.WriteDesiredConfig(context.Background(), fmt.Sprintf("serial-%d", idx), []byte("{}"))
+			if err != nil {
+				errCh <- err
+			}
+		}(i)
+		
+		go func(idx int) {
+			defer wg.Done()
+			_, _, err := client.GetDesiredConfigMetadata(context.Background(), fmt.Sprintf("serial-%d", idx))
+			if err != nil {
+				errCh <- err
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		t.Errorf("Concurrent KV operation failed: %v", err)
 	}
 }

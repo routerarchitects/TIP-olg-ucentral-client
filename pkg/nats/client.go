@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/Telecominfraproject/olg-nats-agent-core/agentcore"
 	"github.com/nats-io/nats.go"
@@ -19,6 +20,7 @@ type NATSClient struct {
 	conn *nats.Conn
 	js   nats.JetStreamContext
 	kv   nats.KeyValue
+	kvMu sync.Mutex
 }
 
 // NewNATSClient initializes a NATS connection.
@@ -109,7 +111,10 @@ func (n *NATSClient) PublishConfigTrigger(ctx context.Context, cmd *agentcore.Co
 		Subject: subject,
 		Data:    payload,
 	}
-	return n.conn.PublishMsg(msg)
+	if err := n.conn.PublishMsg(msg); err != nil {
+		return err
+	}
+	return n.conn.FlushWithContext(ctx)
 }
 
 // ExecuteAction publishes an action command to the NATS bus.
@@ -127,7 +132,10 @@ func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *agentcore.ActionCom
 		Subject: subject,
 		Data:    payload,
 	}
-	return n.conn.PublishMsg(msg)
+	if err := n.conn.PublishMsg(msg); err != nil {
+		return err
+	}
+	return n.conn.FlushWithContext(ctx)
 }
 
 // SubscribeResults subscribes to the global results subject for a specific device.
@@ -190,21 +198,35 @@ func (n *NATSClient) SubscribeState(serial string, handler func(msg *nats.Msg)) 
 	return n.conn.Subscribe(subject, handler)
 }
 
+func (n *NATSClient) getKV() (nats.KeyValue, error) {
+	n.kvMu.Lock()
+	defer n.kvMu.Unlock()
+
+	if n.kv != nil {
+		return n.kv, nil
+	}
+
+	kv, err := n.js.KeyValue("cfg_desired")
+	if err == nats.ErrBucketNotFound {
+		kv, err = n.js.CreateKeyValue(&nats.KeyValueConfig{Bucket: "cfg_desired"})
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to bind to KV store 'cfg_desired': %w", err)
+	}
+
+	n.kv = kv
+	return kv, nil
+}
+
 // WriteDesiredConfig writes the desired configuration to the JetStream KeyValue store.
 func (n *NATSClient) WriteDesiredConfig(ctx context.Context, serial string, config []byte) (uint64, error) {
-	if n.kv == nil {
-		kv, err := n.js.KeyValue("cfg_desired")
-		if err == nats.ErrBucketNotFound {
-			kv, err = n.js.CreateKeyValue(&nats.KeyValueConfig{Bucket: "cfg_desired"})
-		}
-		if err != nil {
-			return 0, fmt.Errorf("failed to bind to KV store 'cfg_desired': %w", err)
-		}
-		n.kv = kv
+	kv, err := n.getKV()
+	if err != nil {
+		return 0, err
 	}
 
 	key := fmt.Sprintf("desired.%s", serial)
-	rev, err := n.kv.Put(key, config)
+	rev, err := kv.Put(key, config)
 	if err != nil {
 		return 0, fmt.Errorf("failed to write config to KV: %w", err)
 	}
@@ -213,19 +235,13 @@ func (n *NATSClient) WriteDesiredConfig(ctx context.Context, serial string, conf
 
 // GetDesiredConfigMetadata retrieves the metadata of the desired configuration from the JetStream KeyValue store.
 func (n *NATSClient) GetDesiredConfigMetadata(ctx context.Context, serial string) (uint64, string, error) {
-	if n.kv == nil {
-		kv, err := n.js.KeyValue("cfg_desired")
-		if err == nats.ErrBucketNotFound {
-			kv, err = n.js.CreateKeyValue(&nats.KeyValueConfig{Bucket: "cfg_desired"})
-		}
-		if err != nil {
-			return 0, "", fmt.Errorf("failed to bind to KV store 'cfg_desired': %w", err)
-		}
-		n.kv = kv
+	kv, err := n.getKV()
+	if err != nil {
+		return 0, "", err
 	}
 
 	key := fmt.Sprintf("desired.%s", serial)
-	entry, err := n.kv.Get(key)
+	entry, err := kv.Get(key)
 	if err != nil {
 		if errors.Is(err, nats.ErrKeyNotFound) {
 			return 0, "", nil // Not an error if it just doesn't exist yet

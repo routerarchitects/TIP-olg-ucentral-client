@@ -122,8 +122,9 @@ The `rpc_id` field in all envelopes acts as the central correlation ID for NATS 
 3.  The downstream agent processes the command and returns a `ResultEnvelope` maintaining the exact same `rpc_id`.
 4.  The Request Manager uses this correlation ID to look up the original transaction, recovers the Cloud `id`, and returns the response to the correct WebSocket client.
 
-### 2.3 Versioned Subject Schema
-To facilitate future protocol evolutions and enforce strict security boundaries, all NATS subjects are versioned under a `v1` prefix:
+### 2.3 Flat Subject Schema
+
+To guarantee flawless integration with the existing VyOS NATS client, all NATS subjects use a flat `agentcore` architecture without nested namespaces:
 
 *   **Configure Trigger:** `cmd.configure.<own-serial>` (Request-Reply)
 *   **Action Command:** `cmd.action.<own-serial>.<command>` (Request-Reply)
@@ -241,7 +242,7 @@ Firmware upgrades take minutes to complete and cannot block the Request Manager 
 3.  **Background Tracking & Authoritative Status:** The upgrade continues executing asynchronously. The downstream agent must expose structured, authoritative upgrade status. The uCentral client must use this structured status to determine completion; **system logs must not be used as a completion signal**.
 4.  **State Lock Lifetime:** The state-changing lock (`activeStateTx`) remains held until a defined terminal upgrade state (e.g., success, failed) is received from the downstream agent.
 5.  **Reconnection Resilience:** Upon WebSocket reconnection, the daemon resumes reporting the current upgrade state to the Cloud using the persistent `operation_id`.
-6.  **Crash Recovery (Startup Query):** To prevent losing the in-memory state lock if the daemon process crashes, the daemon must explicitly load the active operation from the `OperationStore` on boot to recover the Cloud JSON-RPC `id` and **immediately restore the `activeStateTx` lock**. It must then query the downstream agent via `ucentral.v1.device.<own-serial>.status.get` generating a **fresh internal `rpc_id`**, correlate the generic response using the locally persisted `operation_id` (as the NATS agent does not track Cloud identities), and release the lock if a terminal state is observed. The uCentral client is only the requester for this subject; it must not subscribe to or respond on `status.get`.
+6.  **Crash Recovery (Startup Query):** To prevent losing the in-memory state lock if the daemon process crashes, the daemon must explicitly load the active operation from the `OperationStore` on boot to recover the Cloud JSON-RPC `id` and **immediately restore the `activeStateTx` lock**. It must then query the downstream agent via `status.get.<own-serial>` generating a **fresh internal `rpc_id`**, correlate the generic response using the locally persisted `operation_id` (as the NATS agent does not track Cloud identities), and release the lock if a terminal state is observed. The uCentral client is only the requester for this subject; it must not subscribe to or respond on `status.get`.
 7.  **Duplicate Rejection:** Any state-changing commands received while the background upgrade is active are rejected immediately as busy.
 
 ### 3.6 Timeout Specifications
@@ -401,10 +402,10 @@ Exposes a priority-aware message dispatch queue writing to the WebSocket connect
     *   *Publish:* `cmd.configure.<own-serial>`, `cmd.action.<own-serial>.*`, `capabilities.get.<own-serial>`, `status.get.<own-serial>`
     *   *Subscribe:* `status.<own-serial>`, `telemetry.<own-serial>`, `logs.<own-serial>`, `health.<own-serial>`, `result.<own-serial>`, `_INBOX.>`
     
-    *Security Constraint:* The client is explicitly restricted from accessing wildcard subjects `ucentral.v1.device.*` to prevent accidental cross-device actions.
+    *Security Constraint:* The client is explicitly restricted from accessing wildcard subjects `*` to prevent accidental cross-device actions.
 
 ### 5.2 Action Command Authorization & Auditing
-*   **NATS ACLs:** Only the uCentral client is authorized to publish to `ucentral.v1.device.<own-serial>.action.*`. Downstream agents are prohibited from publishing to these topics.
+*   **NATS ACLs:** Only the uCentral client is authorized to publish to `cmd.action.<own-serial>.*`. Downstream agents are prohibited from publishing to these topics.
 *   **Audit Logging:** Every sensitive Action Command (e.g., `reboot`) is logged locally in the system audit stream and sent back to the cloud as a high-severity `log` request containing the Cloud JSON-RPC `id` and the user/system identity that triggered it. *(Note: This is a new security feature introduced in this client and is not present in the legacy OpenWrt client).*
 *   **Recursive Loop Prevention:** If the audit log forwarding fails, the client increments the `audit_delivery_failure` metric but **does not generate another log** to prevent recursive log flooding.
 
@@ -416,7 +417,7 @@ To keep the daemon resource-efficient and secure, it does **not** expose local H
 
 ### 6.1 NATS Health Reporting
 The downstream device or local device agent, such as the VyOS NATS agent, periodically publishes device health metrics directly to the NATS bus on:
-`ucentral.v1.device.<own-serial>.health`
+`health.<own-serial>`
 
 The uCentral client subscribes to this subject, validates and rate-limits the device health payload, and forwards accepted health updates to the Cloud through the internal WebSocket outbound scheduler. The payload is a device-health payload produced by the downstream device/local agent. It is distinct from the uCentral client's own NATS connection health snapshot. The exact schema is owned by the downstream device-health contract.
 
@@ -424,7 +425,7 @@ The uCentral client subscribes to this subject, validates and rate-limits the de
 
 The `status.get` request-reply subject is owned by the downstream device/local agent:
 
-`ucentral.v1.device.<own-serial>.status.get`
+`status.get.<own-serial>`
 
 The uCentral client sends requests to this subject when it needs current device/platform status, including upgrade state, apply progress, rollback state, firmware version, and operational readiness. This subject is also used during startup crash recovery to determine whether a firmware upgrade is already active downstream.
 
@@ -434,9 +435,9 @@ The uCentral client must not subscribe to or respond on this subject. Its own da
 
 ## 7. Version Compatibility & Negotiation
 
-*   **Coexistence:** Multiple version namespaces (e.g., `v1` and `v2`) can coexist on the same NATS broker. Different implementations subscribe to their specific major version prefix.
-*   **Backward Compatibility:** Within a major version namespace, backward compatibility is required. Undefined fields must be ignored by consumers, and new optional fields must be defined with safe defaults.
-*   **Version Verification & Fallback:** During the `connect` handshake, the uCentral client transmits its supported subject versions (e.g. `v1`) within the `capabilities` payload. Because OWGW does not define a formal negotiation exchange, a successful `connect` response is treated as verification success.
+*   **Coexistence:** Multiple daemon instances can coexist on the same NATS broker. Different implementations subscribe to their specific serial prefix.
+*   **Backward Compatibility:** Within a major version namespace, backward compatibility is required.
+*   **Version Verification & Fallback:** During the `connect` handshake, the uCentral client transmits its supported architecture capabilities. Because OWGW does not define a formal negotiation exchange, a successful `connect` response is treated as verification success.
 
 
 ---

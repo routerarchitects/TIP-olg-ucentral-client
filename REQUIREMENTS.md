@@ -21,7 +21,7 @@ This document lists the strict, numbered requirements for the Go-based uCentral 
 
 ## 2. NATS & JetStream Schema
 
-*   **REQ-004 (Subject Schema Versioning):** All NATS subjects used by the client must be versioned with a `v1` prefix and follow target-serial isolation boundaries:
+*   **REQ-004 (Subject Schema Compatibility):** All NATS subjects used by the client must seamlessly map to the flat `agentcore` architecture and follow target-serial isolation boundaries:
     *   `cmd.configure.<own-serial>` (Request-Reply / Pub-Sub)
     *   `cmd.action.<own-serial>.<command>` (Request-Reply / Pub-Sub)
     *   `status.<own-serial>` (Pub-Sub)

@@ -12,6 +12,7 @@ import (
 	"github.com/Telecominfraproject/olg-nats-agent-core/agentcore"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/config"
 )
 
@@ -197,7 +198,7 @@ func TestNATSClient_ConcurrentKVInit(t *testing.T) {
 	}
 	defer conn.Close()
 
-	js, err := conn.JetStream()
+	js, err := jetstream.New(conn)
 	if err != nil {
 		t.Fatalf("Failed to initialize JetStream: %v", err)
 	}

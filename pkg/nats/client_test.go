@@ -164,7 +164,7 @@ func TestExecuteAction_FailsFastWhenDisconnected(t *testing.T) {
 		Target:      "vyos",
 		Action:      "reboot",
 		Timestamp:   time.Now().UTC(),
-		Payload:     []byte(`{}`),
+		Payload:     []byte(`{"serial":"vyos"}`),
 	}
 
 	err = client.ExecuteAction(context.Background(), cmd)

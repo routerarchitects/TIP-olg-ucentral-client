@@ -76,7 +76,7 @@ func NewNATSClient(cfg config.NATSConfig) (*NATSClient, error) {
 
 	// Will bind to the KV store in a separate step or here if we know the bucket name
 	// For now, we return the client. The KV binding might happen later or in a specific method.
-	
+
 	return &NATSClient{
 		conn: conn,
 		js:   js,
@@ -191,7 +191,7 @@ func (n *NATSClient) WriteDesiredConfig(ctx context.Context, serial string, conf
 		}
 		n.kv = kv
 	}
-	
+
 	key := fmt.Sprintf("desired.%s", serial)
 	rev, err := n.kv.Put(key, config)
 	if err != nil {
@@ -221,7 +221,7 @@ func (n *NATSClient) GetDesiredConfigMetadata(ctx context.Context, serial string
 		}
 		return 0, "", fmt.Errorf("failed to get config from KV: %w", err)
 	}
-	
+
 	// The metadata string could be a hash, for now we can just return the string format of the revision
 	return entry.Revision(), fmt.Sprintf("%d", entry.Revision()), nil
 }

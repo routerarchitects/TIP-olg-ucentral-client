@@ -52,7 +52,7 @@ func NewNATSClient(cfg config.NATSConfig, onStateChange func(contracts.LinkState
 	opts := []nats.Option{
 		nats.UserCredentials(cfg.CredentialsFile),
 		nats.Secure(tlsConfig),
-		nats.MaxReconnects(-1), // Keep reconnecting forever
+		nats.MaxReconnects(-1),   // Keep reconnecting forever
 		nats.ReconnectBufSize(0), // REQ-012: Fail-fast immediately if disconnected
 		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
 			if onStateChange != nil {

@@ -1141,12 +1141,11 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     // NewNATSClient initializes a NATS connection.
     // SECURITY CONTRACT: This constructor MUST enforce tls.Config{MinVersion: tls.VersionTLS13}.
     // It must return a fatal error if CAFile is empty, or if any Server URL is insecure.
-    func NewNATSClient(cfg NATSConfig) (*NATSClient, error)
+    func NewNATSClient(cfg config.NATSConfig, onStateChange func(contracts.LinkState)) (*NATSClient, error)
 
-    // Asynchronous State-Changing Commands (uses NATS reply-to inbox and CommandResultQueue)
-    func (n *NATSClient) PublishConfigTrigger(ctx context.Context, cmd *ConfigureCommand, replyTo string) error
-    func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *ActionCommand, replyTo string) error
-    func (n *NATSClient) SubscribeCommandReplies(inbox string, handler func(msg *nats.Msg)) (*nats.Subscription, error)
+    func (n *NATSClient) PublishConfigTrigger(ctx context.Context, cmd *agentcore.ConfigureNotification) error
+    func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *agentcore.ActionCommand) error
+    func (n *NATSClient) SubscribeResults(serial string, handler func(msg *nats.Msg)) (*nats.Subscription, error)
 
     // Query Envelopes (Defined in pkg/contracts/envelopes.go)
 
@@ -1166,7 +1165,7 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
 
     ```
 
-The uCentral client must not register a NATS responder for `ucentral.v1.device.<own-serial>.status.get`. This subject is queried by the uCentral client and served by the downstream device/local agent.
+The uCentral client must not register a NATS responder for `ucentral.v1.device.<target>.status.get`. This subject is queried by the uCentral client and served by the downstream device/local agent.
 
 #### PR 4.3: Dynamic Capabilities & Local Signal Sockets
 *   **Target File:** `pkg/nats/capabilities.go`

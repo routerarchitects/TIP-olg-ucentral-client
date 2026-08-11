@@ -157,10 +157,13 @@ func TestExecuteAction_FailsFastWhenDisconnected(t *testing.T) {
 
 	// 4. Attempt to publish. Because ReconnectBufSize is 0, this MUST instantly fail-fast.
 	cmd := &agentcore.ActionCommand{
-		Version: "1.0",
-		RPCID:   "test-123",
-		Target:  "vyos",
-		Action:  "reboot",
+		Version:     "1.0",
+		CommandType: "reboot",
+		RPCID:       "test-123",
+		Target:      "vyos",
+		Action:      "reboot",
+		Timestamp:   time.Now().UTC(),
+		Payload:     []byte(`{}`),
 	}
 
 	err = client.ExecuteAction(context.Background(), cmd)

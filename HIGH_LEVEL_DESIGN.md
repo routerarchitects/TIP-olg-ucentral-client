@@ -25,9 +25,9 @@ graph TD
     NATS_Client <-->|Pub/Sub & JetStream KV| NATS_Bus[NATS Message Bus]
 
     %% Other Client Microservices
-    NATS_Bus <-->|"cmd.configure.<own-serial>"| VyOS_Client[VyOS NATS Client]
-    NATS_Bus <-->|"status.<own-serial>"| Telemetry_Service[State/Telemetry Collectors]
-    NATS_Bus <-->|"logs.<own-serial>"| Logging_Service[System Log Forwarder]
+    NATS_Bus <-->|"cmd.configure.<target>"| VyOS_Client[VyOS NATS Client]
+    NATS_Bus <-->|"status.<target>"| Telemetry_Service[State/Telemetry Collectors]
+    NATS_Bus <-->|"logs.<target>"| Logging_Service[System Log Forwarder]
 ```
 
 ### 1.1 Ownership Boundaries
@@ -126,19 +126,19 @@ The `rpc_id` field in all envelopes acts as the central correlation ID for NATS 
 
 To guarantee flawless integration with the existing VyOS NATS client, all NATS subjects use a flat `agentcore` architecture without nested namespaces:
 
-*   **Configure Trigger:** `cmd.configure.<own-serial>` (Request-Reply)
-*   **Action Command:** `cmd.action.<own-serial>.<command>` (Request-Reply)
-*   **State Publish:** `status.<own-serial>` (Pub-Sub)
-*   **Telemetry Publish:** `telemetry.<own-serial>` (Pub-Sub)
-*   **Log Publish:** `logs.<own-serial>` (Pub-Sub)
-*   **Health Publish:** `health.<own-serial>` (Pub-Sub)
-*   **Command Result:** `result.<own-serial>` (Pub-Sub)
-*   **Capability Discovery:** `capabilities.get.<own-serial>` (Request-Reply)
-*   **Device Status Query:** `status.get.<own-serial>` (Request-Reply)
+*   **Configure Trigger:** `cmd.configure.<target>` (Request-Reply)
+*   **Action Command:** `cmd.action.<target>.<command>` (Request-Reply)
+*   **State Publish:** `status.<target>` (Pub-Sub)
+*   **Telemetry Publish:** `telemetry.<target>` (Pub-Sub)
+*   **Log Publish:** `logs.<target>` (Pub-Sub)
+*   **Health Publish:** `health.<target>` (Pub-Sub)
+*   **Command Result:** `result.<target>` (Pub-Sub)
+*   **Capability Discovery:** `capabilities.get.<target>` (Request-Reply)
+*   **Device Status Query:** `status.get.<target>` (Request-Reply)
 
 The `status.get` subject is owned by the downstream device/local agent. The uCentral client publishes request-reply queries to this subject for current device/platform status and upgrade recovery. The uCentral client must not subscribe to or respond on this subject.
 
-*Security Boundary:* Read-only metadata calls (such as capability and status retrieval) are mapped to their own explicit subject namespaces, keeping them separate from destructive/operational `action.*` subjects. The daemon is restricted to `<own-serial>` topics to prevent cross-device actions.
+*Security Boundary:* Read-only metadata calls (such as capability and status retrieval) are mapped to their own explicit subject namespaces, keeping them separate from destructive/operational `action.*` subjects. The daemon is restricted to `<target>` topics to prevent cross-device actions.
 
 ### 2.4 Capability Discovery & Caching Flow
 At startup, the client retrieves downstream device capabilities using the dedicated NATS query subject:
@@ -242,7 +242,7 @@ Firmware upgrades take minutes to complete and cannot block the Request Manager 
 3.  **Background Tracking & Authoritative Status:** The upgrade continues executing asynchronously. The downstream agent must expose structured, authoritative upgrade status. The uCentral client must use this structured status to determine completion; **system logs must not be used as a completion signal**.
 4.  **State Lock Lifetime:** The state-changing lock (`activeStateTx`) remains held until a defined terminal upgrade state (e.g., success, failed) is received from the downstream agent.
 5.  **Reconnection Resilience:** Upon WebSocket reconnection, the daemon resumes reporting the current upgrade state to the Cloud using the persistent `operation_id`.
-6.  **Crash Recovery (Startup Query):** To prevent losing the in-memory state lock if the daemon process crashes, the daemon must explicitly load the active operation from the `OperationStore` on boot to recover the Cloud JSON-RPC `id` and **immediately restore the `activeStateTx` lock**. It must then query the downstream agent via `status.get.<own-serial>` generating a **fresh internal `rpc_id`**, correlate the generic response using the locally persisted `operation_id` (as the NATS agent does not track Cloud identities), and release the lock if a terminal state is observed. The uCentral client is only the requester for this subject; it must not subscribe to or respond on `status.get`.
+6.  **Crash Recovery (Startup Query):** To prevent losing the in-memory state lock if the daemon process crashes, the daemon must explicitly load the active operation from the `OperationStore` on boot to recover the Cloud JSON-RPC `id` and **immediately restore the `activeStateTx` lock**. It must then query the downstream agent via `status.get.<target>` generating a **fresh internal `rpc_id`**, correlate the generic response using the locally persisted `operation_id` (as the NATS agent does not track Cloud identities), and release the lock if a terminal state is observed. The uCentral client is only the requester for this subject; it must not subscribe to or respond on `status.get`.
 7.  **Duplicate Rejection:** Any state-changing commands received while the background upgrade is active are rejected immediately as busy.
 
 ### 3.6 Timeout Specifications
@@ -399,13 +399,13 @@ Exposes a priority-aware message dispatch queue writing to the WebSocket connect
 *   **Authentication:** Authenticates with the NATS bus using **NKeys/Seed files** or **JWT Tokens** specified in the daemon configuration file.
 *   **TLS Requirements:** TLS v1.3 is enforced on the NATS connection with CA certificates validation.
 *   **Authorization & Access Control (ACLs):** The client runs under restricted NATS credentials enforcing target isolation:
-    *   *Publish:* `cmd.configure.<own-serial>`, `cmd.action.<own-serial>.*`, `capabilities.get.<own-serial>`, `status.get.<own-serial>`
-    *   *Subscribe:* `status.<own-serial>`, `telemetry.<own-serial>`, `logs.<own-serial>`, `health.<own-serial>`, `result.<own-serial>`, `_INBOX.>`
+    *   *Publish:* `cmd.configure.<target>`, `cmd.action.<target>.*`, `capabilities.get.<target>`, `status.get.<target>`
+    *   *Subscribe:* `status.<target>`, `telemetry.<target>`, `logs.<target>`, `health.<target>`, `result.<target>`, `_INBOX.>`
     
     *Security Constraint:* The client is explicitly restricted from accessing wildcard subjects `*` to prevent accidental cross-device actions.
 
 ### 5.2 Action Command Authorization & Auditing
-*   **NATS ACLs:** Only the uCentral client is authorized to publish to `cmd.action.<own-serial>.*`. Downstream agents are prohibited from publishing to these topics.
+*   **NATS ACLs:** Only the uCentral client is authorized to publish to `cmd.action.<target>.*`. Downstream agents are prohibited from publishing to these topics.
 *   **Audit Logging:** Every sensitive Action Command (e.g., `reboot`) is logged locally in the system audit stream and sent back to the cloud as a high-severity `log` request containing the Cloud JSON-RPC `id` and the user/system identity that triggered it. *(Note: This is a new security feature introduced in this client and is not present in the legacy OpenWrt client).*
 *   **Recursive Loop Prevention:** If the audit log forwarding fails, the client increments the `audit_delivery_failure` metric but **does not generate another log** to prevent recursive log flooding.
 
@@ -417,7 +417,7 @@ To keep the daemon resource-efficient and secure, it does **not** expose local H
 
 ### 6.1 NATS Health Reporting
 The downstream device or local device agent, such as the VyOS NATS agent, periodically publishes device health metrics directly to the NATS bus on:
-`health.<own-serial>`
+`health.<target>`
 
 The uCentral client subscribes to this subject, validates and rate-limits the device health payload, and forwards accepted health updates to the Cloud through the internal WebSocket outbound scheduler. The payload is a device-health payload produced by the downstream device/local agent. It is distinct from the uCentral client's own NATS connection health snapshot. The exact schema is owned by the downstream device-health contract.
 
@@ -425,7 +425,7 @@ The uCentral client subscribes to this subject, validates and rate-limits the de
 
 The `status.get` request-reply subject is owned by the downstream device/local agent:
 
-`status.get.<own-serial>`
+`status.get.<target>`
 
 The uCentral client sends requests to this subject when it needs current device/platform status, including upgrade state, apply progress, rollback state, firmware version, and operational readiness. This subject is also used during startup crash recovery to determine whether a firmware upgrade is already active downstream.
 

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/Telecominfraproject/olg-nats-agent-core/agentcore"
@@ -35,6 +36,11 @@ func NewNATSClient(cfg config.NATSConfig, onStateChange func(contracts.LinkState
 	}
 	if len(cfg.Servers) == 0 {
 		return nil, errors.New("nats: fatal: at least one server is required")
+	}
+	for _, s := range cfg.Servers {
+		if !strings.HasPrefix(s, "tls://") {
+			return nil, fmt.Errorf("nats: fatal: insecure server URL detected (%s), must use tls://", s)
+		}
 	}
 
 	caCert, err := os.ReadFile(cfg.CAFile)
@@ -79,6 +85,10 @@ func NewNATSClient(cfg config.NATSConfig, onStateChange func(contracts.LinkState
 	conn, err := nats.Connect(serverURLs, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("nats: failed to connect: %w", err)
+	}
+
+	if onStateChange != nil {
+		onStateChange(contracts.LinkConnected)
 	}
 
 	js, err := conn.JetStream()

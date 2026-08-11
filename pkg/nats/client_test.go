@@ -207,7 +207,7 @@ func TestNATSClient_ConcurrentKVInit(t *testing.T) {
 	// 3. Concurrently call KV methods to trigger race condition on initialization
 	var wg sync.WaitGroup
 	errCh := make(chan error, 100)
-	
+
 	for i := 0; i < 50; i++ {
 		wg.Add(2)
 		go func(idx int) {
@@ -217,7 +217,7 @@ func TestNATSClient_ConcurrentKVInit(t *testing.T) {
 				errCh <- err
 			}
 		}(i)
-		
+
 		go func(idx int) {
 			defer wg.Done()
 			_, _, err := client.GetDesiredConfigMetadata(context.Background(), fmt.Sprintf("serial-%d", idx))

@@ -20,13 +20,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/contracts"
 	"github.com/Telecominfraproject/olg-nats-agent-core/agentcore"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/nats-io/nkeys"
 	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/config"
+	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/contracts"
 )
 
 func TestNewNATSClient_Validation(t *testing.T) {

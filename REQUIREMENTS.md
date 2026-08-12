@@ -22,8 +22,8 @@ This document lists the strict, numbered requirements for the Go-based uCentral 
 ## 2. NATS & JetStream Schema
 
 *   **REQ-004 (Subject Schema Compatibility):** All NATS subjects used by the client must seamlessly map to the flat `agentcore` architecture and follow target-serial isolation boundaries:
-    *   `cmd.configure.<target>` (Request-Reply / Pub-Sub)
-    *   `cmd.action.<target>.<command>` (Request-Reply / Pub-Sub)
+    *   `cmd.configure.<target>` (Pub-Sub / Asynchronous Command Delivery)
+    *   `cmd.action.<target>.<command>` (Pub-Sub / Asynchronous Command Delivery)
     *   `status.<target>` (Pub-Sub)
     *   `telemetry.<target>` (Pub-Sub)
     *   `logs.<target>` (Pub-Sub)

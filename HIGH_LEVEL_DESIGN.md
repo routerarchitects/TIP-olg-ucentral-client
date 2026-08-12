@@ -126,8 +126,8 @@ The `rpc_id` field in all envelopes acts as the central correlation ID for NATS 
 
 To guarantee flawless integration with the existing VyOS NATS client, all NATS subjects use a flat `agentcore` architecture without nested namespaces:
 
-*   **Configure Trigger:** `cmd.configure.<target>` (Request-Reply)
-*   **Action Command:** `cmd.action.<target>.<command>` (Request-Reply)
+*   **Configure Trigger:** `cmd.configure.<target>` (Pub-Sub / Asynchronous Command Delivery)
+*   **Action Command:** `cmd.action.<target>.<command>` (Pub-Sub / Asynchronous Command Delivery)
 *   **State Publish:** `status.<target>` (Pub-Sub)
 *   **Telemetry Publish:** `telemetry.<target>` (Pub-Sub)
 *   **Log Publish:** `logs.<target>` (Pub-Sub)
@@ -402,7 +402,7 @@ Exposes a priority-aware message dispatch queue writing to the WebSocket connect
     *   *Publish:* `cmd.configure.<target>`, `cmd.action.<target>.*`, `capabilities.get.<target>`, `status.get.<target>`
     *   *Subscribe:* `status.<target>`, `telemetry.<target>`, `logs.<target>`, `health.<target>`, `result.<target>`, `_INBOX.>`
     
-    *Security Constraint:* The client is explicitly restricted from accessing wildcard subjects `*` to prevent accidental cross-device actions.
+    *Security Constraint:* NATS credentials MUST restrict publish/subscribe access to the explicit subjects associated with the configured <target> and MUST NOT grant cross-target wildcard access.
 
 ### 5.2 Action Command Authorization & Auditing
 *   **NATS ACLs:** Only the uCentral client is authorized to publish to `cmd.action.<target>.*`. Downstream agents are prohibited from publishing to these topics.

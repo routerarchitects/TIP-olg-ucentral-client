@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"time"
 
 	"github.com/Telecominfraproject/olg-nats-agent-core/agentcore"
 )
@@ -210,13 +211,39 @@ type DeviceCapabilities struct {
 	Firmware     string          `json:"firmware"`
 }
 
-type CloudCapabilitiesQuery struct{}
+type CloudCapabilitiesQuery struct {
+	Version   string    `json:"version"`
+	RPCID     string    `json:"rpc_id"`
+	Target    string    `json:"target"`
+	Timestamp time.Time `json:"timestamp"`
+}
 
-func (q *CloudCapabilitiesQuery) Validate() error { return nil }
+func (q *CloudCapabilitiesQuery) Validate() error {
+	if q.Version != EnvelopeVersion {
+		return fmt.Errorf("unsupported envelope version: %q", q.Version)
+	}
+	if q.RPCID == "" || q.Target == "" || q.Timestamp.IsZero() {
+		return errors.New("missing required fields in CloudCapabilitiesQuery")
+	}
+	return nil
+}
 
-type CloudDeviceStatusQuery struct{}
+type CloudDeviceStatusQuery struct {
+	Version   string    `json:"version"`
+	RPCID     string    `json:"rpc_id"`
+	Target    string    `json:"target"`
+	Timestamp time.Time `json:"timestamp"`
+}
 
-func (q *CloudDeviceStatusQuery) Validate() error { return nil }
+func (q *CloudDeviceStatusQuery) Validate() error {
+	if q.Version != EnvelopeVersion {
+		return fmt.Errorf("unsupported envelope version: %q", q.Version)
+	}
+	if q.RPCID == "" || q.Target == "" || q.Timestamp.IsZero() {
+		return errors.New("missing required fields in CloudDeviceStatusQuery")
+	}
+	return nil
+}
 
 type DeviceStatus struct {
 	Status json.RawMessage `json:"status"`
@@ -227,7 +254,7 @@ func ValidateStatusEnvelope(s *agentcore.StatusEnvelope) error {
 	if s.Version != EnvelopeVersion {
 		return fmt.Errorf("unsupported envelope version: %q", s.Version)
 	}
-	if s.Target == "" || s.Status == "" || s.Timestamp.IsZero() {
+	if s.RPCID == "" || s.Target == "" || s.Status == "" || s.Timestamp.IsZero() {
 		return errors.New("missing required fields in StatusEnvelope")
 	}
 	return nil

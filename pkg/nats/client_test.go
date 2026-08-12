@@ -623,7 +623,12 @@ func TestNATSClient_QueryValidation_MaliciousResponses(t *testing.T) {
 	})
 	defer subCaps.Unsubscribe()
 
-	_, err = client.QueryCapabilities(ctx, &contracts.CloudCapabilitiesQuery{})
+	_, err = client.QueryCapabilities(ctx, &contracts.CloudCapabilitiesQuery{
+		Version:   "1.0",
+		RPCID:     rpcID,
+		Target:    "vyos",
+		Timestamp: time.Now(),
+	})
 	if err == nil || !strings.Contains(err.Error(), "target mismatch") {
 		t.Fatalf("Expected target mismatch error for QueryCapabilities, got: %v", err)
 	}
@@ -633,6 +638,7 @@ func TestNATSClient_QueryValidation_MaliciousResponses(t *testing.T) {
 		// Send back invalid envelope version
 		wrongVerEnv := agentcore.StatusEnvelope{
 			Version:   "99.9",
+			RPCID:     rpcID,
 			Target:    "vyos",
 			Status:    "{}",
 			Timestamp: time.Now(),
@@ -642,7 +648,12 @@ func TestNATSClient_QueryValidation_MaliciousResponses(t *testing.T) {
 	})
 	defer subStatus.Unsubscribe()
 
-	_, err = client.QueryDeviceStatus(ctx, &contracts.CloudDeviceStatusQuery{})
+	_, err = client.QueryDeviceStatus(ctx, &contracts.CloudDeviceStatusQuery{
+		Version:   "1.0",
+		RPCID:     rpcID,
+		Target:    "vyos",
+		Timestamp: time.Now(),
+	})
 	if err == nil || !strings.Contains(err.Error(), "unsupported envelope version") {
 		t.Fatalf("Expected unsupported version error for QueryDeviceStatus, got: %v", err)
 	}

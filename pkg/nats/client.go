@@ -253,6 +253,9 @@ func (n *NATSClient) QueryCapabilities(ctx context.Context, query *contracts.Clo
 	if env.Target != n.target {
 		return nil, fmt.Errorf("target mismatch in capabilities response: got %q, expected %q", env.Target, n.target)
 	}
+	if env.RPCID != query.RPCID {
+		return nil, fmt.Errorf("rpc_id mismatch in capabilities response: got %q, expected %q", env.RPCID, query.RPCID)
+	}
 	return &env, nil
 }
 
@@ -291,6 +294,9 @@ func (n *NATSClient) QueryDeviceStatus(ctx context.Context, query *contracts.Clo
 	}
 	if status.Target != n.target {
 		return nil, fmt.Errorf("target mismatch in status response: got %q, expected %q", status.Target, n.target)
+	}
+	if status.RPCID != query.RPCID {
+		return nil, fmt.Errorf("rpc_id mismatch in status response: got %q, expected %q", status.RPCID, query.RPCID)
 	}
 	return &status, nil
 }
@@ -460,6 +466,12 @@ func (n *NATSClient) GetDesiredConfigMetadata(ctx context.Context) (uint64, stri
 	var record agentcore.DesiredConfigRecord
 	if err := json.Unmarshal(entry.Value(), &record); err != nil {
 		return 0, "", fmt.Errorf("failed to decode DesiredConfigRecord: %w", err)
+	}
+	if err := contracts.ValidateDesiredConfigRecord(&record); err != nil {
+		return 0, "", fmt.Errorf("invalid stored DesiredConfigRecord: %w", err)
+	}
+	if record.Target != n.target {
+		return 0, "", fmt.Errorf("target mismatch in stored config: got %q, expected %q", record.Target, n.target)
 	}
 
 	return entry.Revision(), record.UUID, nil

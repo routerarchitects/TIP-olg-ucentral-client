@@ -115,8 +115,12 @@ func NewNATSClient(cfg config.NATSConfig, onStateChange func(contracts.LinkState
 	}, nil
 }
 
-// PublishConfigTrigger publishes a configuration trigger to the NATS bus.
+// PublishConfigTrigger publishes a notification to the target device indicating that a new configuration is available.
 func (n *NATSClient) PublishConfigTrigger(ctx context.Context, cmd *agentcore.ConfigureNotification) error {
+	if cmd == nil {
+		return errors.New("command cannot be nil")
+	}
+
 	if err := contracts.ValidateConfigureNotification(cmd); err != nil {
 		return fmt.Errorf("invalid ConfigureNotification: %w", err)
 	}
@@ -139,8 +143,12 @@ func (n *NATSClient) PublishConfigTrigger(ctx context.Context, cmd *agentcore.Co
 	return n.conn.FlushWithContext(ctx)
 }
 
-// ExecuteAction publishes an action command to the NATS bus.
+// ExecuteAction publishes an action command (e.g., reboot, factory-reset) to the target device.
 func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *agentcore.ActionCommand) error {
+	if cmd == nil {
+		return errors.New("command cannot be nil")
+	}
+
 	if err := contracts.ValidateActionCommand(cmd); err != nil {
 		return fmt.Errorf("invalid ActionCommand: %w", err)
 	}
@@ -307,6 +315,10 @@ func (n *NATSClient) getKV(ctx context.Context) (jetstream.KeyValue, error) {
 
 // WriteDesiredConfig writes the desired configuration to the JetStream KeyValue store.
 func (n *NATSClient) WriteDesiredConfig(ctx context.Context, record agentcore.DesiredConfigRecord) (uint64, error) {
+	if record.Target != n.target {
+		return 0, fmt.Errorf("target mismatch: got %q, expected %q", record.Target, n.target)
+	}
+
 	kv, err := n.getKV(ctx)
 	if err != nil {
 		return 0, err
@@ -342,5 +354,10 @@ func (n *NATSClient) GetDesiredConfigMetadata(ctx context.Context) (uint64, stri
 	}
 
 	// The metadata string could be a hash, for now we can just return the string format of the revision
-	return entry.Revision(), fmt.Sprintf("%d", entry.Revision()), nil
+	var record agentcore.DesiredConfigRecord
+	if err := json.Unmarshal(entry.Value(), &record); err != nil {
+		return 0, "", fmt.Errorf("failed to decode DesiredConfigRecord: %w", err)
+	}
+
+	return entry.Revision(), record.UUID, nil
 }

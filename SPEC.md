@@ -1162,7 +1162,7 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
 
     ```
 
-The uCentral client must not register a NATS responder for `ucentral.v1.device.<target>.status.get`. This subject is queried by the uCentral client and served by the downstream device/local agent.
+The uCentral client must not register a NATS responder for `status.get.<target>`. This subject is queried by the uCentral client and served by the downstream device/local agent.
 
 #### PR 4.3: Dynamic Capabilities & Local Signal Sockets
 *   **Target File:** `pkg/nats/capabilities.go`

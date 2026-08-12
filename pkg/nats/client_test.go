@@ -264,7 +264,7 @@ func TestNATSClient_ConcurrentKVInit(t *testing.T) {
 		wg.Add(2)
 		go func(idx int) {
 			defer wg.Done()
-			_, err := client.WriteDesiredConfig(context.Background(), agentcore.DesiredConfigRecord{})
+			_, err := client.WriteDesiredConfig(context.Background(), agentcore.DesiredConfigRecord{Target: "vyos"})
 			if err != nil {
 				errCh <- err
 			}
@@ -325,6 +325,22 @@ func TestNATSClient_TargetIsolation_TC_SEC_001(t *testing.T) {
 	err = client.PublishConfigTrigger(context.Background(), cmdConfig)
 	if err == nil {
 		t.Errorf("Expected PublishConfigTrigger to fail with target mismatch, got nil")
+	} else if !strings.Contains(err.Error(), "target mismatch") {
+		t.Errorf("Expected target mismatch error, got: %v", err)
+	}
+
+	// 3. Test WriteDesiredConfig mismatch
+	record := agentcore.DesiredConfigRecord{
+		Version:   "1.0",
+		RPCID:     "test-rpc-12345",
+		Target:    "router-b",
+		UUID:      "123456789",
+		Timestamp: time.Now(),
+		Payload:   []byte(`{"some":"config"}`),
+	}
+	_, err = client.WriteDesiredConfig(context.Background(), record)
+	if err == nil {
+		t.Errorf("Expected WriteDesiredConfig to fail with target mismatch, got nil")
 	} else if !strings.Contains(err.Error(), "target mismatch") {
 		t.Errorf("Expected target mismatch error, got: %v", err)
 	}

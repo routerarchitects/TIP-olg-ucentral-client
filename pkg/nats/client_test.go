@@ -2,6 +2,16 @@ package nats
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"fmt"
+	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -12,6 +22,7 @@ import (
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/nats-io/nkeys"
 	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/config"
 )
 
@@ -85,6 +96,15 @@ W4O2v2e+V4M9K5B1z5e+K9S+Z+A+J8m8Z+C1n4o+R7c8W4X9D9y9M6O4+Y9V6X8Q
 			name: "missing servers",
 			cfg: config.NATSConfig{
 				Servers:         []string{},
+				CredentialsFile: validCredsFile,
+				CAFile:          validCAFile,
+			},
+			wantErr: true,
+		},
+		{
+			name: "insecure server url",
+			cfg: config.NATSConfig{
+				Servers:         []string{"nats://127.0.0.1:4222"},
 				CredentialsFile: validCredsFile,
 				CAFile:          validCAFile,
 			},
@@ -237,5 +257,122 @@ func TestNATSClient_ConcurrentKVInit(t *testing.T) {
 
 	for err := range errCh {
 		t.Errorf("Concurrent KV operation failed: %v", err)
+	}
+}
+
+func TestNATSClient_TargetIsolation_TC_SEC_001(t *testing.T) {
+	// A live connection isn't strictly necessary since validation happens before publish,
+	// but we construct a dummy client here.
+	client := &NATSClient{
+		target: "router-a",
+	}
+
+	// 1. Test ExecuteAction mismatch
+	cmdAction := &agentcore.ActionCommand{
+		Target: "router-b",
+		Action: "reboot",
+	}
+	err := client.ExecuteAction(context.Background(), cmdAction)
+	if err == nil {
+		t.Errorf("Expected ExecuteAction to fail with target mismatch, got nil")
+	}
+
+	// 2. Test PublishConfigTrigger mismatch
+	cmdConfig := &agentcore.ConfigureNotification{
+		Target: "router-b",
+	}
+	err = client.PublishConfigTrigger(context.Background(), cmdConfig)
+	if err == nil {
+		t.Errorf("Expected PublishConfigTrigger to fail with target mismatch, got nil")
+	}
+}
+
+func TestNewNATSClient_SecurityWiring_Success(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// 1. Generate TLS Certificates
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("Failed to generate private key: %v", err)
+	}
+
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{Organization: []string{"Test"}},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+	}
+
+	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+	if err != nil {
+		t.Fatalf("Failed to create certificate: %v", err)
+	}
+
+	caFile := filepath.Join(tmpDir, "ca.pem")
+	certOut, _ := os.Create(caFile)
+	pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
+	certOut.Close()
+
+	keyFile := filepath.Join(tmpDir, "key.pem")
+	keyOut, _ := os.Create(keyFile)
+	privBytes, _ := x509.MarshalECPrivateKey(priv)
+	pem.Encode(keyOut, &pem.Block{Type: "EC PRIVATE KEY", Bytes: privBytes})
+	keyOut.Close()
+
+	// 2. Start NATS Server with TLS enforced
+	cert, err := tls.LoadX509KeyPair(caFile, keyFile)
+	if err != nil {
+		t.Fatalf("Failed to load key pair: %v", err)
+	}
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS13,
+	}
+
+	opts := &server.Options{
+		Host:      "127.0.0.1",
+		Port:      -1,
+		TLSConfig: tlsConfig,
+		JetStream: true,
+		StoreDir:  t.TempDir(),
+	}
+
+	s, err := server.NewServer(opts)
+	if err != nil {
+		t.Fatalf("Failed to start NATS server: %v", err)
+	}
+	go s.Start()
+	if !s.ReadyForConnections(5 * time.Second) {
+		t.Fatalf("NATS server failed to start")
+	}
+	defer s.Shutdown()
+
+	// 3. Generate Valid NKey Credentials File
+	kp, _ := nkeys.CreateUser()
+	seed, _ := kp.Seed()
+	credsFile := filepath.Join(tmpDir, "user.creds")
+	credsContent := fmt.Sprintf("-----BEGIN USER NKEY SEED-----\n%s\n------END USER NKEY SEED------", string(seed))
+	os.WriteFile(credsFile, []byte(credsContent), 0644)
+
+	// 4. Construct Client config
+	cfg := config.NATSConfig{
+		Target:          "vyos",
+		Servers:         []string{fmt.Sprintf("tls://%s", s.Addr().String())},
+		CredentialsFile: credsFile,
+		CAFile:          caFile,
+	}
+
+	// 5. Connect and Validate
+	client, err := NewNATSClient(cfg, nil)
+	if err != nil {
+		t.Fatalf("Expected successful secure connection, got error: %v", err)
+	}
+	if client == nil {
+		t.Fatalf("Expected valid client")
 	}
 }

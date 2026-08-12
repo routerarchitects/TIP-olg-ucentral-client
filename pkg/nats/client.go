@@ -165,8 +165,19 @@ func (n *NATSClient) SubscribeResults(serial string, handler func(msg *nats.Msg)
 
 // QueryCapabilities performs a synchronous request to fetch the device capabilities.
 func (n *NATSClient) QueryCapabilities(ctx context.Context, query *contracts.CloudCapabilitiesQuery) (*agentcore.ResultEnvelope, error) {
+	if query == nil {
+		return nil, fmt.Errorf("invalid capabilities query: query cannot be nil")
+	}
+	if err := query.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid capabilities query: %w", err)
+	}
+	payload, err := json.Marshal(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal capabilities query: %w", err)
+	}
+
 	subject := fmt.Sprintf("capabilities.get.%s", n.target)
-	msg, err := n.conn.RequestWithContext(ctx, subject, []byte("{}"))
+	msg, err := n.conn.RequestWithContext(ctx, subject, payload)
 	if err != nil {
 		return nil, fmt.Errorf("request to %s failed: %w", subject, err)
 	}
@@ -180,8 +191,19 @@ func (n *NATSClient) QueryCapabilities(ctx context.Context, query *contracts.Clo
 
 // QueryDeviceStatus performs a synchronous request to fetch the device status.
 func (n *NATSClient) QueryDeviceStatus(ctx context.Context, query *contracts.CloudDeviceStatusQuery) (*contracts.DeviceStatus, error) {
+	if query == nil {
+		return nil, fmt.Errorf("invalid status query: query cannot be nil")
+	}
+	if err := query.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid status query: %w", err)
+	}
+	payload, err := json.Marshal(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal status query: %w", err)
+	}
+
 	subject := fmt.Sprintf("status.get.%s", n.target)
-	msg, err := n.conn.RequestWithContext(ctx, subject, []byte("{}"))
+	msg, err := n.conn.RequestWithContext(ctx, subject, payload)
 	if err != nil {
 		return nil, fmt.Errorf("request to %s failed: %w", subject, err)
 	}

@@ -56,6 +56,7 @@ type CloudConfig struct {
 }
 
 type NATSConfig struct {
+	Target          string   `json:"target,omitempty"`
 	Servers         []string `json:"servers"`
 	CredentialsFile string   `json:"credentials_file"`
 	CAFile          string   `json:"ca_file"`

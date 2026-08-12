@@ -29,7 +29,7 @@ type NATSClient struct {
 // NewNATSClient initializes a NATS connection.
 // SECURITY CONTRACT: This constructor MUST enforce tls.Config{MinVersion: tls.VersionTLS13}.
 // It must return a fatal error if CAFile is empty, or if any Server URL is insecure.
-func NewNATSClient(target string, cfg config.NATSConfig, onStateChange func(contracts.LinkState)) (*NATSClient, error) {
+func NewNATSClient(cfg config.NATSConfig, onStateChange func(contracts.LinkState)) (*NATSClient, error) {
 	if cfg.CAFile == "" {
 		return nil, errors.New("nats: fatal: CAFile is required")
 	}
@@ -103,7 +103,7 @@ func NewNATSClient(target string, cfg config.NATSConfig, onStateChange func(cont
 	// For now, we return the client. The KV binding might happen later or in a specific method.
 
 	return &NATSClient{
-		target: target,
+		target: cfg.Target,
 		conn:   conn,
 		js:     js,
 	}, nil
@@ -164,8 +164,8 @@ func (n *NATSClient) SubscribeResults(serial string, handler func(msg *nats.Msg)
 }
 
 // QueryCapabilities performs a synchronous request to fetch the device capabilities.
-func (n *NATSClient) QueryCapabilities(ctx context.Context, query *contracts.CloudCapabilitiesQuery, targetSerial string) (*agentcore.ResultEnvelope, error) {
-	subject := fmt.Sprintf("capabilities.get.%s", targetSerial)
+func (n *NATSClient) QueryCapabilities(ctx context.Context, query *contracts.CloudCapabilitiesQuery) (*agentcore.ResultEnvelope, error) {
+	subject := fmt.Sprintf("capabilities.get.%s", n.target)
 	msg, err := n.conn.RequestWithContext(ctx, subject, []byte("{}"))
 	if err != nil {
 		return nil, fmt.Errorf("request to %s failed: %w", subject, err)
@@ -179,8 +179,8 @@ func (n *NATSClient) QueryCapabilities(ctx context.Context, query *contracts.Clo
 }
 
 // QueryDeviceStatus performs a synchronous request to fetch the device status.
-func (n *NATSClient) QueryDeviceStatus(ctx context.Context, query *contracts.CloudDeviceStatusQuery, targetSerial string) (*contracts.DeviceStatus, error) {
-	subject := fmt.Sprintf("status.get.%s", targetSerial)
+func (n *NATSClient) QueryDeviceStatus(ctx context.Context, query *contracts.CloudDeviceStatusQuery) (*contracts.DeviceStatus, error) {
+	subject := fmt.Sprintf("status.get.%s", n.target)
 	msg, err := n.conn.RequestWithContext(ctx, subject, []byte("{}"))
 	if err != nil {
 		return nil, fmt.Errorf("request to %s failed: %w", subject, err)
@@ -194,26 +194,26 @@ func (n *NATSClient) QueryDeviceStatus(ctx context.Context, query *contracts.Clo
 }
 
 // SubscribeTelemetry subscribes to local device telemetry.
-func (n *NATSClient) SubscribeTelemetry(serial string, handler func(msg *nats.Msg)) (*nats.Subscription, error) {
-	subject := fmt.Sprintf("telemetry.%s", serial)
+func (n *NATSClient) SubscribeTelemetry(handler func(msg *nats.Msg)) (*nats.Subscription, error) {
+	subject := fmt.Sprintf("telemetry.%s", n.target)
 	return n.conn.Subscribe(subject, handler)
 }
 
 // SubscribeLogs subscribes to local device logs.
-func (n *NATSClient) SubscribeLogs(serial string, handler func(msg *nats.Msg)) (*nats.Subscription, error) {
-	subject := fmt.Sprintf("logs.%s", serial)
+func (n *NATSClient) SubscribeLogs(handler func(msg *nats.Msg)) (*nats.Subscription, error) {
+	subject := fmt.Sprintf("logs.%s", n.target)
 	return n.conn.Subscribe(subject, handler)
 }
 
 // SubscribeHealth subscribes to local device health reports.
-func (n *NATSClient) SubscribeHealth(serial string, handler func(msg *nats.Msg)) (*nats.Subscription, error) {
-	subject := fmt.Sprintf("health.%s", serial)
+func (n *NATSClient) SubscribeHealth(handler func(msg *nats.Msg)) (*nats.Subscription, error) {
+	subject := fmt.Sprintf("health.%s", n.target)
 	return n.conn.Subscribe(subject, handler)
 }
 
 // SubscribeState subscribes to local device state changes.
-func (n *NATSClient) SubscribeState(serial string, handler func(msg *nats.Msg)) (*nats.Subscription, error) {
-	subject := fmt.Sprintf("status.%s", serial)
+func (n *NATSClient) SubscribeState(handler func(msg *nats.Msg)) (*nats.Subscription, error) {
+	subject := fmt.Sprintf("status.%s", n.target)
 	return n.conn.Subscribe(subject, handler)
 }
 
@@ -238,13 +238,13 @@ func (n *NATSClient) getKV(ctx context.Context) (jetstream.KeyValue, error) {
 }
 
 // WriteDesiredConfig writes the desired configuration to the JetStream KeyValue store.
-func (n *NATSClient) WriteDesiredConfig(ctx context.Context, serial string, config []byte) (uint64, error) {
+func (n *NATSClient) WriteDesiredConfig(ctx context.Context, config []byte) (uint64, error) {
 	kv, err := n.getKV(ctx)
 	if err != nil {
 		return 0, err
 	}
 
-	key := fmt.Sprintf("desired.%s", serial)
+	key := fmt.Sprintf("desired.%s", n.target)
 	rev, err := kv.Put(ctx, key, config)
 	if err != nil {
 		return 0, fmt.Errorf("failed to write config to KV: %w", err)
@@ -253,13 +253,13 @@ func (n *NATSClient) WriteDesiredConfig(ctx context.Context, serial string, conf
 }
 
 // GetDesiredConfigMetadata retrieves the metadata of the desired configuration from the JetStream KeyValue store.
-func (n *NATSClient) GetDesiredConfigMetadata(ctx context.Context, serial string) (uint64, string, error) {
+func (n *NATSClient) GetDesiredConfigMetadata(ctx context.Context) (uint64, string, error) {
 	kv, err := n.getKV(ctx)
 	if err != nil {
 		return 0, "", err
 	}
 
-	key := fmt.Sprintf("desired.%s", serial)
+	key := fmt.Sprintf("desired.%s", n.target)
 	entry, err := kv.Get(ctx, key)
 	if err != nil {
 		if errors.Is(err, jetstream.ErrKeyNotFound) {

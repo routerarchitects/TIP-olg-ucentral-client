@@ -2,7 +2,6 @@ package nats
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -95,7 +94,7 @@ W4O2v2e+V4M9K5B1z5e+K9S+Z+A+J8m8Z+C1n4o+R7c8W4X9D9y9M6O4+Y9V6X8Q
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewNATSClient("vyos", tt.cfg, nil)
+			_, err := NewNATSClient(tt.cfg, nil)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("NewNATSClient() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -218,7 +217,7 @@ func TestNATSClient_ConcurrentKVInit(t *testing.T) {
 		wg.Add(2)
 		go func(idx int) {
 			defer wg.Done()
-			_, err := client.WriteDesiredConfig(context.Background(), fmt.Sprintf("serial-%d", idx), []byte("{}"))
+			_, err := client.WriteDesiredConfig(context.Background(), []byte("{}"))
 			if err != nil {
 				errCh <- err
 			}
@@ -226,7 +225,7 @@ func TestNATSClient_ConcurrentKVInit(t *testing.T) {
 
 		go func(idx int) {
 			defer wg.Done()
-			_, _, err := client.GetDesiredConfigMetadata(context.Background(), fmt.Sprintf("serial-%d", idx))
+			_, _, err := client.GetDesiredConfigMetadata(context.Background())
 			if err != nil {
 				errCh <- err
 			}

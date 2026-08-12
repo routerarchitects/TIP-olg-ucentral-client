@@ -1141,7 +1141,7 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     // NewNATSClient initializes a NATS connection.
     // SECURITY CONTRACT: This constructor MUST enforce tls.Config{MinVersion: tls.VersionTLS13}.
     // It must return a fatal error if CAFile is empty, or if any Server URL is insecure.
-    func NewNATSClient(target string, cfg config.NATSConfig, onStateChange func(contracts.LinkState)) (*NATSClient, error)
+    func NewNATSClient(cfg config.NATSConfig, onStateChange func(contracts.LinkState)) (*NATSClient, error)
 
     func (n *NATSClient) PublishConfigTrigger(ctx context.Context, cmd *agentcore.ConfigureNotification) error
     func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *agentcore.ActionCommand) error
@@ -1155,12 +1155,12 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     func (n *NATSClient) QueryDeviceStatus(ctx context.Context, query *contracts.CloudDeviceStatusQuery) (*contracts.DeviceStatus, error)
 
     // Streaming & Data Subscriptions
-    func (n *NATSClient) SubscribeTelemetry(serial string, handler func(msg *nats.Msg)) (*nats.Subscription, error)
-    func (n *NATSClient) SubscribeLogs(serial string, handler func(msg *nats.Msg)) (*nats.Subscription, error)
-    func (n *NATSClient) SubscribeHealth(serial string, handler func(msg *nats.Msg)) (*nats.Subscription, error)
-    func (n *NATSClient) SubscribeState(serial string, handler func(msg *nats.Msg)) (*nats.Subscription, error)
-    func (n *NATSClient) WriteDesiredConfig(ctx context.Context, serial string, config []byte) (uint64, error)
-    func (n *NATSClient) GetDesiredConfigMetadata(ctx context.Context, serial string) (uint64, string, error)
+    func (n *NATSClient) SubscribeTelemetry(handler func(msg *nats.Msg)) (*nats.Subscription, error)
+    func (n *NATSClient) SubscribeLogs(handler func(msg *nats.Msg)) (*nats.Subscription, error)
+    func (n *NATSClient) SubscribeHealth(handler func(msg *nats.Msg)) (*nats.Subscription, error)
+    func (n *NATSClient) SubscribeState(handler func(msg *nats.Msg)) (*nats.Subscription, error)
+    func (n *NATSClient) WriteDesiredConfig(ctx context.Context, config []byte) (uint64, error)
+    func (n *NATSClient) GetDesiredConfigMetadata(ctx context.Context) (uint64, string, error)
     
 
     ```

@@ -95,7 +95,7 @@ W4O2v2e+V4M9K5B1z5e+K9S+Z+A+J8m8Z+C1n4o+R7c8W4X9D9y9M6O4+Y9V6X8Q
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewNATSClient(tt.cfg, nil)
+			_, err := NewNATSClient("vyos", tt.cfg, nil)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("NewNATSClient() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -131,7 +131,8 @@ func TestExecuteAction_FailsFastWhenDisconnected(t *testing.T) {
 	defer conn.Close()
 
 	client := &NATSClient{
-		conn: conn,
+		target: "vyos",
+		conn:   conn,
 	}
 
 	// 3. Brutally shutdown the server to force the connection to drop
@@ -164,7 +165,7 @@ func TestExecuteAction_FailsFastWhenDisconnected(t *testing.T) {
 		Target:      "vyos",
 		Action:      "reboot",
 		Timestamp:   time.Now().UTC(),
-		Payload:     []byte(`{"serial":"vyos"}`),
+		Payload:     []byte("{\"serial\":\"vyos\"}"),
 	}
 
 	err = client.ExecuteAction(context.Background(), cmd)
@@ -204,8 +205,9 @@ func TestNATSClient_ConcurrentKVInit(t *testing.T) {
 	}
 
 	client := &NATSClient{
-		conn: conn,
-		js:   js,
+		target: "vyos",
+		conn:   conn,
+		js:     js,
 	}
 
 	// 3. Concurrently call KV methods to trigger race condition on initialization

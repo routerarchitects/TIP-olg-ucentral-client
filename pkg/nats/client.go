@@ -19,16 +19,17 @@ import (
 )
 
 type NATSClient struct {
-	conn *nats.Conn
-	js   jetstream.JetStream
-	kv   jetstream.KeyValue
+	target string
+	conn   *nats.Conn
+	js     jetstream.JetStream
+	kv     jetstream.KeyValue
 	kvMu sync.Mutex
 }
 
 // NewNATSClient initializes a NATS connection.
 // SECURITY CONTRACT: This constructor MUST enforce tls.Config{MinVersion: tls.VersionTLS13}.
 // It must return a fatal error if CAFile is empty, or if any Server URL is insecure.
-func NewNATSClient(cfg config.NATSConfig, onStateChange func(contracts.LinkState)) (*NATSClient, error) {
+func NewNATSClient(target string, cfg config.NATSConfig, onStateChange func(contracts.LinkState)) (*NATSClient, error) {
 	if cfg.CAFile == "" {
 		return nil, errors.New("nats: fatal: CAFile is required")
 	}
@@ -102,8 +103,9 @@ func NewNATSClient(cfg config.NATSConfig, onStateChange func(contracts.LinkState
 	// For now, we return the client. The KV binding might happen later or in a specific method.
 
 	return &NATSClient{
-		conn: conn,
-		js:   js,
+		target: target,
+		conn:   conn,
+		js:     js,
 	}, nil
 }
 
@@ -117,7 +119,10 @@ func (n *NATSClient) PublishConfigTrigger(ctx context.Context, cmd *agentcore.Co
 		return fmt.Errorf("failed to marshal ConfigureNotification: %w", err)
 	}
 
-	subject := fmt.Sprintf("cmd.configure.%s", cmd.Target)
+	if cmd.Target != n.target {
+		return fmt.Errorf("target mismatch: got %q, expected %q", cmd.Target, n.target)
+	}
+	subject := fmt.Sprintf("cmd.configure.%s", n.target)
 	msg := &nats.Msg{
 		Subject: subject,
 		Data:    payload,
@@ -138,7 +143,10 @@ func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *agentcore.ActionCom
 		return fmt.Errorf("failed to marshal ActionCommand: %w", err)
 	}
 
-	subject := fmt.Sprintf("cmd.action.%s.%s", cmd.Target, cmd.Action)
+	if cmd.Target != n.target {
+		return fmt.Errorf("target mismatch: got %q, expected %q", cmd.Target, n.target)
+	}
+	subject := fmt.Sprintf("cmd.action.%s.%s", n.target, cmd.Action)
 	msg := &nats.Msg{
 		Subject: subject,
 		Data:    payload,

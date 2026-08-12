@@ -232,6 +232,9 @@ func (n *NATSClient) QueryCapabilities(ctx context.Context, query *contracts.Clo
 	if err := query.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid capabilities query: %w", err)
 	}
+	if query.Target != n.target {
+		return nil, fmt.Errorf("target mismatch: got %q, expected %q", query.Target, n.target)
+	}
 	payload, err := json.Marshal(query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal capabilities query: %w", err)
@@ -273,6 +276,9 @@ func (n *NATSClient) QueryDeviceStatus(ctx context.Context, query *contracts.Clo
 	}
 	if err := query.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid status query: %w", err)
+	}
+	if query.Target != n.target {
+		return nil, fmt.Errorf("target mismatch: got %q, expected %q", query.Target, n.target)
 	}
 	payload, err := json.Marshal(query)
 	if err != nil {

@@ -254,7 +254,7 @@ func ValidateStatusEnvelope(s *agentcore.StatusEnvelope) error {
 	if s.Version != EnvelopeVersion {
 		return fmt.Errorf("unsupported envelope version: %q", s.Version)
 	}
-	if s.RPCID == "" || s.Target == "" || s.Status == "" || s.Timestamp.IsZero() {
+	if s.Target == "" || s.Status == "" || s.Timestamp.IsZero() {
 		return errors.New("missing required fields in StatusEnvelope")
 	}
 	return nil

@@ -220,13 +220,18 @@ func (q *QueueConfig) Validate() error {
 }
 
 func (c *Config) Validate() error {
+	c.Serial = strings.TrimSpace(c.Serial)
 	if c.Serial == "" {
 		return fmt.Errorf("serial is required")
 	}
+	c.NATS.Target = strings.TrimSpace(c.NATS.Target)
 	if c.NATS.Target == "" {
 		c.NATS.Target = c.Serial
 	}
-	if strings.Contains(c.NATS.Target, ">") || strings.Contains(c.NATS.Target, "*") || strings.Contains(c.NATS.Target, ".") {
+	if strings.ContainsAny(c.NATS.Target, " \t\r\n") {
+		return fmt.Errorf("nats target must not contain whitespace")
+	}
+	if strings.ContainsAny(c.NATS.Target, ">*.") {
 		return fmt.Errorf("nats target must not contain wildcards or dots")
 	}
 	if err := c.Cloud.Validate(); err != nil {

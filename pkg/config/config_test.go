@@ -1,121 +1,285 @@
 package config
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 )
 
-func generateTestCertAndKey(t *testing.T, certPath, keyPath string) {
-	t.Helper()
-	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+func TestTC_RM_005_OperationSpecificCacheTTLs(t *testing.T) {
+	// Clean up environment variables after test
+	t.Cleanup(func() {
+		os.Unsetenv("OLG_CACHE_TTL_CONFIGURE")
+		os.Unsetenv("OLG_CACHE_TTL_REMOTE_ACCESS")
+		os.Unsetenv("OLG_CACHE_TTL_INVALID")
+	})
+
+	// Test Defaults
+	cfg, err := LoadCacheTTLConfigFromEnv()
 	if err != nil {
-		t.Fatalf("Failed to generate private key: %v", err)
+		t.Fatalf("LoadCacheTTLConfigFromEnv (defaults) failed: %v", err)
+	}
+	if cfg.Configure != 300 { // 5 minutes
+		t.Errorf("Expected Configure TTL 300, got %v", cfg.Configure)
+	}
+	if cfg.LEDs != 300 {
+		t.Errorf("Expected LEDs TTL 300, got %v", cfg.LEDs)
+	}
+	if cfg.Reboot != 600 { // 10 minutes
+		t.Errorf("Expected Reboot TTL 600, got %v", cfg.Reboot)
+	}
+	if cfg.RemoteAccess != 600 {
+		t.Errorf("Expected RemoteAccess TTL 600, got %v", cfg.RemoteAccess)
+	}
+	if cfg.Factory != 1800 { // 30 minutes
+		t.Errorf("Expected Factory TTL 1800, got %v", cfg.Factory)
+	}
+	if cfg.Certupdate != 1800 {
+		t.Errorf("Expected Certupdate TTL 1800, got %v", cfg.Certupdate)
+	}
+	if cfg.Reenroll != 1800 {
+		t.Errorf("Expected Reenroll TTL 1800, got %v", cfg.Reenroll)
+	}
+	if cfg.Script != 1800 {
+		t.Errorf("Expected Script TTL 1800, got %v", cfg.Script)
+	}
+	if cfg.Upgrade != 3600 { // 60 minutes
+		t.Errorf("Expected Upgrade TTL 3600, got %v", cfg.Upgrade)
+	}
+	if cfg.Default != 120 { // 2 minutes
+		t.Errorf("Expected Default TTL 120, got %v", cfg.Default)
 	}
 
+	// Test Overrides
+	os.Setenv("OLG_CACHE_TTL_CONFIGURE", "1h")
+	os.Setenv("OLG_CACHE_TTL_REMOTE_ACCESS", "30m")
+
+	cfg2, err := LoadCacheTTLConfigFromEnv()
+	if err != nil {
+		t.Fatalf("LoadCacheTTLConfigFromEnv (overrides) failed: %v", err)
+	}
+	if cfg2.Configure != 3600 {
+		t.Errorf("Expected Configure TTL 3600, got %v", cfg2.Configure)
+	}
+	if cfg2.RemoteAccess != 1800 {
+		t.Errorf("Expected RemoteAccess TTL 1800, got %v", cfg2.RemoteAccess)
+	}
+
+	// Test Invalid Override
+	os.Setenv("OLG_CACHE_TTL_CONFIGURE", "-5m")
+	if _, err = LoadCacheTTLConfigFromEnv(); err == nil {
+		t.Error("Expected error for negative duration, got nil")
+	}
+
+	// Test Sub-Second Rejections
+	subSecondTests := []string{"500ms", "1ns", "999ms"}
+	for _, val := range subSecondTests {
+		os.Setenv("OLG_CACHE_TTL_CONFIGURE", val)
+		if _, err = LoadCacheTTLConfigFromEnv(); err == nil {
+			t.Errorf("Expected error for sub-second duration %q, got nil", val)
+		}
+	}
+
+	// Test exactly 1s
+	os.Setenv("OLG_CACHE_TTL_CONFIGURE", "1s")
+	cfg3, err := LoadCacheTTLConfigFromEnv()
+	if err != nil {
+		t.Fatalf("LoadCacheTTLConfigFromEnv failed for 1s: %v", err)
+	}
+	if cfg3.Configure != 1 {
+		t.Errorf("Expected Configure TTL 1s, got %v", cfg3.Configure)
+	}
+}
+
+func TestTTLForMethod(t *testing.T) {
+	cfg := CacheTTLConfig{
+		Configure:    10,
+		RemoteAccess: 20,
+		Default:      30,
+	}
+
+	if ttl := cfg.TTLForMethod("configure"); ttl != 10 {
+		t.Errorf("Expected 10s for configure, got %v", ttl)
+	}
+
+	if ttl := cfg.TTLForMethod("remote_access"); ttl != 20 {
+		t.Errorf("Expected 20s for remote_access, got %v", ttl)
+	}
+
+	if ttl := cfg.TTLForMethod("remoteaccess"); ttl != 20 {
+		t.Errorf("Expected 20s for remoteaccess, got %v", ttl)
+	}
+
+	for _, method := range []string{
+		"ping",
+		"trace",
+		"telemetry",
+		"capabilities.get",
+		"status.get",
+		"unknown_method",
+	} {
+		if ttl := cfg.TTLForMethod(method); ttl != cfg.Default {
+			t.Errorf("TTLForMethod(%q) = %v, want %v", method, ttl, cfg.Default)
+		}
+	}
+}
+
+func TestConfig_Validation(t *testing.T) {
+	tmpDir := t.TempDir()
+	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject: pkix.Name{
-			Organization: []string{"Acme Co"},
-		},
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{Organization: []string{"Test"}},
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().Add(time.Hour),
 		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 	}
+	derBytes, _ := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
 
-	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
-	if err != nil {
-		t.Fatalf("Failed to create certificate: %v", err)
+	keyBytes, _ := x509.MarshalECPrivateKey(priv)
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyBytes})
+
+	createTempFile := func(name string, content []byte) string {
+		path := tmpDir + "/" + name
+		os.WriteFile(path, content, 0644)
+		return path
+	}
+	caFile := createTempFile("ca.pem", certPEM)
+	certFile := createTempFile("cert.pem", certPEM)
+	keyFile := createTempFile("key.pem", keyPEM)
+	credsFile := createTempFile("creds.creds", []byte("dummy-jwt-or-creds"))
+
+	validTLS := CloudTLSConfig{
+		CAFile:         caFile,
+		ClientCertFile: certFile,
+		ClientKeyFile:  keyFile,
+	}
+	validCloud := CloudConfig{
+		URL:                           "wss://cloud.example.com",
+		ConnectTimeoutSeconds:         10,
+		WriteTimeoutSeconds:           10,
+		PingIntervalSeconds:           10,
+		PongTimeoutSeconds:            10,
+		StableSessionThresholdSeconds: 10,
+		CompressionThresholdBytes:     1024,
+		TLS:                           validTLS,
+	}
+	validNATS := NATSConfig{
+		Servers:         []string{"tls://nats.example.com"},
+		CredentialsFile: credsFile,
+		CAFile:          caFile,
+	}
+	validQueues := QueueConfig{
+		WSWriterCapacity:      100,
+		EmergencyCapacity:     100,
+		NATSPublishCapacity:   100,
+		CommandResultCapacity: 100,
+		TelemetryCapacity:     100,
 	}
 
-	certOut, err := os.Create(certPath)
-	if err != nil {
-		t.Fatalf("Failed to open cert file for writing: %v", err)
+	validConfig := Config{
+		Serial: "serial-123",
+		Cloud:  validCloud,
+		NATS:   validNATS,
+		Queues: validQueues,
 	}
-	defer certOut.Close()
-	pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
 
-	keyOut, err := os.Create(keyPath)
-	if err != nil {
-		t.Fatalf("Failed to open key file for writing: %v", err)
+	if err := validConfig.Validate(); err != nil {
+		t.Fatalf("Expected valid config to pass, got: %v", err)
 	}
-	defer keyOut.Close()
-	pem.Encode(keyOut, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
-}
+	if validConfig.NATS.Target != "serial-123" {
+		t.Fatalf("Expected derived target 'serial-123', got %v", validConfig.NATS.Target)
+	}
 
-func TestConfig_Validation(t *testing.T) {
-	tempDir := t.TempDir()
+	tests := []struct {
+		name string
+		mut  func(c *Config)
+	}{
+		{"Empty serial", func(c *Config) { c.Serial = "" }},
+		{"Malformed URL", func(c *Config) { c.Cloud.URL = "wss://" }},
+		{"Missing host URL", func(c *Config) { c.Cloud.URL = "wss:// invalid" }},
+		{"Invalid URL scheme", func(c *Config) { c.Cloud.URL = "ws://insecure" }},
+		{"Negative timeout", func(c *Config) { c.Cloud.ConnectTimeoutSeconds = -1 }},
+		{"Zero ping interval", func(c *Config) { c.Cloud.PingIntervalSeconds = 0 }},
+		{"Negative max frame size", func(c *Config) { c.Cloud.MaxFrameSizeBytes = -1 }},
+		{"Negative max consecutive errors", func(c *Config) { c.Cloud.MaxConsecutiveFrameErrors = -1 }},
+		{"Missing TLS CA", func(c *Config) { c.Cloud.TLS.CAFile = "/missing/ca.pem" }},
+		{"Directory TLS CA", func(c *Config) { c.Cloud.TLS.CAFile = tmpDir }},
+		{"Malformed NATS URL", func(c *Config) { c.NATS.Servers = []string{"tls://"} }},
+		{"Invalid NATS scheme", func(c *Config) { c.NATS.Servers = []string{"nats://localhost"} }},
+		{"Missing NATS CA", func(c *Config) { c.NATS.CAFile = "/missing/ca.pem" }},
+		{"Directory NATS CA", func(c *Config) { c.NATS.CAFile = tmpDir }},
+		{"Wildcard NATS target", func(c *Config) { c.NATS.Target = "foo.*" }},
+		{"Negative queue capacity", func(c *Config) { c.Queues.WSWriterCapacity = -100 }},
+		{"Zero queue capacity", func(c *Config) { c.Queues.TelemetryCapacity = 0 }},
+	}
 
-	certFile := filepath.Join(tempDir, "cert.pem")
-	keyFile := filepath.Join(tempDir, "key.pem")
-	caFile := filepath.Join(tempDir, "ca.pem")
-	caKeyFile := filepath.Join(tempDir, "cakey.pem")
-	credsFile := filepath.Join(tempDir, "user.creds")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig
+			// Deep copy the struct to avoid modifying validConfig for other tests
+			cfg.Cloud = validCloud
+			cfg.Cloud.TLS = validTLS
+			cfg.NATS = validNATS
+			cfg.NATS.Servers = []string{"tls://nats.example.com"}
+			cfg.Queues = validQueues
 
-	generateTestCertAndKey(t, certFile, keyFile)
-	generateTestCertAndKey(t, caFile, caKeyFile)
-	os.WriteFile(credsFile, []byte("fake-creds"), 0644)
+			tt.mut(&cfg)
+			if err := cfg.Validate(); err == nil {
+				t.Errorf("Expected error for %s", tt.name)
+			}
+		})
+	}
 
-	t.Run("Valid Config with derived Target", func(t *testing.T) {
-		cfg := Config{
-			Serial: "derived-router",
-			Cloud: CloudConfig{
-				URL:                           "wss://example.com",
-				ConnectTimeoutSeconds:         1,
-				WriteTimeoutSeconds:           1,
-				PingIntervalSeconds:           1,
-				PongTimeoutSeconds:            1,
-				StableSessionThresholdSeconds: 1,
-				CompressionThresholdBytes:     1,
-				MaxFrameSizeBytes:             1,
-				TLS: CloudTLSConfig{
-					CAFile:         caFile,
-					ClientCertFile: certFile,
-					ClientKeyFile:  keyFile,
-				},
-			},
-			NATS: NATSConfig{
-				Servers:         []string{"tls://127.0.0.1:4222"},
-				CredentialsFile: credsFile,
-				CAFile:          caFile,
-			},
-			Queues: QueueConfig{
-				WSWriterCapacity:      1,
-				EmergencyCapacity:     1,
-				NATSPublishCapacity:   1,
-				CommandResultCapacity: 1,
-				TelemetryCapacity:     1,
-			},
+	t.Run("Applies defaults to zero", func(t *testing.T) {
+		cfg := validConfig
+		cfg.Cloud = validCloud
+		cfg.Cloud.TLS = validTLS
+		cfg.NATS = validNATS
+		cfg.Queues = validQueues
+
+		cfg.Cloud.MaxFrameSizeBytes = 0
+		cfg.Cloud.MaxConsecutiveFrameErrors = 0
+
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validation failed: %v", err)
 		}
-
-		err := cfg.Validate()
-		if err != nil {
-			t.Errorf("expected no error, got %v", err)
+		if cfg.Cloud.MaxFrameSizeBytes != DefaultMaxFrameSizeBytes {
+			t.Errorf("Expected max frame size default %d, got %d", DefaultMaxFrameSizeBytes, cfg.Cloud.MaxFrameSizeBytes)
 		}
-		if cfg.NATS.Target != "derived-router" {
-			t.Errorf("expected target to be derived from serial 'derived-router', got %q", cfg.NATS.Target)
+		if cfg.Cloud.MaxConsecutiveFrameErrors != DefaultMaxConsecutiveFrameErrors {
+			t.Errorf("Expected max errors default %d, got %d", DefaultMaxConsecutiveFrameErrors, cfg.Cloud.MaxConsecutiveFrameErrors)
 		}
 	})
 
-	t.Run("Invalid NATS Target with wildcards", func(t *testing.T) {
-		cfg := Config{
-			Serial: "router1",
-			NATS: NATSConfig{
-				Target: "router.*",
-			},
+	t.Run("Preserves explicit overrides", func(t *testing.T) {
+		cfg := validConfig
+		cfg.Cloud = validCloud
+		cfg.Cloud.TLS = validTLS
+		cfg.NATS = validNATS
+		cfg.Queues = validQueues
+
+		cfg.Cloud.MaxFrameSizeBytes = 5000000
+		cfg.Cloud.MaxConsecutiveFrameErrors = 50
+
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validation failed: %v", err)
 		}
-		err := cfg.Validate()
-		if err == nil {
-			t.Errorf("expected error for invalid target with wildcard, got nil")
+		if cfg.Cloud.MaxFrameSizeBytes != 5000000 {
+			t.Errorf("Expected preserved max frame size 5000000, got %d", cfg.Cloud.MaxFrameSizeBytes)
+		}
+		if cfg.Cloud.MaxConsecutiveFrameErrors != 50 {
+			t.Errorf("Expected preserved max errors 50, got %d", cfg.Cloud.MaxConsecutiveFrameErrors)
 		}
 	})
 }

@@ -60,6 +60,8 @@ type NATSConfig struct {
 	Servers         []string `json:"servers"`
 	CredentialsFile string   `json:"credentials_file"`
 	CAFile          string   `json:"ca_file"`
+	ClientCertFile  string   `json:"client_cert_file,omitempty"`
+	ClientKeyFile   string   `json:"client_key_file,omitempty"`
 }
 
 type QueueConfig struct {
@@ -181,6 +183,18 @@ func (n *NATSConfig) Validate() error {
 	}
 	if len(natsCreds) == 0 {
 		return fmt.Errorf("nats credentials_file is empty")
+	}
+
+	if n.ClientCertFile != "" || n.ClientKeyFile != "" {
+		if err := checkFile(n.ClientCertFile, "nats client_cert_file"); err != nil {
+			return err
+		}
+		if err := checkFile(n.ClientKeyFile, "nats client_key_file"); err != nil {
+			return err
+		}
+		if _, err := tls.LoadX509KeyPair(n.ClientCertFile, n.ClientKeyFile); err != nil {
+			return fmt.Errorf("invalid nats client certificate or key: %w", err)
+		}
 	}
 
 	return nil

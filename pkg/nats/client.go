@@ -65,6 +65,14 @@ func NewNATSClient(cfg config.NATSConfig, onStateChange func(contracts.LinkState
 		RootCAs:    caCertPool,
 	}
 
+	if cfg.ClientCertFile != "" && cfg.ClientKeyFile != "" {
+		cert, err := tls.LoadX509KeyPair(cfg.ClientCertFile, cfg.ClientKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("nats: failed to load client cert: %w", err)
+		}
+		tlsConfig.Certificates = []tls.Certificate{cert}
+	}
+
 	opts := []nats.Option{
 		nats.UserCredentials(cfg.CredentialsFile),
 		nats.Secure(tlsConfig),
@@ -117,6 +125,13 @@ func NewNATSClient(cfg config.NATSConfig, onStateChange func(contracts.LinkState
 
 // PublishConfigTrigger publishes a notification to the target device indicating that a new configuration is available.
 func (n *NATSClient) PublishConfigTrigger(ctx context.Context, cmd *agentcore.ConfigureNotification) error {
+	if ctx == nil {
+		return errors.New("context cannot be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context canceled before publish: %w", err)
+	}
+
 	if cmd == nil {
 		return errors.New("command cannot be nil")
 	}
@@ -145,6 +160,13 @@ func (n *NATSClient) PublishConfigTrigger(ctx context.Context, cmd *agentcore.Co
 
 // ExecuteAction publishes an action command (e.g., reboot, factory-reset) to the target device.
 func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *agentcore.ActionCommand) error {
+	if ctx == nil {
+		return errors.New("context cannot be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context canceled before publish: %w", err)
+	}
+
 	if cmd == nil {
 		return errors.New("command cannot be nil")
 	}

@@ -21,8 +21,8 @@ import (
 	"time"
 
 	"github.com/Telecominfraproject/olg-nats-agent-core/agentcore"
-	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/jwt/v2"
+	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/nats-io/nkeys"
@@ -424,9 +424,9 @@ func TestNewNATSClient_SecurityWiring_Success(t *testing.T) {
 	}
 
 	opts := &server.Options{
-		Host:      "127.0.0.1",
-		Port:      -1,
-		TLSConfig: tlsConfig,
+		Host:        "127.0.0.1",
+		Port:        -1,
+		TLSConfig:   tlsConfig,
 		TrustedKeys: []string{opub},
 	}
 

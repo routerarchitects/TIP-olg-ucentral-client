@@ -65,7 +65,10 @@ func NewNATSClient(cfg config.NATSConfig, onStateChange func(contracts.LinkState
 		RootCAs:    caCertPool,
 	}
 
-	if cfg.ClientCertFile != "" && cfg.ClientKeyFile != "" {
+	if cfg.ClientCertFile != "" || cfg.ClientKeyFile != "" {
+		if cfg.ClientCertFile == "" || cfg.ClientKeyFile == "" {
+			return nil, errors.New("nats: fatal: both ClientCertFile and ClientKeyFile must be provided for mTLS")
+		}
 		cert, err := tls.LoadX509KeyPair(cfg.ClientCertFile, cfg.ClientKeyFile)
 		if err != nil {
 			return nil, fmt.Errorf("nats: failed to load client cert: %w", err)
@@ -195,6 +198,13 @@ func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *agentcore.ActionCom
 
 // SubscribeResults subscribes to the global results subject for a specific device.
 func (n *NATSClient) SubscribeResults(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error) {
+	if ctx == nil {
+		return nil, errors.New("context cannot be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context canceled before subscribe: %w", err)
+	}
+
 	subject := fmt.Sprintf("result.%s", n.target)
 	sub, err := n.conn.Subscribe(subject, handler)
 	if err != nil {
@@ -209,6 +219,13 @@ func (n *NATSClient) SubscribeResults(ctx context.Context, handler func(msg *nat
 
 // QueryCapabilities performs a synchronous request to fetch the device capabilities.
 func (n *NATSClient) QueryCapabilities(ctx context.Context, query *contracts.CloudCapabilitiesQuery) (*agentcore.ResultEnvelope, error) {
+	if ctx == nil {
+		return nil, errors.New("context cannot be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context canceled before query: %w", err)
+	}
+
 	if query == nil {
 		return nil, fmt.Errorf("invalid capabilities query: query cannot be nil")
 	}
@@ -241,6 +258,13 @@ func (n *NATSClient) QueryCapabilities(ctx context.Context, query *contracts.Clo
 
 // QueryDeviceStatus performs a synchronous request to fetch the device status.
 func (n *NATSClient) QueryDeviceStatus(ctx context.Context, query *contracts.CloudDeviceStatusQuery) (*agentcore.StatusEnvelope, error) {
+	if ctx == nil {
+		return nil, errors.New("context cannot be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context canceled before query: %w", err)
+	}
+
 	if query == nil {
 		return nil, fmt.Errorf("invalid status query: query cannot be nil")
 	}
@@ -273,6 +297,13 @@ func (n *NATSClient) QueryDeviceStatus(ctx context.Context, query *contracts.Clo
 
 // SubscribeTelemetry subscribes to local device telemetry.
 func (n *NATSClient) SubscribeTelemetry(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error) {
+	if ctx == nil {
+		return nil, errors.New("context cannot be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context canceled before subscribe: %w", err)
+	}
+
 	subject := fmt.Sprintf("telemetry.%s", n.target)
 	sub, err := n.conn.Subscribe(subject, handler)
 	if err != nil {
@@ -287,6 +318,13 @@ func (n *NATSClient) SubscribeTelemetry(ctx context.Context, handler func(msg *n
 
 // SubscribeLogs subscribes to local device logs.
 func (n *NATSClient) SubscribeLogs(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error) {
+	if ctx == nil {
+		return nil, errors.New("context cannot be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context canceled before subscribe: %w", err)
+	}
+
 	subject := fmt.Sprintf("logs.%s", n.target)
 	sub, err := n.conn.Subscribe(subject, handler)
 	if err != nil {
@@ -301,6 +339,13 @@ func (n *NATSClient) SubscribeLogs(ctx context.Context, handler func(msg *nats.M
 
 // SubscribeHealth subscribes to local device health reports.
 func (n *NATSClient) SubscribeHealth(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error) {
+	if ctx == nil {
+		return nil, errors.New("context cannot be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context canceled before subscribe: %w", err)
+	}
+
 	subject := fmt.Sprintf("health.%s", n.target)
 	sub, err := n.conn.Subscribe(subject, handler)
 	if err != nil {
@@ -315,6 +360,13 @@ func (n *NATSClient) SubscribeHealth(ctx context.Context, handler func(msg *nats
 
 // SubscribeState subscribes to local device state changes.
 func (n *NATSClient) SubscribeState(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error) {
+	if ctx == nil {
+		return nil, errors.New("context cannot be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("context canceled before subscribe: %w", err)
+	}
+
 	subject := fmt.Sprintf("status.%s", n.target)
 	sub, err := n.conn.Subscribe(subject, handler)
 	if err != nil {
@@ -349,6 +401,13 @@ func (n *NATSClient) getKV(ctx context.Context) (jetstream.KeyValue, error) {
 
 // WriteDesiredConfig writes the desired configuration to the JetStream KeyValue store.
 func (n *NATSClient) WriteDesiredConfig(ctx context.Context, record agentcore.DesiredConfigRecord) (uint64, error) {
+	if ctx == nil {
+		return 0, errors.New("context cannot be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, fmt.Errorf("context canceled before write: %w", err)
+	}
+
 	if err := contracts.ValidateDesiredConfigRecord(&record); err != nil {
 		return 0, fmt.Errorf("invalid DesiredConfigRecord: %w", err)
 	}
@@ -376,6 +435,13 @@ func (n *NATSClient) WriteDesiredConfig(ctx context.Context, record agentcore.De
 
 // GetDesiredConfigMetadata retrieves the metadata of the desired configuration from the JetStream KeyValue store.
 func (n *NATSClient) GetDesiredConfigMetadata(ctx context.Context) (uint64, string, error) {
+	if ctx == nil {
+		return 0, "", errors.New("context cannot be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, "", fmt.Errorf("context canceled before read: %w", err)
+	}
+
 	kv, err := n.getKV(ctx)
 	if err != nil {
 		return 0, "", err
@@ -401,6 +467,13 @@ func (n *NATSClient) GetDesiredConfigMetadata(ctx context.Context) (uint64, stri
 
 // Close gracefully drains subscriptions and closes the NATS connection.
 func (n *NATSClient) Close(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("context cannot be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context canceled before close: %w", err)
+	}
+
 	if n.conn == nil {
 		return nil
 	}

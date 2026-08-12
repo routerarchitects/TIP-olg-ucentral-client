@@ -23,7 +23,7 @@ type NATSClient struct {
 	conn   *nats.Conn
 	js     jetstream.JetStream
 	kv     jetstream.KeyValue
-	kvMu sync.Mutex
+	kvMu   sync.Mutex
 }
 
 // NewNATSClient initializes a NATS connection.

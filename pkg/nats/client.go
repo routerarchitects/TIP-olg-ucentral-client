@@ -401,4 +401,3 @@ func (n *NATSClient) Close(ctx context.Context) error {
 		return nil
 	}
 }
-

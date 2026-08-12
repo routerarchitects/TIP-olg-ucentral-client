@@ -14,6 +14,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -262,7 +263,7 @@ func TestNATSClient_ConcurrentKVInit(t *testing.T) {
 		wg.Add(2)
 		go func(idx int) {
 			defer wg.Done()
-			_, err := client.WriteDesiredConfig(context.Background(), []byte("{}"))
+			_, err := client.WriteDesiredConfig(context.Background(), agentcore.DesiredConfigRecord{})
 			if err != nil {
 				errCh <- err
 			}
@@ -294,21 +295,37 @@ func TestNATSClient_TargetIsolation_TC_SEC_001(t *testing.T) {
 
 	// 1. Test ExecuteAction mismatch
 	cmdAction := &agentcore.ActionCommand{
-		Target: "router-b",
-		Action: "reboot",
+		Version:     "1.0",
+		RPCID:       "test-rpc-12345",
+		Target:      "router-b",
+		CommandType: "action",
+		Action:      "reboot",
+		Timestamp:   time.Now(),
+		Payload:     []byte(`{"serial": "router-b"}`),
 	}
 	err := client.ExecuteAction(context.Background(), cmdAction)
 	if err == nil {
 		t.Errorf("Expected ExecuteAction to fail with target mismatch, got nil")
+	} else if !strings.Contains(err.Error(), "target mismatch") {
+		t.Errorf("Expected target mismatch error, got: %v", err)
 	}
 
 	// 2. Test PublishConfigTrigger mismatch
 	cmdConfig := &agentcore.ConfigureNotification{
-		Target: "router-b",
+		Version:     "1.0",
+		RPCID:       "test-rpc-12345",
+		Target:      "router-b",
+		CommandType: "configure",
+		KVBucket:    "cfg_desired",
+		KVKey:       "desired.router-b",
+		UUID:        "123456789",
+		Timestamp:   time.Now(),
 	}
 	err = client.PublishConfigTrigger(context.Background(), cmdConfig)
 	if err == nil {
 		t.Errorf("Expected PublishConfigTrigger to fail with target mismatch, got nil")
+	} else if !strings.Contains(err.Error(), "target mismatch") {
+		t.Errorf("Expected target mismatch error, got: %v", err)
 	}
 }
 

@@ -266,14 +266,19 @@ func (n *NATSClient) getKV(ctx context.Context) (jetstream.KeyValue, error) {
 }
 
 // WriteDesiredConfig writes the desired configuration to the JetStream KeyValue store.
-func (n *NATSClient) WriteDesiredConfig(ctx context.Context, config []byte) (uint64, error) {
+func (n *NATSClient) WriteDesiredConfig(ctx context.Context, record agentcore.DesiredConfigRecord) (uint64, error) {
 	kv, err := n.getKV(ctx)
 	if err != nil {
 		return 0, err
 	}
 
+	payload, err := json.Marshal(record)
+	if err != nil {
+		return 0, fmt.Errorf("failed to marshal desired config record: %w", err)
+	}
+
 	key := fmt.Sprintf("desired.%s", n.target)
-	rev, err := kv.Put(ctx, key, config)
+	rev, err := kv.Put(ctx, key, payload)
 	if err != nil {
 		return 0, fmt.Errorf("failed to write config to KV: %w", err)
 	}

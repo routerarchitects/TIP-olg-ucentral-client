@@ -376,3 +376,29 @@ func (n *NATSClient) GetDesiredConfigMetadata(ctx context.Context) (uint64, stri
 
 	return entry.Revision(), record.UUID, nil
 }
+
+// Close gracefully drains subscriptions and closes the NATS connection.
+func (n *NATSClient) Close(ctx context.Context) error {
+	if n.conn == nil {
+		return nil
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- n.conn.Drain()
+	}()
+
+	select {
+	case <-ctx.Done():
+		n.conn.Close()
+		return fmt.Errorf("timeout draining connection: %w", ctx.Err())
+	case err := <-errCh:
+		if err != nil {
+			n.conn.Close()
+			return fmt.Errorf("failed to drain connection: %w", err)
+		}
+		// Drain automatically closes the connection upon completion.
+		return nil
+	}
+}
+

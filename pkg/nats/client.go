@@ -30,6 +30,12 @@ type NATSClient struct {
 // SECURITY CONTRACT: This constructor MUST enforce tls.Config{MinVersion: tls.VersionTLS13}.
 // It must return a fatal error if CAFile is empty, or if any Server URL is insecure.
 func NewNATSClient(cfg config.NATSConfig, onStateChange func(contracts.LinkState)) (*NATSClient, error) {
+	if cfg.Target == "" {
+		return nil, errors.New("nats: fatal: Target is required and cannot be empty")
+	}
+	if strings.ContainsAny(cfg.Target, "*.>") {
+		return nil, errors.New("nats: fatal: Target cannot contain NATS metacharacters (*, >, .)")
+	}
 	if cfg.CAFile == "" {
 		return nil, errors.New("nats: fatal: CAFile is required")
 	}
@@ -158,8 +164,8 @@ func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *agentcore.ActionCom
 }
 
 // SubscribeResults subscribes to the global results subject for a specific device.
-func (n *NATSClient) SubscribeResults(serial string, handler func(msg *nats.Msg)) (*nats.Subscription, error) {
-	subject := fmt.Sprintf("result.%s", serial)
+func (n *NATSClient) SubscribeResults(handler func(msg *nats.Msg)) (*nats.Subscription, error) {
+	subject := fmt.Sprintf("result.%s", n.target)
 	return n.conn.Subscribe(subject, handler)
 }
 

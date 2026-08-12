@@ -68,6 +68,7 @@ W4O2v2e+V4M9K5B1z5e+K9S+Z+A+J8m8Z+C1n4o+R7c8W4X9D9y9M6O4+Y9V6X8Q
 		{
 			name: "invalid ca pem",
 			cfg: config.NATSConfig{
+				Target:          "router-a",
 				Servers:         []string{"tls://127.0.0.1:4222"},
 				CredentialsFile: validCredsFile,
 				CAFile:          invalidCAFile,
@@ -77,6 +78,7 @@ W4O2v2e+V4M9K5B1z5e+K9S+Z+A+J8m8Z+C1n4o+R7c8W4X9D9y9M6O4+Y9V6X8Q
 		{
 			name: "missing ca file",
 			cfg: config.NATSConfig{
+				Target:          "router-a",
 				Servers:         []string{"tls://127.0.0.1:4222"},
 				CredentialsFile: validCredsFile,
 				CAFile:          "",
@@ -86,6 +88,7 @@ W4O2v2e+V4M9K5B1z5e+K9S+Z+A+J8m8Z+C1n4o+R7c8W4X9D9y9M6O4+Y9V6X8Q
 		{
 			name: "missing creds file",
 			cfg: config.NATSConfig{
+				Target:          "router-a",
 				Servers:         []string{"tls://127.0.0.1:4222"},
 				CredentialsFile: "",
 				CAFile:          validCAFile,
@@ -95,6 +98,7 @@ W4O2v2e+V4M9K5B1z5e+K9S+Z+A+J8m8Z+C1n4o+R7c8W4X9D9y9M6O4+Y9V6X8Q
 		{
 			name: "missing servers",
 			cfg: config.NATSConfig{
+				Target:          "router-a",
 				Servers:         []string{},
 				CredentialsFile: validCredsFile,
 				CAFile:          validCAFile,
@@ -104,7 +108,28 @@ W4O2v2e+V4M9K5B1z5e+K9S+Z+A+J8m8Z+C1n4o+R7c8W4X9D9y9M6O4+Y9V6X8Q
 		{
 			name: "insecure server url",
 			cfg: config.NATSConfig{
+				Target:          "router-a",
 				Servers:         []string{"nats://127.0.0.1:4222"},
+				CredentialsFile: validCredsFile,
+				CAFile:          validCAFile,
+			},
+			wantErr: true,
+		},
+		{
+			name: "missing target",
+			cfg: config.NATSConfig{
+				Target:          "",
+				Servers:         []string{"tls://127.0.0.1:4222"},
+				CredentialsFile: validCredsFile,
+				CAFile:          validCAFile,
+			},
+			wantErr: true,
+		},
+		{
+			name: "malformed target",
+			cfg: config.NATSConfig{
+				Target:          "router.*.a",
+				Servers:         []string{"tls://127.0.0.1:4222"},
 				CredentialsFile: validCredsFile,
 				CAFile:          validCAFile,
 			},

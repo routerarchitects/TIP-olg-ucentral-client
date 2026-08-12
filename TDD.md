@@ -317,7 +317,7 @@ This document details the test plans, test cases, and verification strategies fo
 *   **TC-NET-007 (Device Health Forwarding and No Daemon Status Responder):**
     *   *Requirement Mapping:* `REQ-019`
     *   *Setup:* Publish a valid device health snapshot to `health.<target>`. Separately, publish/request `status.get.<target>` with only the uCentral client running and no downstream status responder.
-    *   *Assert:* The client must subscribe to `.health`, validate/rate-limit the payload, and enqueue accepted health updates for Cloud forwarding. The client must not respond to `status.get` with daemon liveness/readiness, Cloud connectivity, queue depth, uptime, or metrics.
+    *   *Assert:* The NATS client provides a raw subscription wrapper for `health.<target>`. Downstream daemon managers must use this subscription to validate/rate-limit the payload and enqueue accepted health updates for Cloud forwarding. The client must not respond to `status.get` with daemon liveness/readiness, Cloud connectivity, queue depth, uptime, or metrics.
 *   **TC-SEC-002 (TLS v1.3 and CA Verification):**
     *   *Requirement Mapping:* `REQ-023` (TLS v1.3 Security)
     *   *Setup:* Configure the NATS client to connect to a broker without TLS or with an invalid CA cert.

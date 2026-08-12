@@ -1145,7 +1145,7 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
 
     func (n *NATSClient) PublishConfigTrigger(ctx context.Context, cmd *agentcore.ConfigureNotification) error
     func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *agentcore.ActionCommand) error
-    func (n *NATSClient) SubscribeResults(serial string, handler func(msg *nats.Msg)) (*nats.Subscription, error)
+    func (n *NATSClient) SubscribeResults(handler func(msg *nats.Msg)) (*nats.Subscription, error)
 
     // Query Envelopes (Defined in pkg/contracts/envelopes.go)
 

@@ -419,7 +419,7 @@ To keep the daemon resource-efficient and secure, it does **not** expose local H
 The downstream device or local device agent, such as the VyOS NATS agent, periodically publishes device health metrics directly to the NATS bus on:
 `health.<target>`
 
-The uCentral client subscribes to this subject, validates and rate-limits the device health payload, and forwards accepted health updates to the Cloud through the internal WebSocket outbound scheduler. The payload is a device-health payload produced by the downstream device/local agent. It is distinct from the uCentral client's own NATS connection health snapshot. The exact schema is owned by the downstream device-health contract.
+The uCentral daemon subscribes to this subject via the NATS transport client. The overarching daemon managers (not the raw NATS client itself) validate and rate-limit the device health payload, and forward accepted health updates to the Cloud through the internal WebSocket outbound scheduler. The payload is a device-health payload produced by the downstream device/local agent. It is distinct from the uCentral client's own NATS connection health snapshot. The exact schema is owned by the downstream device-health contract.
 
 ### 6.2 Device Status Query
 

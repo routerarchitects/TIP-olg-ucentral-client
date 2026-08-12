@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -416,5 +417,130 @@ func TestNewNATSClient_SecurityWiring_Success(t *testing.T) {
 	}
 	if client == nil {
 		t.Fatalf("Expected valid client")
+	}
+}
+
+func TestNATSClient_ConfigureE2E_TC_INT_001(t *testing.T) {
+	// 1. Setup embedded server
+	s, err := server.NewServer(&server.Options{
+		Host:      "127.0.0.1",
+		Port:      -1,
+		JetStream: true,
+		StoreDir:  t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("Failed to create NATS server: %v", err)
+	}
+	go s.Start()
+	if !s.ReadyForConnections(5 * time.Second) {
+		t.Fatalf("NATS server failed to start")
+	}
+	defer s.Shutdown()
+
+	// 2. Setup Client
+	conn, err := nats.Connect(s.ClientURL())
+	if err != nil {
+		t.Fatalf("Failed to connect to test server: %v", err)
+	}
+	defer conn.Close()
+
+	js, err := jetstream.New(conn)
+	if err != nil {
+		t.Fatalf("Failed to initialize JetStream: %v", err)
+	}
+
+	client := &NATSClient{
+		target: "vyos",
+		conn:   conn,
+		js:     js,
+	}
+
+	// 3. Define desired configuration record
+	configUUID := "123456789"
+	record := agentcore.DesiredConfigRecord{
+		Version:   "1.0",
+		RPCID:     "rpc-123",
+		Target:    "vyos",
+		UUID:      configUUID,
+		Timestamp: time.Now(),
+		Payload:   []byte(`{"some":"config"}`),
+	}
+
+	// 4. Write Desired Config to KV
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = client.WriteDesiredConfig(ctx, record)
+	if err != nil {
+		t.Fatalf("WriteDesiredConfig failed: %v", err)
+	}
+
+	// 5. Mock a downstream subscriber (the VyOS agent)
+	subTriggered := make(chan struct{})
+	sub, err := conn.Subscribe("cmd.configure.vyos", func(msg *nats.Msg) {
+		defer close(subTriggered)
+		// VyOS received the trigger! Let's parse it.
+		var notif agentcore.ConfigureNotification
+		if err := json.Unmarshal(msg.Data, &notif); err != nil {
+			t.Errorf("Downstream failed to parse ConfigureNotification: %v", err)
+			return
+		}
+
+		if notif.UUID != configUUID {
+			t.Errorf("Downstream received UUID %s, expected %s", notif.UUID, configUUID)
+		}
+		if notif.KVBucket != "cfg_desired" {
+			t.Errorf("Expected bucket cfg_desired, got %s", notif.KVBucket)
+		}
+
+		// VyOS reads from KV using the bucket/key from the notification
+		kv, err := js.KeyValue(ctx, notif.KVBucket)
+		if err != nil {
+			t.Errorf("Downstream failed to bind KV: %v", err)
+			return
+		}
+
+		entry, err := kv.Get(ctx, notif.KVKey)
+		if err != nil {
+			t.Errorf("Downstream failed to get KV entry %s: %v", notif.KVKey, err)
+			return
+		}
+
+		var downstreamRecord agentcore.DesiredConfigRecord
+		if err := json.Unmarshal(entry.Value(), &downstreamRecord); err != nil {
+			t.Errorf("Downstream failed to parse DesiredConfigRecord from KV: %v", err)
+			return
+		}
+
+		if downstreamRecord.UUID != configUUID {
+			t.Errorf("Downstream KV record UUID %s != expected %s", downstreamRecord.UUID, configUUID)
+		}
+	})
+	if err != nil {
+		t.Fatalf("Failed to subscribe downstream: %v", err)
+	}
+	defer sub.Unsubscribe()
+	conn.Flush()
+
+	// 6. Publish the Config Trigger
+	cmd := &agentcore.ConfigureNotification{
+		Version:     "1.0",
+		RPCID:       "rpc-123",
+		Target:      "vyos",
+		CommandType: "configure",
+		KVBucket:    "cfg_desired",
+		KVKey:       "desired.vyos",
+		UUID:        configUUID,
+		Timestamp:   time.Now(),
+	}
+	if err := client.PublishConfigTrigger(ctx, cmd); err != nil {
+		t.Fatalf("PublishConfigTrigger failed: %v", err)
+	}
+
+	// 7. Wait for downstream verification
+	select {
+	case <-subTriggered:
+		// Success!
+	case <-time.After(5 * time.Second):
+		t.Fatalf("Timed out waiting for downstream to receive configure trigger")
 	}
 }

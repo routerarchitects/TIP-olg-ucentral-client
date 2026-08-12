@@ -1145,20 +1145,17 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
 
     func (n *NATSClient) PublishConfigTrigger(ctx context.Context, cmd *agentcore.ConfigureNotification) error
     func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *agentcore.ActionCommand) error
-    func (n *NATSClient) SubscribeResults(handler func(msg *nats.Msg)) (*nats.Subscription, error)
+    func (n *NATSClient) SubscribeResults(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error)
 
     // Query Envelopes (Defined in pkg/contracts/envelopes.go)
-
-    // Synchronous Read-Only Queries (blocks waiting for ResultEnvelope)
-    // QueryCapabilities returns a ResultEnvelope whose Payload must be deserialized into a DeviceCapabilities struct.
     func (n *NATSClient) QueryCapabilities(ctx context.Context, query *contracts.CloudCapabilitiesQuery) (*contracts.ResultEnvelope, error)
     func (n *NATSClient) QueryDeviceStatus(ctx context.Context, query *contracts.CloudDeviceStatusQuery) (*contracts.DeviceStatus, error)
 
-    // Streaming & Data Subscriptions
-    func (n *NATSClient) SubscribeTelemetry(handler func(msg *nats.Msg)) (*nats.Subscription, error)
-    func (n *NATSClient) SubscribeLogs(handler func(msg *nats.Msg)) (*nats.Subscription, error)
-    func (n *NATSClient) SubscribeHealth(handler func(msg *nats.Msg)) (*nats.Subscription, error)
-    func (n *NATSClient) SubscribeState(handler func(msg *nats.Msg)) (*nats.Subscription, error)
+    // Subscriptions
+    func (n *NATSClient) SubscribeTelemetry(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error)
+    func (n *NATSClient) SubscribeLogs(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error)
+    func (n *NATSClient) SubscribeHealth(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error)
+    func (n *NATSClient) SubscribeState(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error)
     func (n *NATSClient) WriteDesiredConfig(ctx context.Context, record agentcore.DesiredConfigRecord) (uint64, error)
     func (n *NATSClient) GetDesiredConfigMetadata(ctx context.Context) (uint64, string, error)
     

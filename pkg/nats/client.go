@@ -164,9 +164,17 @@ func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *agentcore.ActionCom
 }
 
 // SubscribeResults subscribes to the global results subject for a specific device.
-func (n *NATSClient) SubscribeResults(handler func(msg *nats.Msg)) (*nats.Subscription, error) {
+func (n *NATSClient) SubscribeResults(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error) {
 	subject := fmt.Sprintf("result.%s", n.target)
-	return n.conn.Subscribe(subject, handler)
+	sub, err := n.conn.Subscribe(subject, handler)
+	if err != nil {
+		return nil, err
+	}
+	if err := n.conn.FlushWithContext(ctx); err != nil {
+		sub.Unsubscribe()
+		return nil, err
+	}
+	return sub, nil
 }
 
 // QueryCapabilities performs a synchronous request to fetch the device capabilities.
@@ -222,27 +230,59 @@ func (n *NATSClient) QueryDeviceStatus(ctx context.Context, query *contracts.Clo
 }
 
 // SubscribeTelemetry subscribes to local device telemetry.
-func (n *NATSClient) SubscribeTelemetry(handler func(msg *nats.Msg)) (*nats.Subscription, error) {
+func (n *NATSClient) SubscribeTelemetry(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error) {
 	subject := fmt.Sprintf("telemetry.%s", n.target)
-	return n.conn.Subscribe(subject, handler)
+	sub, err := n.conn.Subscribe(subject, handler)
+	if err != nil {
+		return nil, err
+	}
+	if err := n.conn.FlushWithContext(ctx); err != nil {
+		sub.Unsubscribe()
+		return nil, err
+	}
+	return sub, nil
 }
 
 // SubscribeLogs subscribes to local device logs.
-func (n *NATSClient) SubscribeLogs(handler func(msg *nats.Msg)) (*nats.Subscription, error) {
+func (n *NATSClient) SubscribeLogs(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error) {
 	subject := fmt.Sprintf("logs.%s", n.target)
-	return n.conn.Subscribe(subject, handler)
+	sub, err := n.conn.Subscribe(subject, handler)
+	if err != nil {
+		return nil, err
+	}
+	if err := n.conn.FlushWithContext(ctx); err != nil {
+		sub.Unsubscribe()
+		return nil, err
+	}
+	return sub, nil
 }
 
 // SubscribeHealth subscribes to local device health reports.
-func (n *NATSClient) SubscribeHealth(handler func(msg *nats.Msg)) (*nats.Subscription, error) {
+func (n *NATSClient) SubscribeHealth(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error) {
 	subject := fmt.Sprintf("health.%s", n.target)
-	return n.conn.Subscribe(subject, handler)
+	sub, err := n.conn.Subscribe(subject, handler)
+	if err != nil {
+		return nil, err
+	}
+	if err := n.conn.FlushWithContext(ctx); err != nil {
+		sub.Unsubscribe()
+		return nil, err
+	}
+	return sub, nil
 }
 
 // SubscribeState subscribes to local device state changes.
-func (n *NATSClient) SubscribeState(handler func(msg *nats.Msg)) (*nats.Subscription, error) {
+func (n *NATSClient) SubscribeState(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error) {
 	subject := fmt.Sprintf("status.%s", n.target)
-	return n.conn.Subscribe(subject, handler)
+	sub, err := n.conn.Subscribe(subject, handler)
+	if err != nil {
+		return nil, err
+	}
+	if err := n.conn.FlushWithContext(ctx); err != nil {
+		sub.Unsubscribe()
+		return nil, err
+	}
+	return sub, nil
 }
 
 func (n *NATSClient) getKV(ctx context.Context) (jetstream.KeyValue, error) {

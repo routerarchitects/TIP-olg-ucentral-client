@@ -209,6 +209,12 @@ func (c *Config) Validate() error {
 	if c.Serial == "" {
 		return fmt.Errorf("serial is required")
 	}
+	if c.NATS.Target == "" {
+		c.NATS.Target = c.Serial
+	}
+	if strings.Contains(c.NATS.Target, ">") || strings.Contains(c.NATS.Target, "*") || strings.Contains(c.NATS.Target, ".") {
+		return fmt.Errorf("nats target must not contain wildcards or dots")
+	}
 	if err := c.Cloud.Validate(); err != nil {
 		return err
 	}

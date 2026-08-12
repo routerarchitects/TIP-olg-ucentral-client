@@ -48,6 +48,7 @@ The uCentral client is a lightweight, Go-based gateway daemon that bridges a clo
     }
   },
   "nats": {
+    "target": "router-a",
     "servers": ["tls://127.0.0.1:4222"],
     "credentials_file": "/etc/ucentral/nats.creds",
     "ca_file": "/etc/ucentral/ca.pem"

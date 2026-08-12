@@ -28,6 +28,27 @@ func ValidateConfigureNotification(c *agentcore.ConfigureNotification) error {
 	return nil
 }
 
+// ValidateDesiredConfigRecord verifies that a DesiredConfigRecord is complete and valid.
+func ValidateDesiredConfigRecord(r *agentcore.DesiredConfigRecord) error {
+	if r == nil {
+		return errors.New("DesiredConfigRecord cannot be nil")
+	}
+	if r.Version != EnvelopeVersion {
+		return fmt.Errorf("unsupported envelope version: %q", r.Version)
+	}
+	if r.RPCID == "" || r.Target == "" || r.Timestamp.IsZero() {
+		return errors.New("missing required fields in DesiredConfigRecord")
+	}
+	uuid, err := strconv.ParseInt(r.UUID, 10, 64)
+	if err != nil || uuid <= 0 {
+		return errors.New("uuid must be a positive int64")
+	}
+	if len(r.Payload) > 0 && !json.Valid(r.Payload) {
+		return errors.New("payload contains invalid JSON")
+	}
+	return nil
+}
+
 // ValidateActionCommand strictly validates an incoming ActionCommand envelope.
 func ValidateActionCommand(c *agentcore.ActionCommand) error {
 	if CommandType(c.CommandType) == CommandConfigure {

@@ -1149,7 +1149,7 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
 
     // Query Envelopes (Defined in pkg/contracts/envelopes.go)
     func (n *NATSClient) QueryCapabilities(ctx context.Context, query *contracts.CloudCapabilitiesQuery) (*contracts.ResultEnvelope, error)
-    func (n *NATSClient) QueryDeviceStatus(ctx context.Context, query *contracts.CloudDeviceStatusQuery) (*contracts.DeviceStatus, error)
+    func (n *NATSClient) QueryDeviceStatus(ctx context.Context, query *contracts.CloudDeviceStatusQuery) (*agentcore.StatusEnvelope, error)
 
     // Subscriptions
     func (n *NATSClient) SubscribeTelemetry(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error)

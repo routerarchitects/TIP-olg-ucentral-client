@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/contracts"
 	"github.com/Telecominfraproject/olg-nats-agent-core/agentcore"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
@@ -264,7 +265,13 @@ func TestNATSClient_ConcurrentKVInit(t *testing.T) {
 		wg.Add(2)
 		go func(idx int) {
 			defer wg.Done()
-			_, err := client.WriteDesiredConfig(context.Background(), agentcore.DesiredConfigRecord{Target: "vyos"})
+			_, err := client.WriteDesiredConfig(context.Background(), agentcore.DesiredConfigRecord{
+				Version:   "1.0",
+				RPCID:     "init-test",
+				Target:    "vyos",
+				UUID:      "123",
+				Timestamp: time.Now(),
+			})
 			if err != nil {
 				errCh <- err
 			}
@@ -558,5 +565,85 @@ func TestNATSClient_ConfigureE2E_TC_INT_001(t *testing.T) {
 		// Success!
 	case <-time.After(5 * time.Second):
 		t.Fatalf("Timed out waiting for downstream to receive configure trigger")
+	}
+}
+
+func TestNATSClient_QueryValidation_MaliciousResponses(t *testing.T) {
+	// 1. Setup embedded server
+	s, err := server.NewServer(&server.Options{
+		Host: "127.0.0.1",
+		Port: -1,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create NATS server: %v", err)
+	}
+	go s.Start()
+	if !s.ReadyForConnections(5 * time.Second) {
+		t.Fatalf("NATS server failed to start")
+	}
+	defer s.Shutdown()
+
+	conn, err := nats.Connect(s.ClientURL())
+	if err != nil {
+		t.Fatalf("Failed to connect to test server: %v", err)
+	}
+	defer conn.Close()
+
+	js, err := jetstream.New(conn)
+	if err != nil {
+		t.Fatalf("Failed to initialize JetStream: %v", err)
+	}
+
+	client := &NATSClient{
+		target: "vyos",
+		conn:   conn,
+		js:     js,
+	}
+
+	ctx := context.Background()
+	querySubject := "capabilities.get.vyos"
+	statusSubject := "status.get.vyos"
+	rpcID := "rpc-query-test"
+
+	// Subscribe maliciously to Capabilities
+	subCaps, _ := conn.Subscribe(querySubject, func(msg *nats.Msg) {
+		// Send back a result with wrong target
+		wrongTargetEnv := agentcore.ResultEnvelope{
+			Version:     "1.0",
+			RPCID:       rpcID,
+			Target:      "wrong-target",
+			CommandType: "action",
+			Action:      "reboot",
+			Result:      "success",
+			Timestamp:   time.Now(),
+			Payload:     []byte(`{"status":"ok"}`),
+		}
+		b, _ := json.Marshal(wrongTargetEnv)
+		msg.Respond(b)
+	})
+	defer subCaps.Unsubscribe()
+
+	_, err = client.QueryCapabilities(ctx, &contracts.CloudCapabilitiesQuery{})
+	if err == nil || !strings.Contains(err.Error(), "target mismatch") {
+		t.Fatalf("Expected target mismatch error for QueryCapabilities, got: %v", err)
+	}
+
+	// Resubscribe maliciously to Status
+	subStatus, _ := conn.Subscribe(statusSubject, func(msg *nats.Msg) {
+		// Send back invalid envelope version
+		wrongVerEnv := agentcore.StatusEnvelope{
+			Version:   "99.9",
+			Target:    "vyos",
+			Status:    "{}",
+			Timestamp: time.Now(),
+		}
+		b, _ := json.Marshal(wrongVerEnv)
+		msg.Respond(b)
+	})
+	defer subStatus.Unsubscribe()
+
+	_, err = client.QueryDeviceStatus(ctx, &contracts.CloudDeviceStatusQuery{})
+	if err == nil || !strings.Contains(err.Error(), "unsupported envelope version") {
+		t.Fatalf("Expected unsupported version error for QueryDeviceStatus, got: %v", err)
 	}
 }

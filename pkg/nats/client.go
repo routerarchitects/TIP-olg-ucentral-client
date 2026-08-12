@@ -208,11 +208,17 @@ func (n *NATSClient) QueryCapabilities(ctx context.Context, query *contracts.Clo
 	if err := json.Unmarshal(msg.Data, &env); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal capabilities response: %w", err)
 	}
+	if err := contracts.ValidateResultEnvelope(&env); err != nil {
+		return nil, fmt.Errorf("invalid capabilities response: %w", err)
+	}
+	if env.Target != n.target {
+		return nil, fmt.Errorf("target mismatch in capabilities response: got %q, expected %q", env.Target, n.target)
+	}
 	return &env, nil
 }
 
 // QueryDeviceStatus performs a synchronous request to fetch the device status.
-func (n *NATSClient) QueryDeviceStatus(ctx context.Context, query *contracts.CloudDeviceStatusQuery) (*contracts.DeviceStatus, error) {
+func (n *NATSClient) QueryDeviceStatus(ctx context.Context, query *contracts.CloudDeviceStatusQuery) (*agentcore.StatusEnvelope, error) {
 	if query == nil {
 		return nil, fmt.Errorf("invalid status query: query cannot be nil")
 	}
@@ -230,9 +236,15 @@ func (n *NATSClient) QueryDeviceStatus(ctx context.Context, query *contracts.Clo
 		return nil, fmt.Errorf("request to %s failed: %w", subject, err)
 	}
 
-	var status contracts.DeviceStatus
+	var status agentcore.StatusEnvelope
 	if err := json.Unmarshal(msg.Data, &status); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal status response: %w", err)
+	}
+	if err := contracts.ValidateStatusEnvelope(&status); err != nil {
+		return nil, fmt.Errorf("invalid status response: %w", err)
+	}
+	if status.Target != n.target {
+		return nil, fmt.Errorf("target mismatch in status response: got %q, expected %q", status.Target, n.target)
 	}
 	return &status, nil
 }
@@ -315,6 +327,9 @@ func (n *NATSClient) getKV(ctx context.Context) (jetstream.KeyValue, error) {
 
 // WriteDesiredConfig writes the desired configuration to the JetStream KeyValue store.
 func (n *NATSClient) WriteDesiredConfig(ctx context.Context, record agentcore.DesiredConfigRecord) (uint64, error) {
+	if err := contracts.ValidateDesiredConfigRecord(&record); err != nil {
+		return 0, fmt.Errorf("invalid DesiredConfigRecord: %w", err)
+	}
 	if record.Target != n.target {
 		return 0, fmt.Errorf("target mismatch: got %q, expected %q", record.Target, n.target)
 	}

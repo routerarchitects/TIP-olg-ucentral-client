@@ -22,6 +22,7 @@ import (
 
 	"github.com/Telecominfraproject/olg-nats-agent-core/agentcore"
 	"github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/nats-io/nkeys"
@@ -390,7 +391,29 @@ func TestNewNATSClient_SecurityWiring_Success(t *testing.T) {
 	pem.Encode(keyOut, &pem.Block{Type: "EC PRIVATE KEY", Bytes: privBytes})
 	keyOut.Close()
 
-	// 2. Start NATS Server with TLS enforced
+	// 2. Generate Valid JWT Credentials
+	okp, _ := nkeys.CreateOperator()
+	opub, _ := okp.PublicKey()
+
+	akp, _ := nkeys.CreateAccount()
+	apub, _ := akp.PublicKey()
+
+	kp, _ := nkeys.CreateUser()
+	seed, _ := kp.Seed()
+	pub, _ := kp.PublicKey()
+
+	ac := jwt.NewAccountClaims(apub)
+	acJWT, _ := ac.Encode(okp)
+
+	uc := jwt.NewUserClaims(pub)
+	uc.IssuerAccount = apub
+	userJWT, _ := uc.Encode(akp)
+
+	credsFile := filepath.Join(tmpDir, "user.creds")
+	credsContent := fmt.Sprintf("-----BEGIN NATS USER JWT-----\n%s\n------END NATS USER JWT------\n\n-----BEGIN USER NKEY SEED-----\n%s\n------END USER NKEY SEED------", userJWT, string(seed))
+	os.WriteFile(credsFile, []byte(credsContent), 0644)
+
+	// 3. Start NATS Server with TLS and JWT enforced
 	cert, err := tls.LoadX509KeyPair(caFile, keyFile)
 	if err != nil {
 		t.Fatalf("Failed to load key pair: %v", err)
@@ -404,26 +427,20 @@ func TestNewNATSClient_SecurityWiring_Success(t *testing.T) {
 		Host:      "127.0.0.1",
 		Port:      -1,
 		TLSConfig: tlsConfig,
-		JetStream: true,
-		StoreDir:  t.TempDir(),
+		TrustedKeys: []string{opub},
 	}
 
 	s, err := server.NewServer(opts)
 	if err != nil {
 		t.Fatalf("Failed to start NATS server: %v", err)
 	}
+	s.SetAccountResolver(&server.MemAccResolver{})
+	s.AccountResolver().Store(apub, acJWT)
 	go s.Start()
 	if !s.ReadyForConnections(5 * time.Second) {
 		t.Fatalf("NATS server failed to start")
 	}
 	defer s.Shutdown()
-
-	// 3. Generate Valid NKey Credentials File
-	kp, _ := nkeys.CreateUser()
-	seed, _ := kp.Seed()
-	credsFile := filepath.Join(tmpDir, "user.creds")
-	credsContent := fmt.Sprintf("-----BEGIN USER NKEY SEED-----\n%s\n------END USER NKEY SEED------", string(seed))
-	os.WriteFile(credsFile, []byte(credsContent), 0644)
 
 	// 4. Construct Client config
 	cfg := config.NATSConfig{

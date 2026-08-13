@@ -89,8 +89,8 @@ func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *agentcore.ActionCom
 	if ctx == nil || ctx.Err() != nil {
 		return errors.New("invalid or canceled context")
 	}
-	if err := contracts.ValidateActionCommand(cmd); err != nil {
-		return fmt.Errorf("invalid action command: %w", err)
+	if cmd == nil {
+		return errors.New("command cannot be nil")
 	}
 	if cmd.Target != n.target {
 		return fmt.Errorf("target mismatch: got %q, expected %q", cmd.Target, n.target)

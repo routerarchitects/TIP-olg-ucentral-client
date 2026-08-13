@@ -1143,11 +1143,11 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     // It must return a fatal error if CAFile is empty, or if any Server URL is insecure.
     func NewNATSClient(cfg config.NATSConfig, onStateChange func(contracts.LinkState)) (*NATSClient, error)
 
-    func (n *NATSClient) PublishConfigTrigger(ctx context.Context, cmd *agentcore.ConfigureNotification) error
+    func (n *NATSClient) SubmitConfigure(ctx context.Context, cmd *agentcore.ConfigureCommand) error
     func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *agentcore.ActionCommand) error
-    func (n *NATSClient) SubscribeResults(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error)
+    func (n *NATSClient) SubscribeResults(ctx context.Context, handler func(env agentcore.ResultEnvelope)) (nats.Subscription, error)
 
-    // Query Envelopes (Defined in pkg/contracts/envelopes.go)
+    // Query Envelopes (Stubbed due to agentcore limitations)
     func (n *NATSClient) QueryCapabilities(ctx context.Context, query *contracts.CloudCapabilitiesQuery) (*agentcore.ResultEnvelope, error)
     func (n *NATSClient) QueryDeviceStatus(ctx context.Context, query *contracts.CloudDeviceStatusQuery) (*agentcore.StatusEnvelope, error)
 

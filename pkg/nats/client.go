@@ -28,8 +28,10 @@ func NewNATSClient(cfg config.NATSConfig, onStateChange func(contracts.LinkState
 			Servers:         cfg.Servers,
 			CredentialsFile: cfg.CredentialsFile,
 			TLS: &agentcore.TLSConfig{
-				Enabled: cfg.CAFile != "" || cfg.CredentialsFile != "",
-				CAFile:  cfg.CAFile,
+				Enabled:  cfg.CAFile != "" || cfg.CredentialsFile != "" || cfg.ClientCertFile != "" || cfg.ClientKeyFile != "",
+				CAFile:   cfg.CAFile,
+				CertFile: cfg.ClientCertFile,
+				KeyFile:  cfg.ClientKeyFile,
 			},
 		},
 		Subjects: agentcore.SubjectConfig{
@@ -74,6 +76,9 @@ func (n *NATSClient) SubmitConfigure(ctx context.Context, cmd *agentcore.Configu
 	if cmd == nil {
 		return errors.New("command cannot be nil")
 	}
+	if len(cmd.Payload) == 0 {
+		return errors.New("command payload cannot be empty")
+	}
 	if cmd.Target != n.target {
 		return fmt.Errorf("target mismatch: got %q, expected %q", cmd.Target, n.target)
 	}
@@ -91,6 +96,9 @@ func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *agentcore.ActionCom
 	}
 	if cmd == nil {
 		return errors.New("command cannot be nil")
+	}
+	if len(cmd.Payload) == 0 {
+		return errors.New("command payload cannot be empty")
 	}
 	if cmd.Target != n.target {
 		return fmt.Errorf("target mismatch: got %q, expected %q", cmd.Target, n.target)
@@ -111,18 +119,18 @@ func (n *NATSClient) QueryDeviceStatus(ctx context.Context, query *contracts.Clo
 	return nil, errors.New("QueryDeviceStatus not implemented in agentcore")
 }
 
-func (n *NATSClient) SubscribeResults(ctx context.Context, handler func(agentcore.ResultEnvelope)) (*nats.Subscription, error) {
+func (n *NATSClient) SubscribeResults(ctx context.Context, handler func(agentcore.ResultEnvelope)) error {
 	if ctx == nil || ctx.Err() != nil {
-		return nil, errors.New("invalid or canceled context")
+		return errors.New("invalid or canceled context")
 	}
 	if n.agentClient != nil {
 		err := n.agentClient.RegisterResultHandler(n.target, func(ctx context.Context, msg agentcore.ResultEnvelope) error {
 			handler(msg)
 			return nil
 		})
-		return nil, err
+		return err
 	}
-	return nil, nil
+	return nil
 }
 
 func (n *NATSClient) SubscribeTelemetry(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error) {

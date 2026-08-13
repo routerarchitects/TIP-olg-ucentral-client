@@ -2,8 +2,10 @@ package nats
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/Telecominfraproject/olg-nats-agent-core/agentcore"
 	"github.com/nats-io/nats.go"
@@ -83,6 +85,18 @@ func (n *NATSClient) SubmitConfigure(ctx context.Context, cmd *agentcore.Configu
 	if err := contracts.ValidateCommandPayload(contracts.CommandConfigure, "", cmd.Payload); err != nil {
 		return fmt.Errorf("invalid configure payload: %w", err)
 	}
+
+	uuid, err := strconv.ParseInt(cmd.UUID, 10, 64)
+	if err != nil || uuid <= 0 {
+		return errors.New("uuid must be a positive int64")
+	}
+
+	var cfgReq contracts.CloudConfigureRequest
+	if err := json.Unmarshal(cmd.Payload, &cfgReq); err == nil {
+		if cfgReq.Compress64 == "" && cfgReq.UUID != uuid {
+			return fmt.Errorf("envelope UUID %q does not match payload UUID %d", cmd.UUID, cfgReq.UUID)
+		}
+	}
 	if cmd.Target != n.target {
 		return fmt.Errorf("target mismatch: got %q, expected %q", cmd.Target, n.target)
 	}
@@ -91,7 +105,7 @@ func (n *NATSClient) SubmitConfigure(ctx context.Context, cmd *agentcore.Configu
 		return errors.New("agentClient is not initialized")
 	}
 
-	_, err := n.agentClient.SubmitConfigure(ctx, *cmd)
+	_, err = n.agentClient.SubmitConfigure(ctx, *cmd)
 	return err
 }
 

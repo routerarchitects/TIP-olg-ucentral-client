@@ -66,7 +66,7 @@ func TestSubscribeResults_NilHandler(t *testing.T) {
 }
 func TestSubmitConfigure_UUIDMismatch_Plain(t *testing.T) {
 	client := &NATSClient{target: "serial-123", agentClient: &agentcore.Client{}}
-	
+
 	// Valid envelope, mismatched payload UUID
 	cmd := &agentcore.ConfigureCommand{
 		Version:   "1.0",
@@ -76,7 +76,7 @@ func TestSubmitConfigure_UUIDMismatch_Plain(t *testing.T) {
 		Timestamp: time.Now(),
 		Payload:   json.RawMessage(`{"serial":"serial-123","uuid":999,"config":{}}`),
 	}
-	
+
 	err := client.SubmitConfigure(context.Background(), cmd)
 	if err == nil || !strings.Contains(err.Error(), "does not match payload UUID") {
 		t.Errorf("Expected UUID mismatch error, got: %v", err)

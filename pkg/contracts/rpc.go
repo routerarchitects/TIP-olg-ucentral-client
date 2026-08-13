@@ -732,6 +732,7 @@ type CloudScriptResponse struct {
 	Serial string            `json:"serial"`
 	Status CloudScriptStatus `json:"status"`
 }
+
 func (r *CloudConfigureRequest) EffectiveUUID() (int64, error) {
 	if len(r.Config) > 0 && string(r.Config) != "null" {
 		return r.UUID, nil

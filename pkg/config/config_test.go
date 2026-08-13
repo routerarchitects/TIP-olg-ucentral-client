@@ -157,7 +157,7 @@ func TestConfig_Validation(t *testing.T) {
 	caFile := createTempFile("ca.pem", certPEM)
 	certFile := createTempFile("cert.pem", certPEM)
 	keyFile := createTempFile("key.pem", keyPEM)
-	credsFile := createTempFile("creds.creds", []byte("dummy-jwt-or-creds"))
+	credsFile := createTempFile("creds.creds", []byte("-----BEGIN USER NKEY SEED-----\nSEED..."))
 
 	validTLS := CloudTLSConfig{
 		CAFile:         caFile,
@@ -224,7 +224,7 @@ func TestConfig_Validation(t *testing.T) {
 		{"Missing TLS CA", func(c *Config) { c.Cloud.TLS.CAFile = "/missing/ca.pem" }},
 		{"Directory TLS CA", func(c *Config) { c.Cloud.TLS.CAFile = tmpDir }},
 		{"Malformed NATS URL", func(c *Config) { c.NATS.Servers = []string{"tls://"} }},
-		{"Invalid NATS scheme", func(c *Config) { c.NATS.Servers = []string{"nats://localhost"} }},
+		{"Invalid NATS scheme", func(c *Config) { c.NATS.Servers = []string{"tcp://localhost"} }},
 		{"Missing NATS CA", func(c *Config) { c.NATS.CAFile = "/missing/ca.pem" }},
 		{"Directory NATS CA", func(c *Config) { c.NATS.CAFile = tmpDir }},
 		{"Wildcard NATS target", func(c *Config) { c.NATS.Target = "foo.*" }},

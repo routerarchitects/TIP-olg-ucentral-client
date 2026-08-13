@@ -28,7 +28,7 @@ func NewNATSClient(cfg config.NATSConfig, onStateChange func(contracts.LinkState
 			Servers:         cfg.Servers,
 			CredentialsFile: cfg.CredentialsFile,
 			TLS: &agentcore.TLSConfig{
-				Enabled:  cfg.CAFile != "" || cfg.CredentialsFile != "" || cfg.ClientCertFile != "" || cfg.ClientKeyFile != "",
+				Enabled:  cfg.CAFile != "" || cfg.ClientCertFile != "" || cfg.ClientKeyFile != "",
 				CAFile:   cfg.CAFile,
 				CertFile: cfg.ClientCertFile,
 				KeyFile:  cfg.ClientKeyFile,
@@ -83,11 +83,12 @@ func (n *NATSClient) SubmitConfigure(ctx context.Context, cmd *agentcore.Configu
 		return fmt.Errorf("target mismatch: got %q, expected %q", cmd.Target, n.target)
 	}
 
-	if n.agentClient != nil {
-		_, err := n.agentClient.SubmitConfigure(ctx, *cmd)
-		return err
+	if n.agentClient == nil {
+		return errors.New("agentClient is not initialized")
 	}
-	return nil
+
+	_, err := n.agentClient.SubmitConfigure(ctx, *cmd)
+	return err
 }
 
 func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *agentcore.ActionCommand) error {
@@ -104,11 +105,12 @@ func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *agentcore.ActionCom
 		return fmt.Errorf("target mismatch: got %q, expected %q", cmd.Target, n.target)
 	}
 
-	if n.agentClient != nil {
-		_, err := n.agentClient.SubmitAction(ctx, *cmd)
-		return err
+	if n.agentClient == nil {
+		return errors.New("agentClient is not initialized")
 	}
-	return nil
+
+	_, err := n.agentClient.SubmitAction(ctx, *cmd)
+	return err
 }
 
 func (n *NATSClient) QueryCapabilities(ctx context.Context, query *contracts.CloudCapabilitiesQuery) ([]byte, error) {
@@ -123,14 +125,18 @@ func (n *NATSClient) SubscribeResults(ctx context.Context, handler func(agentcor
 	if ctx == nil || ctx.Err() != nil {
 		return errors.New("invalid or canceled context")
 	}
-	if n.agentClient != nil {
-		err := n.agentClient.RegisterResultHandler(n.target, func(ctx context.Context, msg agentcore.ResultEnvelope) error {
-			handler(msg)
-			return nil
-		})
-		return err
+	if handler == nil {
+		return errors.New("handler cannot be nil")
 	}
-	return nil
+	if n.agentClient == nil {
+		return errors.New("agentClient is not initialized")
+	}
+
+	err := n.agentClient.RegisterResultHandler(n.target, func(ctx context.Context, msg agentcore.ResultEnvelope) error {
+		handler(msg)
+		return nil
+	})
+	return err
 }
 
 func (n *NATSClient) SubscribeTelemetry(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error) {

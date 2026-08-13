@@ -159,41 +159,51 @@ func (n *NATSConfig) Validate() error {
 	}
 	for _, srv := range n.Servers {
 		u, err := url.ParseRequestURI(srv)
-		if err != nil || u.Scheme != "tls" || u.Host == "" {
-			return fmt.Errorf("nats server must be a valid tls URL")
+		if err != nil || (u.Scheme != "tls" && u.Scheme != "nats") || u.Host == "" {
+			return fmt.Errorf("nats server must be a valid tls:// or nats:// URL")
 		}
 	}
-	if err := checkFile(n.CredentialsFile, "nats credentials_file"); err != nil {
-		return err
+	if n.CredentialsFile != "" {
+		if err := checkFile(n.CredentialsFile, "nats credentials_file"); err != nil {
+			return err
+		}
 	}
-	if err := checkFile(n.CAFile, "nats ca_file"); err != nil {
-		return err
+	if n.CAFile != "" {
+		if err := checkFile(n.CAFile, "nats ca_file"); err != nil {
+			return err
+		}
+
+		natsCaCert, err := os.ReadFile(n.CAFile)
+		if err != nil {
+			return fmt.Errorf("failed to read nats ca_file: %w", err)
+		}
+		natsCaCertPool := x509.NewCertPool()
+		if ok := natsCaCertPool.AppendCertsFromPEM(natsCaCert); !ok {
+			return fmt.Errorf("failed to parse nats ca_file as a valid PEM CA bundle")
+		}
 	}
 
-	natsCaCert, err := os.ReadFile(n.CAFile)
-	if err != nil {
-		return fmt.Errorf("failed to read nats ca_file: %w", err)
-	}
-	natsCaCertPool := x509.NewCertPool()
-	if ok := natsCaCertPool.AppendCertsFromPEM(natsCaCert); !ok {
-		return fmt.Errorf("failed to parse nats ca_file as a valid PEM CA bundle")
-	}
-
-	natsCreds, err := os.ReadFile(n.CredentialsFile)
-	if err != nil {
-		return fmt.Errorf("failed to read nats credentials_file: %w", err)
-	}
-	if len(natsCreds) == 0 {
-		return fmt.Errorf("nats credentials_file is empty")
+	if n.CredentialsFile != "" {
+		natsCreds, err := os.ReadFile(n.CredentialsFile)
+		if err != nil {
+			return fmt.Errorf("failed to read nats credentials_file: %w", err)
+		}
+		if !strings.Contains(string(natsCreds), "-----BEGIN USER NKEY SEED-----") {
+			return fmt.Errorf("failed to parse nats credentials_file as a valid NKey User Seed")
+		}
 	}
 
-	if n.ClientCertFile != "" || n.ClientKeyFile != "" {
+	if n.ClientCertFile != "" {
 		if err := checkFile(n.ClientCertFile, "nats client_cert_file"); err != nil {
 			return err
 		}
+	}
+	if n.ClientKeyFile != "" {
 		if err := checkFile(n.ClientKeyFile, "nats client_key_file"); err != nil {
 			return err
 		}
+	}
+	if n.ClientCertFile != "" && n.ClientKeyFile != "" {
 		if _, err := tls.LoadX509KeyPair(n.ClientCertFile, n.ClientKeyFile); err != nil {
 			return fmt.Errorf("invalid nats client certificate or key: %w", err)
 		}

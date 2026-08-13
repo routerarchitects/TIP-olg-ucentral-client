@@ -160,10 +160,27 @@ func (n *NATSClient) SubscribeResults(ctx context.Context, handler func(agentcor
 	}
 
 	err := n.agentClient.RegisterResultHandler(n.target, func(ctx context.Context, msg agentcore.ResultEnvelope) error {
+		if err := validateResultEnvelope(msg); err != nil {
+			return err
+		}
 		handler(msg)
 		return nil
 	})
 	return err
+}
+
+func validateResultEnvelope(msg agentcore.ResultEnvelope) error {
+	if msg.CommandType == string(contracts.CommandConfigure) {
+		uuid, err := strconv.ParseInt(msg.UUID, 10, 64)
+		if err != nil || uuid <= 0 {
+			return errors.New("uuid must be a positive int64 for configure results")
+		}
+	}
+
+	if err := contracts.ValidateResultPayload(contracts.CommandType(msg.CommandType), contracts.ActionType(msg.Action), msg.Payload); err != nil {
+		return fmt.Errorf("invalid result payload: %w", err)
+	}
+	return nil
 }
 
 func (n *NATSClient) SubscribeTelemetry(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error) {

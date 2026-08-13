@@ -130,3 +130,56 @@ func TestNewNATSClient_ConfigWiring(t *testing.T) {
 		t.Errorf("expected ConfigurePattern %q, got %q", expectedConfigurePattern, capturedConfig.Subjects.ConfigurePattern)
 	}
 }
+
+func TestSubscribeResults_Validation(t *testing.T) {
+	client := &NATSClient{target: "target-123"}
+	// We can't easily unit test the handler without mocking agentClient,
+	// but we can test that calling it with a nil handler fails.
+	err := client.SubscribeResults(context.Background(), nil)
+	if err == nil || err.Error() != "handler cannot be nil" {
+		t.Errorf("expected nil handler error, got: %v", err)
+	}
+}
+
+func TestValidateResultEnvelope_Negative(t *testing.T) {
+	tests := []struct {
+		name    string
+		msg     agentcore.ResultEnvelope
+		wantErr string
+	}{
+		{
+			name: "invalid configure uuid type",
+			msg: agentcore.ResultEnvelope{
+				CommandType: string(contracts.CommandConfigure),
+				UUID:        "not-a-number",
+			},
+			wantErr: "uuid must be a positive int64 for configure results",
+		},
+		{
+			name: "negative configure uuid",
+			msg: agentcore.ResultEnvelope{
+				CommandType: string(contracts.CommandConfigure),
+				UUID:        "-1",
+			},
+			wantErr: "uuid must be a positive int64 for configure results",
+		},
+		{
+			name: "invalid payload for result",
+			msg: agentcore.ResultEnvelope{
+				CommandType: string(contracts.CommandConfigure),
+				UUID:        "123",
+				Payload:     []byte(`{bad json}`), // Invalid payload
+			},
+			wantErr: "invalid result payload",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateResultEnvelope(tt.msg)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("expected error containing %q, got: %v", tt.wantErr, err)
+			}
+		})
+	}
+}

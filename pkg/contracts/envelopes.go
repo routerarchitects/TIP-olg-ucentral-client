@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Telecominfraproject/olg-nats-agent-core/agentcore"
@@ -14,6 +15,20 @@ import (
 
 // EnvelopeVersion is the required wire protocol version for all NATS envelopes.
 const EnvelopeVersion = "1.0"
+
+// ValidateNATSTarget strictly validates that a NATS target string is valid.
+func ValidateNATSTarget(target string) error {
+	if target == "" {
+		return errors.New("nats target is required and cannot be empty")
+	}
+	if strings.TrimSpace(target) != target {
+		return errors.New("nats target must not contain leading or trailing whitespace")
+	}
+	if strings.ContainsAny(target, ".*> \t\r\n") {
+		return errors.New("nats target must not contain wildcards, dots, or internal whitespace")
+	}
+	return nil
+}
 
 func ValidateConfigureNotification(c *agentcore.ConfigureNotification) error {
 	if c.Version != EnvelopeVersion {

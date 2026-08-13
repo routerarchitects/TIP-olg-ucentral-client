@@ -7,8 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
-	"strings"
 	"sync"
 
 	"github.com/Telecominfraproject/olg-nats-agent-core/agentcore"
@@ -30,11 +30,8 @@ type NATSClient struct {
 // SECURITY CONTRACT: This constructor MUST enforce tls.Config{MinVersion: tls.VersionTLS13}.
 // It must return a fatal error if CAFile is empty, or if any Server URL is insecure.
 func NewNATSClient(cfg config.NATSConfig, onStateChange func(contracts.LinkState)) (*NATSClient, error) {
-	if cfg.Target == "" {
-		return nil, errors.New("nats: fatal: Target is required and cannot be empty")
-	}
-	if strings.ContainsAny(cfg.Target, "*.>") {
-		return nil, errors.New("nats: fatal: Target cannot contain NATS metacharacters (*, >, .)")
+	if err := contracts.ValidateNATSTarget(cfg.Target); err != nil {
+		return nil, fmt.Errorf("nats: fatal: %w", err)
 	}
 	if cfg.CAFile == "" {
 		return nil, errors.New("nats: fatal: CAFile is required")
@@ -46,8 +43,15 @@ func NewNATSClient(cfg config.NATSConfig, onStateChange func(contracts.LinkState
 		return nil, errors.New("nats: fatal: at least one server is required")
 	}
 	for _, s := range cfg.Servers {
-		if !strings.HasPrefix(s, "tls://") {
+		u, err := url.Parse(s)
+		if err != nil {
+			return nil, fmt.Errorf("nats: fatal: invalid server URL %q: %w", s, err)
+		}
+		if u.Scheme != "tls" {
 			return nil, fmt.Errorf("nats: fatal: insecure server URL detected (%s), must use tls://", s)
+		}
+		if u.Host == "" {
+			return nil, fmt.Errorf("nats: fatal: server URL missing host (%s)", s)
 		}
 	}
 

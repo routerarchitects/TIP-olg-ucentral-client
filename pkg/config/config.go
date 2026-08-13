@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/contracts"
 )
 
 const (
@@ -228,11 +230,8 @@ func (c *Config) Validate() error {
 	if c.NATS.Target == "" {
 		c.NATS.Target = c.Serial
 	}
-	if strings.ContainsAny(c.NATS.Target, " \t\r\n") {
-		return fmt.Errorf("nats target must not contain whitespace")
-	}
-	if strings.ContainsAny(c.NATS.Target, ">*.") {
-		return fmt.Errorf("nats target must not contain wildcards or dots")
+	if err := contracts.ValidateNATSTarget(c.NATS.Target); err != nil {
+		return fmt.Errorf("invalid nats target: %w", err)
 	}
 	if err := c.Cloud.Validate(); err != nil {
 		return err

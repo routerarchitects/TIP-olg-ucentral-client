@@ -102,13 +102,13 @@ func ValidCommandAction(command CommandType, action ActionType) bool {
 	case CommandAction:
 		// Generic transport commands can carry any valid operational action except queries
 		return action.Valid() && action != ActionCapabilitiesGet && action != ActionStatusGet
-	case CommandExecute:
+	case CommandExecute, CommandScript:
 		return action == ActionExecute
 	case CommandUpgrade:
-		return action == ActionUpgrade || action == ""
+		return action == ActionUpgrade
 	case CommandReboot:
-		return action == ActionReboot || action == ""
-	case CommandConfigure, CommandScript:
+		return action == ActionReboot
+	case CommandConfigure:
 		return action == ""
 	case CommandQuery:
 		return action == ActionCapabilitiesGet || action == ActionStatusGet

@@ -158,23 +158,33 @@ func (n *NATSConfig) Validate() error {
 	if len(n.Servers) == 0 {
 		return fmt.Errorf("nats servers are required")
 	}
+	hasInsecureFeatures := false
+	if n.CredentialsFile == "" || n.CAFile == "" {
+		hasInsecureFeatures = true
+	}
+
 	for _, srv := range n.Servers {
 		u, err := url.ParseRequestURI(srv)
 		if err != nil || u.Host == "" {
 			return fmt.Errorf("nats server must be a valid URL")
 		}
+		if u.Scheme == "nats" {
+			hasInsecureFeatures = true
+		}
 		if !n.AllowInsecureLocalDev && u.Scheme != "tls" {
 			return fmt.Errorf("nats server must use tls:// (nats:// is only permitted if allow_insecure_local_dev is true)")
 		}
-		if n.AllowInsecureLocalDev {
-			if u.Scheme != "tls" && u.Scheme != "nats" {
-				return fmt.Errorf("nats server must use tls:// or nats://")
-			}
-			if u.Scheme == "nats" {
-				host := u.Hostname()
-				if host != "localhost" && host != "127.0.0.1" && host != "::1" {
-					return fmt.Errorf("insecure nats:// is only permitted for loopback addresses (localhost, 127.0.0.1, ::1)")
-				}
+		if n.AllowInsecureLocalDev && u.Scheme != "tls" && u.Scheme != "nats" {
+			return fmt.Errorf("nats server must use tls:// or nats://")
+		}
+	}
+
+	if hasInsecureFeatures && n.AllowInsecureLocalDev {
+		for _, srv := range n.Servers {
+			u, _ := url.ParseRequestURI(srv)
+			host := u.Hostname()
+			if host != "localhost" && host != "127.0.0.1" && host != "::1" {
+				return fmt.Errorf("insecure features (nats://, missing creds, missing CA) are only permitted for loopback addresses (localhost, 127.0.0.1, ::1)")
 			}
 		}
 	}

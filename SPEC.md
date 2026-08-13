@@ -551,12 +551,13 @@ TIP-olg-ucentral-client/
     }
 
     type NATSConfig struct {
-        Target          string   `json:"target"`
-        Servers         []string `json:"servers"`
-        CredentialsFile string   `json:"credentials_file"`
-        CAFile          string   `json:"ca_file"`
-        ClientCertFile  string   `json:"client_cert_file,omitempty"`
-        ClientKeyFile   string   `json:"client_key_file,omitempty"`
+        Target                string   `json:"target"`
+        Servers               []string `json:"servers"`
+        CredentialsFile       string   `json:"credentials_file"`
+        CAFile                string   `json:"ca_file"`
+        ClientCertFile        string   `json:"client_cert_file,omitempty"`
+        ClientKeyFile         string   `json:"client_key_file,omitempty"`
+        AllowInsecureLocalDev bool     `json:"allow_insecure_local_dev,omitempty"`
     }
 
     type QueueConfig struct {
@@ -1202,9 +1203,10 @@ The uCentral client must not register a NATS responder for `status.get.<target>`
         *   `cloud.max_frame_size_bytes`: Default 11534336 (11MB); must be >= 0
         *   `cloud.max_consecutive_frame_errors`: Default 20; must be >= 0
         *   `cloud.stable_session_threshold_seconds`: Default 60; must be > 0
-        *   `nats.servers`: At least one entry; can use `tls://` or `nats://`
-        *   `nats.credentials_file`: Optional (required for production). If provided, must be a readable file path.
-        *   `nats.ca_file`: Optional (required for production). If provided, must be a readable file path.
+        *   `nats.servers`: At least one entry; must use `tls://` unless `allow_insecure_local_dev` is true.
+        *   `nats.credentials_file`: Required and readable file path (unless `allow_insecure_local_dev` is true).
+        *   `nats.ca_file`: Required and readable file path (unless `allow_insecure_local_dev` is true).
+        *   `nats.allow_insecure_local_dev`: Optional boolean flag to explicitly permit unencrypted `nats://` and bypass credentials for local development.
         *   `queues.ws_writer_capacity`: Default 500; must be > 0
         *   `queues.emergency_capacity`: Default 100; must be > 0
         *   `queues.nats_publish_capacity`: Default 100; must be > 0

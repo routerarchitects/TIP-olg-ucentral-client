@@ -58,12 +58,13 @@ type CloudConfig struct {
 }
 
 type NATSConfig struct {
-	Target          string   `json:"target,omitempty"`
-	Servers         []string `json:"servers"`
-	CredentialsFile string   `json:"credentials_file"`
-	CAFile          string   `json:"ca_file"`
-	ClientCertFile  string   `json:"client_cert_file,omitempty"`
-	ClientKeyFile   string   `json:"client_key_file,omitempty"`
+	Target                string   `json:"target,omitempty"`
+	Servers               []string `json:"servers"`
+	CredentialsFile       string   `json:"credentials_file"`
+	CAFile                string   `json:"ca_file"`
+	ClientCertFile        string   `json:"client_cert_file,omitempty"`
+	ClientKeyFile         string   `json:"client_key_file,omitempty"`
+	AllowInsecureLocalDev bool     `json:"allow_insecure_local_dev,omitempty"`
 }
 
 type QueueConfig struct {
@@ -159,14 +160,35 @@ func (n *NATSConfig) Validate() error {
 	}
 	for _, srv := range n.Servers {
 		u, err := url.ParseRequestURI(srv)
-		if err != nil || (u.Scheme != "tls" && u.Scheme != "nats") || u.Host == "" {
-			return fmt.Errorf("nats server must be a valid tls:// or nats:// URL")
+		if err != nil || u.Host == "" {
+			return fmt.Errorf("nats server must be a valid URL")
 		}
+		if !n.AllowInsecureLocalDev && u.Scheme != "tls" {
+			return fmt.Errorf("nats server must use tls:// (nats:// is only permitted if allow_insecure_local_dev is true)")
+		}
+		if n.AllowInsecureLocalDev && u.Scheme != "tls" && u.Scheme != "nats" {
+			return fmt.Errorf("nats server must use tls:// or nats://")
+		}
+	}
+
+	if !n.AllowInsecureLocalDev && n.CredentialsFile == "" {
+		return fmt.Errorf("nats credentials_file is strictly required in production")
 	}
 	if n.CredentialsFile != "" {
 		if err := checkFile(n.CredentialsFile, "nats credentials_file"); err != nil {
 			return err
 		}
+		natsCreds, err := os.ReadFile(n.CredentialsFile)
+		if err != nil {
+			return fmt.Errorf("failed to read nats credentials_file: %w", err)
+		}
+		if !strings.Contains(string(natsCreds), "-----BEGIN USER NKEY SEED-----") {
+			return fmt.Errorf("failed to parse nats credentials_file as a valid NKey User Seed")
+		}
+	}
+
+	if !n.AllowInsecureLocalDev && n.CAFile == "" {
+		return fmt.Errorf("nats ca_file is strictly required in production")
 	}
 	if n.CAFile != "" {
 		if err := checkFile(n.CAFile, "nats ca_file"); err != nil {
@@ -180,16 +202,6 @@ func (n *NATSConfig) Validate() error {
 		natsCaCertPool := x509.NewCertPool()
 		if ok := natsCaCertPool.AppendCertsFromPEM(natsCaCert); !ok {
 			return fmt.Errorf("failed to parse nats ca_file as a valid PEM CA bundle")
-		}
-	}
-
-	if n.CredentialsFile != "" {
-		natsCreds, err := os.ReadFile(n.CredentialsFile)
-		if err != nil {
-			return fmt.Errorf("failed to read nats credentials_file: %w", err)
-		}
-		if !strings.Contains(string(natsCreds), "-----BEGIN USER NKEY SEED-----") {
-			return fmt.Errorf("failed to parse nats credentials_file as a valid NKey User Seed")
 		}
 	}
 

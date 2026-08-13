@@ -11,7 +11,7 @@ import (
 
 func TestSubmitConfigure_Validation(t *testing.T) {
 	client := &NATSClient{target: "target-123"}
-	
+
 	// Test nil context
 	err := client.SubmitConfigure(nil, &agentcore.ConfigureCommand{Target: "target-123", Version: contracts.EnvelopeVersion, RPCID: "123", Payload: []byte("{}"), Timestamp: time.Now()})
 	if err == nil {
@@ -37,7 +37,7 @@ func TestSubmitConfigure_Validation(t *testing.T) {
 func TestExecuteAction_Validation(t *testing.T) {
 	client := &NATSClient{target: "target-123"}
 	ctx := context.Background()
-	
+
 	// Test validation failure
 	err := client.ExecuteAction(ctx, &agentcore.ActionCommand{})
 	if err == nil {

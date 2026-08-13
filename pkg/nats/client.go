@@ -93,8 +93,10 @@ func (n *NATSClient) SubmitConfigure(ctx context.Context, cmd *agentcore.Configu
 
 	var cfgReq contracts.CloudConfigureRequest
 	if err := json.Unmarshal(cmd.Payload, &cfgReq); err == nil {
-		if cfgReq.Compress64 == "" && cfgReq.UUID != uuid {
-			return fmt.Errorf("envelope UUID %q does not match payload UUID %d", cmd.UUID, cfgReq.UUID)
+		if payloadUUID, err := cfgReq.EffectiveUUID(); err == nil {
+			if payloadUUID != uuid {
+				return fmt.Errorf("envelope UUID %q does not match payload UUID %d", cmd.UUID, payloadUUID)
+			}
 		}
 	}
 	if cmd.Target != n.target {

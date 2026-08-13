@@ -119,10 +119,12 @@ TIP-olg-ucentral-client/
     // * A missing or zero `when` value is accepted. A non-zero future `when` value MUST
     // * be rejected as unsupported rather than silently ignored. This is a deliberate OLG compatibility limitation.
     type CloudConfigureRequest struct {
-    	Serial string          `json:"serial"`
-    	UUID   int64           `json:"uuid"`
-    	When   int64           `json:"when,omitempty"`
-    	Config json.RawMessage `json:"config"`
+        Serial     string          `json:"serial"`
+        UUID       uint64          `json:"uuid"`
+        When       uint64          `json:"when"`
+        Config     json.RawMessage `json:"config,omitempty"`
+        Compress64 string          `json:"compress_64,omitempty"` // Base64+zlib compressed payload
+        CompressSz uint32          `json:"compress_sz,omitempty"` // Original uncompressed size
     }
 
     type ConfigureRejectedParameter struct {

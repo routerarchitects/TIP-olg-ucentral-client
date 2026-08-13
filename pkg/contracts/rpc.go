@@ -732,3 +732,31 @@ type CloudScriptResponse struct {
 	Serial string            `json:"serial"`
 	Status CloudScriptStatus `json:"status"`
 }
+func (r *CloudConfigureRequest) EffectiveUUID() (int64, error) {
+	if len(r.Config) > 0 && string(r.Config) != "null" {
+		return r.UUID, nil
+	}
+	if r.Compress64 == "" {
+		return 0, errors.New("neither config nor compress_64 is provided")
+	}
+
+	decoder := base64.NewDecoder(base64.StdEncoding, strings.NewReader(r.Compress64))
+	zlibReader, err := zlib.NewReader(decoder)
+	if err != nil {
+		return 0, fmt.Errorf("invalid zlib data: %w", err)
+	}
+	defer zlibReader.Close()
+
+	limitReader := io.LimitReader(zlibReader, int64(r.CompressSz)+1)
+	bytesRead, err := io.ReadAll(limitReader)
+	if err != nil {
+		return 0, fmt.Errorf("decompression error: %w", err)
+	}
+
+	trimmed := bytes.TrimSpace(bytesRead)
+	var innerReq CloudConfigureRequest
+	if err := json.Unmarshal(trimmed, &innerReq); err != nil {
+		return 0, errors.New("decompressed payload must be a JSON configuration object")
+	}
+	return innerReq.UUID, nil
+}

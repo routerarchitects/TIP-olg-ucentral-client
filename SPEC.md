@@ -1145,10 +1145,10 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
 
     func (n *NATSClient) SubmitConfigure(ctx context.Context, cmd *agentcore.ConfigureCommand) error
     func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *agentcore.ActionCommand) error
-    func (n *NATSClient) SubscribeResults(ctx context.Context, handler func(env agentcore.ResultEnvelope)) (nats.Subscription, error)
+    func (n *NATSClient) SubscribeResults(ctx context.Context, handler func(env agentcore.ResultEnvelope)) error
 
     // Query Envelopes (Stubbed due to agentcore limitations)
-    func (n *NATSClient) QueryCapabilities(ctx context.Context, query *contracts.CloudCapabilitiesQuery) (*agentcore.ResultEnvelope, error)
+    func (n *NATSClient) QueryCapabilities(ctx context.Context, query *contracts.CloudCapabilitiesQuery) ([]byte, error)
     func (n *NATSClient) QueryDeviceStatus(ctx context.Context, query *contracts.CloudDeviceStatusQuery) (*agentcore.StatusEnvelope, error)
 
     // Subscriptions

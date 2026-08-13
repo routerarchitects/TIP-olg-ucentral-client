@@ -1,9 +1,11 @@
 package contracts
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 )
@@ -78,3 +80,136 @@ type DeviceStatus struct {
 }
 
 // ValidateStatusEnvelope verifies a StatusEnvelope is well-formed.
+
+// ValidateCommandPayload decodes and strictly validates action-specific payloads based on command and action.
+func ValidateCommandPayload(command CommandType, action ActionType, payload json.RawMessage) error {
+	var req interface{ Validate() error }
+
+	switch {
+	case action == ActionFactory:
+		req = &CloudFactoryRequest{}
+	case action == ActionCertupdate:
+		req = &CloudCertupdateRequest{}
+	case action == ActionReenroll:
+		req = &CloudReenrollRequest{}
+	case action == ActionRTTY:
+		req = &CloudRemoteAccessRequest{}
+	case action == ActionLeds:
+		req = &CloudLedsRequest{}
+	case action == ActionTrace:
+		req = &CloudTraceRequest{}
+	case action == ActionPing:
+		req = &CloudPingRequest{}
+	case action == ActionTelemetry:
+		req = &CloudTelemetryRequest{}
+	case action == ActionReboot || command == CommandReboot:
+		req = &CloudRebootRequest{}
+	case action == ActionUpgrade || command == CommandUpgrade:
+		req = &CloudUpgradeRequest{}
+	case action == ActionExecute || command == CommandScript:
+		req = &CloudScriptRequest{}
+	case action == ActionCapabilitiesGet || action == ActionStatusGet || command == CommandQuery:
+		if len(payload) == 0 || bytes.Equal(bytes.TrimSpace(payload), []byte("null")) {
+			return nil
+		}
+
+		if !json.Valid(payload) {
+			return errors.New("query payload contains invalid JSON")
+		}
+
+		var queryPayload map[string]json.RawMessage
+		if err := json.Unmarshal(payload, &queryPayload); err != nil {
+			return errors.New("query payload must be a JSON object")
+		}
+
+		if len(queryPayload) != 0 {
+			return errors.New("query payload must be empty")
+		}
+
+		return nil
+	default:
+		// Unknown or no-payload action
+		if len(payload) > 0 && !json.Valid(payload) {
+			return errors.New("payload contains invalid JSON")
+		}
+		return nil
+	}
+
+	if len(payload) == 0 || string(payload) == "null" {
+		return fmt.Errorf("payload is required for command %q action %q", command, action)
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	if err := decoder.Decode(req); err != nil {
+		return fmt.Errorf("malformed payload for command %q action %q: %w", command, action, err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return fmt.Errorf("trailing JSON in payload for command %q action %q", command, action)
+	}
+
+	if err := req.Validate(); err != nil {
+		return fmt.Errorf("invalid payload for command %q action %q: %w", command, action, err)
+	}
+
+	return nil
+}
+
+// ValidateResultPayload verifies that the downstream agent's result payload
+// matches the expected shape of the corresponding cloud status structure.
+func ValidateResultPayload(command CommandType, action ActionType, payload json.RawMessage) error {
+	if len(payload) == 0 || string(bytes.TrimSpace(payload)) == "null" {
+		return nil // Payload is optional for many NATS command results.
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	// Note: We intentionally do NOT use DisallowUnknownFields() here to maintain
+	// permissive validation for forward compatibility, matching request payload behavior.
+
+	switch command {
+	case CommandConfigure:
+		var status CloudConfigureResultStatus
+		return decoder.Decode(&status)
+	case CommandReboot:
+		var status CloudRebootStatus
+		return decoder.Decode(&status)
+	case CommandScript:
+		var status CloudScriptStatus
+		return decoder.Decode(&status)
+	case CommandUpgrade:
+		var status CloudUpgradeStatus
+		return decoder.Decode(&status)
+	case CommandAction:
+		switch action {
+		case ActionFactory:
+			var status CloudFactoryStatus
+			return decoder.Decode(&status)
+		case ActionTelemetry:
+			var status CloudTelemetryStatus
+			return decoder.Decode(&status)
+		case ActionRTTY:
+			var status CloudRemoteAccessStatus
+			return decoder.Decode(&status)
+		case ActionCertupdate:
+			var status CloudCertupdateStatus
+			return decoder.Decode(&status)
+		case ActionReenroll:
+			var status CloudReenrollStatus
+			return decoder.Decode(&status)
+		case ActionLeds:
+			var status CloudLedsStatus
+			return decoder.Decode(&status)
+		case ActionTrace:
+			var status CloudTraceStatus
+			return decoder.Decode(&status)
+		case ActionPing:
+			// Ping does not use a status struct in the payload for NATS
+			return nil
+		default:
+			// If it's an action we don't strictly validate, allow it.
+			return nil
+		}
+	default:
+		// Other commands (like query) might not have payload validation defined yet.
+		return nil
+	}
+}

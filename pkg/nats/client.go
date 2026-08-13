@@ -79,6 +79,10 @@ func (n *NATSClient) SubmitConfigure(ctx context.Context, cmd *agentcore.Configu
 	if len(cmd.Payload) == 0 {
 		return errors.New("command payload cannot be empty")
 	}
+	// uCentral Payload Validation
+	if err := contracts.ValidateCommandPayload(contracts.CommandConfigure, "", cmd.Payload); err != nil {
+		return fmt.Errorf("invalid configure payload: %w", err)
+	}
 	if cmd.Target != n.target {
 		return fmt.Errorf("target mismatch: got %q, expected %q", cmd.Target, n.target)
 	}
@@ -100,6 +104,10 @@ func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *agentcore.ActionCom
 	}
 	if len(cmd.Payload) == 0 {
 		return errors.New("command payload cannot be empty")
+	}
+	// uCentral Payload Validation
+	if err := contracts.ValidateCommandPayload(contracts.CommandType(cmd.CommandType), contracts.ActionType(cmd.Action), cmd.Payload); err != nil {
+		return fmt.Errorf("invalid action payload: %w", err)
 	}
 	if cmd.Target != n.target {
 		return fmt.Errorf("target mismatch: got %q, expected %q", cmd.Target, n.target)

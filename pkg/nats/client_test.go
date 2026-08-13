@@ -52,3 +52,13 @@ func TestExecuteAction_Validation(t *testing.T) {
 		t.Fatal("expected error for target mismatch")
 	}
 }
+
+func TestSubscribeResults_NilHandler(t *testing.T) {
+	client := &NATSClient{
+		target: "serial-123",
+	}
+	err := client.SubscribeResults(context.Background(), nil)
+	if err == nil || err.Error() != "handler cannot be nil" {
+		t.Errorf("Expected 'handler cannot be nil' error, got: %v", err)
+	}
+}

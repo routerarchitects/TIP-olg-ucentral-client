@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"math/big"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -289,6 +290,40 @@ func TestConfig_Validation(t *testing.T) {
 		}
 		if cfg.Cloud.MaxConsecutiveFrameErrors != 50 {
 			t.Errorf("Expected preserved max errors 50, got %d", cfg.Cloud.MaxConsecutiveFrameErrors)
+		}
+	})
+
+	t.Run("NATS Production Security Enforcement", func(t *testing.T) {
+		cfg := validConfig
+		cfg.NATS = validNATS
+		cfg.NATS.Servers = []string{"nats://nats.example.com"}
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "must use tls://") {
+			t.Errorf("Expected production config to reject nats://, got: %v", err)
+		}
+
+		cfg.NATS.Servers = []string{"tls://nats.example.com"}
+		cfg.NATS.CredentialsFile = ""
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "credentials_file is strictly required") {
+			t.Errorf("Expected production config to reject empty credentials, got: %v", err)
+		}
+
+		cfg.NATS.CredentialsFile = credsFile
+		cfg.NATS.CAFile = ""
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ca_file is strictly required") {
+			t.Errorf("Expected production config to reject empty CA file, got: %v", err)
+		}
+	})
+
+	t.Run("NATS AllowInsecureLocalDev Exception", func(t *testing.T) {
+		cfg := validConfig
+		cfg.NATS = validNATS
+		cfg.NATS.Servers = []string{"nats://nats.example.com"}
+		cfg.NATS.CredentialsFile = ""
+		cfg.NATS.CAFile = ""
+		cfg.NATS.AllowInsecureLocalDev = true
+
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Expected AllowInsecureLocalDev to permit nats:// and empty creds/CA, got: %v", err)
 		}
 	})
 }

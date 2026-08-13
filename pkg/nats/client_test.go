@@ -29,12 +29,17 @@ func TestSubmitConfigure_Validation(t *testing.T) {
 		t.Fatal("expected error for nil command")
 	}
 
-	// Test target mismatch
+	// Test target mismatch with otherwise valid payload
 	err = client.SubmitConfigure(ctx, &agentcore.ConfigureCommand{
-		Target: "wrong-target", Version: contracts.EnvelopeVersion, RPCID: "123", Payload: []byte("{}"), Timestamp: time.Now(),
+		Target:      "wrong-target",
+		Version:     contracts.EnvelopeVersion,
+		RPCID:       "123",
+		UUID:        "999",
+		Payload:     json.RawMessage(`{"serial":"serial-123","uuid":999,"config":{}}`),
+		Timestamp:   time.Now(),
 	})
-	if err == nil {
-		t.Fatal("expected error for target mismatch")
+	if err == nil || !strings.Contains(err.Error(), "target mismatch") {
+		t.Fatalf("expected target mismatch error, got: %v", err)
 	}
 }
 
@@ -48,12 +53,18 @@ func TestExecuteAction_Validation(t *testing.T) {
 		t.Fatal("expected error for invalid action")
 	}
 
-	// Test target mismatch
+	// Test target mismatch with otherwise valid payload
 	err = client.ExecuteAction(ctx, &agentcore.ActionCommand{
-		Target: "wrong-target", Version: contracts.EnvelopeVersion, RPCID: "123", CommandType: "reboot", Payload: []byte("{}"), Timestamp: time.Now(),
+		Target:      "wrong-target",
+		Version:     contracts.EnvelopeVersion,
+		RPCID:       "123",
+		CommandType: "reboot",
+		Action:      "reboot",
+		Payload:     json.RawMessage(`{"serial":"serial-123","when":0}`),
+		Timestamp:   time.Now(),
 	})
-	if err == nil {
-		t.Fatal("expected error for target mismatch")
+	if err == nil || !strings.Contains(err.Error(), "target mismatch") {
+		t.Fatalf("expected target mismatch error, got: %v", err)
 	}
 }
 

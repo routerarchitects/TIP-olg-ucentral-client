@@ -3,11 +3,13 @@ package nats
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Telecominfraproject/olg-nats-agent-core/agentcore"
+	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/config"
 	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/contracts"
 )
 
@@ -80,5 +82,51 @@ func TestSubmitConfigure_UUIDMismatch_Plain(t *testing.T) {
 	err := client.SubmitConfigure(context.Background(), cmd)
 	if err == nil || !strings.Contains(err.Error(), "does not match payload UUID") {
 		t.Errorf("Expected UUID mismatch error, got: %v", err)
+	}
+}
+
+func TestNewNATSClient_ConfigWiring(t *testing.T) {
+	cfg := config.NATSConfig{
+		Target:          "ap-serial-123",
+		Servers:         []string{"tls://broker:4222"},
+		CredentialsFile: "/tmp/creds",
+		CAFile:          "/tmp/ca.pem",
+		ClientCertFile:  "/tmp/cert.pem",
+		ClientKeyFile:   "/tmp/key.pem",
+	}
+
+	var capturedConfig agentcore.Config
+
+	// Mock the factory
+	originalFactory := agentcoreNew
+	defer func() { agentcoreNew = originalFactory }()
+
+	agentcoreNew = func(c agentcore.Config, opts ...agentcore.Option) (*agentcore.Client, error) {
+		capturedConfig = c
+		return nil, errors.New("mock intercept")
+	}
+
+	_, err := NewNATSClient(cfg, nil)
+	if err == nil || err.Error() != "nats: failed to initialize agentcore client: mock intercept" {
+		t.Fatalf("expected mock intercept error, got: %v", err)
+	}
+
+	// Assert the wiring is correct
+	if capturedConfig.AgentName != cfg.Target {
+		t.Errorf("expected AgentName %q, got %q", cfg.Target, capturedConfig.AgentName)
+	}
+	if capturedConfig.NATS.TLS == nil {
+		t.Fatal("expected TLSConfig to be non-nil")
+	}
+	if !capturedConfig.NATS.TLS.Enabled {
+		t.Error("expected TLS to be enabled")
+	}
+	if capturedConfig.NATS.TLS.CAFile != cfg.CAFile {
+		t.Errorf("expected CAFile %q, got %q", cfg.CAFile, capturedConfig.NATS.TLS.CAFile)
+	}
+	
+	expectedConfigurePattern := "cmd.configure.%s"
+	if capturedConfig.Subjects.ConfigurePattern != expectedConfigurePattern {
+		t.Errorf("expected ConfigurePattern %q, got %q", expectedConfigurePattern, capturedConfig.Subjects.ConfigurePattern)
 	}
 }

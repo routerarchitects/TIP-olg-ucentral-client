@@ -18,6 +18,9 @@ type NATSClient struct {
 	agentClient *agentcore.Client
 }
 
+// agentcoreNew is a package-level variable to allow mocking in tests
+var agentcoreNew = agentcore.New
+
 func NewNATSClient(cfg config.NATSConfig, onStateChange func(contracts.LinkState)) (*NATSClient, error) {
 	if err := contracts.ValidateNATSTarget(cfg.Target); err != nil {
 		return nil, fmt.Errorf("nats: fatal: %w", err)
@@ -53,7 +56,7 @@ func NewNATSClient(cfg config.NATSConfig, onStateChange func(contracts.LinkState
 		}),
 	}
 
-	agentClient, err := agentcore.New(agentCfg, clientOpts...)
+	agentClient, err := agentcoreNew(agentCfg, clientOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("nats: failed to initialize agentcore client: %w", err)
 	}

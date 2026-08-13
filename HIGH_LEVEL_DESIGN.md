@@ -402,7 +402,7 @@ Exposes a priority-aware message dispatch queue writing to the WebSocket connect
     *   *Publish:* `cmd.configure.<target>`, `cmd.action.<target>.*`, `capabilities.get.<target>`, `status.get.<target>`
     *   *Subscribe:* `status.<target>`, `telemetry.<target>`, `logs.<target>`, `health.<target>`, `result.<target>`, `_INBOX.>`
     
-    *Security Constraint:* NATS credentials MUST explicitly allow publish/subscribe access to the set of authorized downstream targets rather than relying on unrestricted cross-target wildcard access. The internal Request Manager ensures only dynamically registered downstream agents (learned via UDS) receive routed commands.
+    *Security Constraint:* NATS credentials MUST explicitly allow publish/subscribe access to the set of authorized downstream targets rather than relying on unrestricted cross-target wildcard access. The daemon delegates target routing decisions to the internal Request Manager and relies on the NATS broker's credentials to physically enforce access boundaries.
 
 ### 5.2 Action Command Authorization & Auditing
 *   **NATS ACLs:** Only the uCentral client is authorized to publish to `cmd.action.<target>.*`. Downstream agents are prohibited from publishing to these topics.

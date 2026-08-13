@@ -138,7 +138,7 @@ To guarantee flawless integration with the existing VyOS NATS client, all NATS s
 
 The `status.get` subject is owned by the downstream device/local agent. The uCentral client publishes request-reply queries to this subject for current device/platform status and upgrade recovery. The uCentral client must not subscribe to or respond on this subject.
 
-*Security Boundary:* Read-only metadata calls (such as capability and status retrieval) are mapped to their own explicit subject namespaces, keeping them separate from destructive/operational `action.*` subjects. The daemon is restricted to `<target>` topics to prevent cross-device actions.
+*Security Boundary:* Read-only metadata calls (such as capability and status retrieval) are mapped to their own explicit subject namespaces, keeping them separate from destructive/operational `action.*` subjects. The daemon acts as a 1-to-N gateway routing these actions securely to the appropriate downstream agent.
 
 ### 2.4 Capability Discovery & Caching Flow
 At startup, the client retrieves downstream device capabilities using the dedicated NATS query subject:
@@ -398,11 +398,11 @@ Exposes a priority-aware message dispatch queue writing to the WebSocket connect
 ### 5.1 NATS Security Configuration
 *   **Authentication:** Authenticates with the NATS bus using **NKeys/Seed files** or **JWT Tokens** specified in the daemon configuration file.
 *   **TLS Requirements:** TLS 1.2+ is enforced on the NATS connection with CA certificates validation.
-*   **Authorization & Access Control (ACLs):** The client runs under restricted NATS credentials enforcing target isolation:
+*   **Authorization & Access Control (ACLs):** The client acts as a 1-to-N gateway and its NATS credentials must authorize it to route messages to/from specific downstream targets:
     *   *Publish:* `cmd.configure.<target>`, `cmd.action.<target>.*`, `capabilities.get.<target>`, `status.get.<target>`
     *   *Subscribe:* `status.<target>`, `telemetry.<target>`, `logs.<target>`, `health.<target>`, `result.<target>`, `_INBOX.>`
     
-    *Security Constraint:* NATS credentials MUST restrict publish/subscribe access to the explicit subjects associated with the configured <target> and MUST NOT grant cross-target wildcard access.
+    *Security Constraint:* NATS credentials MUST explicitly allow publish/subscribe access to the set of authorized downstream targets rather than relying on unrestricted cross-target wildcard access. The internal Request Manager ensures only dynamically registered downstream agents (learned via UDS) receive routed commands.
 
 ### 5.2 Action Command Authorization & Auditing
 *   **NATS ACLs:** Only the uCentral client is authorized to publish to `cmd.action.<target>.*`. Downstream agents are prohibited from publishing to these topics.

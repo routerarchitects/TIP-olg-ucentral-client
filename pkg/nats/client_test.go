@@ -2,8 +2,16 @@ package nats
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
+	"math/big"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -29,17 +37,17 @@ func TestSubmitConfigure_Validation(t *testing.T) {
 		t.Fatal("expected error for nil command")
 	}
 
-	// Test target mismatch with otherwise valid payload
+	// Test empty target
 	err = client.SubmitConfigure(ctx, &agentcore.ConfigureCommand{
-		Target:    "wrong-target",
+		Target:    "",
 		Version:   contracts.EnvelopeVersion,
 		RPCID:     "123",
 		UUID:      "999",
 		Payload:   json.RawMessage(`{"serial":"serial-123","uuid":999,"config":{}}`),
 		Timestamp: time.Now(),
 	})
-	if err == nil || !strings.Contains(err.Error(), "target mismatch") {
-		t.Fatalf("expected target mismatch error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "target cannot be empty") {
+		t.Fatalf("expected empty target error, got: %v", err)
 	}
 }
 
@@ -53,9 +61,9 @@ func TestExecuteAction_Validation(t *testing.T) {
 		t.Fatal("expected error for invalid action")
 	}
 
-	// Test target mismatch with otherwise valid payload
+	// Test empty target
 	err = client.ExecuteAction(ctx, &agentcore.ActionCommand{
-		Target:      "wrong-target",
+		Target:      "",
 		Version:     contracts.EnvelopeVersion,
 		RPCID:       "123",
 		CommandType: "reboot",
@@ -63,16 +71,14 @@ func TestExecuteAction_Validation(t *testing.T) {
 		Payload:     json.RawMessage(`{"serial":"serial-123","when":0}`),
 		Timestamp:   time.Now(),
 	})
-	if err == nil || !strings.Contains(err.Error(), "target mismatch") {
-		t.Fatalf("expected target mismatch error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "target cannot be empty") {
+		t.Fatalf("expected empty target error, got: %v", err)
 	}
 }
 
 func TestSubscribeResults_NilHandler(t *testing.T) {
-	client := &NATSClient{
-		target: "serial-123",
-	}
-	err := client.SubscribeResults(context.Background(), nil)
+	client := &NATSClient{}
+	err := client.SubscribeResults(context.Background(), "ucentral-test", nil)
 	if err == nil || err.Error() != "handler cannot be nil" {
 		t.Errorf("Expected 'handler cannot be nil' error, got: %v", err)
 	}
@@ -97,13 +103,28 @@ func TestSubmitConfigure_UUIDMismatch_Plain(t *testing.T) {
 }
 
 func TestNewNATSClient_ConfigWiring(t *testing.T) {
+	tmpDir := t.TempDir()
+	credsFile := filepath.Join(tmpDir, "creds")
+	os.WriteFile(credsFile, []byte("-----BEGIN USER NKEY SEED-----\n"), 0644)
+
+	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	template := x509.Certificate{SerialNumber: big.NewInt(1), IsCA: true}
+	derBytes, _ := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
+	caFile := filepath.Join(tmpDir, "ca.pem")
+	os.WriteFile(caFile, caPEM, 0644)
+
+	keyBytes, _ := x509.MarshalECPrivateKey(priv)
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyBytes})
+	keyFile := filepath.Join(tmpDir, "key.pem")
+	os.WriteFile(keyFile, keyPEM, 0644)
+
 	cfg := config.NATSConfig{
-		Target:          "ap-serial-123",
-		Servers:         []string{"tls://broker:4222"},
-		CredentialsFile: "/tmp/creds",
-		CAFile:          "/tmp/ca.pem",
-		ClientCertFile:  "/tmp/cert.pem",
-		ClientKeyFile:   "/tmp/key.pem",
+		Servers:         []string{"tls://127.0.0.1:4222"},
+		CredentialsFile: credsFile,
+		CAFile:          caFile,
+		ClientCertFile:  caFile, // using CA as client cert for simplicity
+		ClientKeyFile:   keyFile,
 	}
 
 	var capturedConfig agentcore.Config
@@ -117,14 +138,14 @@ func TestNewNATSClient_ConfigWiring(t *testing.T) {
 		return nil, errors.New("mock intercept")
 	}
 
-	_, err := NewNATSClient(cfg, nil)
+	_, err := NewNATSClient("ucentral-agent", cfg, nil)
 	if err == nil || err.Error() != "nats: failed to initialize agentcore client: mock intercept" {
 		t.Fatalf("expected mock intercept error, got: %v", err)
 	}
 
 	// Assert the wiring is correct
-	if capturedConfig.AgentName != cfg.Target {
-		t.Errorf("expected AgentName %q, got %q", cfg.Target, capturedConfig.AgentName)
+	if capturedConfig.AgentName != "ucentral-agent" {
+		t.Errorf("expected AgentName %q, got %q", "ucentral-agent", capturedConfig.AgentName)
 	}
 	if capturedConfig.NATS.TLS == nil {
 		t.Fatal("expected TLSConfig to be non-nil")
@@ -143,10 +164,10 @@ func TestNewNATSClient_ConfigWiring(t *testing.T) {
 }
 
 func TestSubscribeResults_Validation(t *testing.T) {
-	client := &NATSClient{target: "target-123"}
+	client := &NATSClient{}
 	// We can't easily unit test the handler without mocking agentClient,
 	// but we can test that calling it with a nil handler fails.
-	err := client.SubscribeResults(context.Background(), nil)
+	err := client.SubscribeResults(context.Background(), "target-123", nil)
 	if err == nil || err.Error() != "handler cannot be nil" {
 		t.Errorf("expected nil handler error, got: %v", err)
 	}
@@ -154,40 +175,87 @@ func TestSubscribeResults_Validation(t *testing.T) {
 
 func TestValidateResultEnvelope_Negative(t *testing.T) {
 	tests := []struct {
-		name    string
-		msg     agentcore.ResultEnvelope
-		wantErr string
+		name           string
+		expectedTarget string
+		msg            agentcore.ResultEnvelope
+		wantErr        string
 	}{
 		{
-			name: "invalid configure uuid type",
+			name:           "invalid configure uuid type",
+			expectedTarget: "target-123",
 			msg: agentcore.ResultEnvelope{
+				Version:     contracts.EnvelopeVersion,
+				Target:      "target-123",
+				Result:      string(contracts.ResultSuccess),
 				CommandType: string(contracts.CommandConfigure),
 				UUID:        "not-a-number",
 			},
 			wantErr: "uuid must be a positive int64 for configure results",
 		},
 		{
-			name: "negative configure uuid",
+			name:           "negative configure uuid",
+			expectedTarget: "target-123",
 			msg: agentcore.ResultEnvelope{
+				Version:     contracts.EnvelopeVersion,
+				Target:      "target-123",
+				Result:      string(contracts.ResultSuccess),
 				CommandType: string(contracts.CommandConfigure),
 				UUID:        "-1",
 			},
 			wantErr: "uuid must be a positive int64 for configure results",
 		},
 		{
-			name: "invalid payload for result",
+			name:           "invalid payload for result",
+			expectedTarget: "target-123",
 			msg: agentcore.ResultEnvelope{
+				Version:     contracts.EnvelopeVersion,
+				Target:      "target-123",
+				Result:      string(contracts.ResultSuccess),
 				CommandType: string(contracts.CommandConfigure),
 				UUID:        "123",
 				Payload:     []byte(`{bad json}`), // Invalid payload
 			},
 			wantErr: "invalid result payload",
 		},
+		{
+			name:           "invalid version",
+			expectedTarget: "target-123",
+			msg: agentcore.ResultEnvelope{
+				Version:     "2.0",
+				Target:      "target-123",
+				Result:      string(contracts.ResultSuccess),
+				CommandType: string(contracts.CommandConfigure),
+			},
+			wantErr: "invalid envelope version",
+		},
+		{
+			name:           "invalid result enum",
+			expectedTarget: "target-123",
+			msg: agentcore.ResultEnvelope{
+				Version:     contracts.EnvelopeVersion,
+				Target:      "target-123",
+				Result:      "mostly_done",
+				CommandType: string(contracts.CommandConfigure),
+			},
+			wantErr: "invalid result state",
+		},
+		{
+			name:           "invalid command/action matrix",
+			expectedTarget: "target-123",
+			msg: agentcore.ResultEnvelope{
+				Version:     contracts.EnvelopeVersion,
+				Target:      "target-123",
+				Result:      string(contracts.ResultSuccess),
+				CommandType: string(contracts.CommandQuery),
+				Action:      string(contracts.ActionReboot),
+			},
+			wantErr: "invalid command/action combination",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateResultEnvelope(tt.msg)
+			err := validateResultEnvelope(tt.expectedTarget, tt.msg)
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Errorf("expected error containing %q, got: %v", tt.wantErr, err)
 			}

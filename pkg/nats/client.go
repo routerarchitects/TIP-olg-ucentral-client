@@ -21,13 +21,16 @@ type NATSClient struct {
 // agentcoreNew is a package-level variable to allow mocking in tests
 var agentcoreNew = agentcore.New
 
-func NewNATSClient(cfg config.NATSConfig, onStateChange func(contracts.LinkState)) (*NATSClient, error) {
-	if err := contracts.ValidateNATSTarget(cfg.Target); err != nil {
+func NewNATSClient(agentName string, cfg config.NATSConfig, onStateChange func(contracts.LinkState)) (*NATSClient, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("nats: invalid configuration: %w", err)
+	}
+	if err := contracts.ValidateNATSTarget(agentName); err != nil {
 		return nil, fmt.Errorf("nats: fatal: %w", err)
 	}
 
 	agentCfg := agentcore.Config{
-		AgentName: cfg.Target,
+		AgentName: agentName,
 		Version:   "1.0",
 		NATS: agentcore.NATSConfig{
 			Servers:         cfg.Servers,
@@ -69,7 +72,7 @@ func NewNATSClient(cfg config.NATSConfig, onStateChange func(contracts.LinkState
 	}
 
 	return &NATSClient{
-		target:      cfg.Target,
+		target:      agentName,
 		agentClient: agentClient,
 	}, nil
 }
@@ -105,8 +108,11 @@ func (n *NATSClient) SubmitConfigure(ctx context.Context, cmd *agentcore.Configu
 			}
 		}
 	}
-	if cmd.Target != n.target {
-		return fmt.Errorf("target mismatch: got %q, expected %q", cmd.Target, n.target)
+	// Note: We intentionally do NOT restrict cmd.Target == n.target here.
+	// uCentral acts as a 1-to-N gateway for local services.
+	// The internal Request Manager is trusted to supply the correct downstream target.
+	if cmd.Target == "" {
+		return errors.New("target cannot be empty")
 	}
 
 	if n.agentClient == nil {
@@ -142,8 +148,11 @@ func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *agentcore.ActionCom
 	if err := contracts.ValidateCommandPayload(command, action, cmd.Payload); err != nil {
 		return fmt.Errorf("invalid action payload: %w", err)
 	}
-	if cmd.Target != n.target {
-		return fmt.Errorf("target mismatch: got %q, expected %q", cmd.Target, n.target)
+	// Note: We intentionally do NOT restrict cmd.Target == n.target here.
+	// uCentral acts as a 1-to-N gateway for local services.
+	// The internal Request Manager is trusted to supply the correct downstream target.
+	if cmd.Target == "" {
+		return errors.New("target cannot be empty")
 	}
 
 	if n.agentClient == nil {
@@ -162,9 +171,12 @@ func (n *NATSClient) QueryDeviceStatus(ctx context.Context, query *contracts.Clo
 	return nil, errors.New("QueryDeviceStatus not implemented in agentcore")
 }
 
-func (n *NATSClient) SubscribeResults(ctx context.Context, handler func(agentcore.ResultEnvelope)) error {
+func (n *NATSClient) SubscribeResults(ctx context.Context, target string, handler func(msg agentcore.ResultEnvelope)) error {
 	if ctx == nil || ctx.Err() != nil {
 		return errors.New("invalid or canceled context")
+	}
+	if target == "" {
+		return errors.New("target cannot be empty")
 	}
 	if handler == nil {
 		return errors.New("handler cannot be nil")
@@ -173,8 +185,8 @@ func (n *NATSClient) SubscribeResults(ctx context.Context, handler func(agentcor
 		return errors.New("agentClient is not initialized")
 	}
 
-	err := n.agentClient.RegisterResultHandler(n.target, func(ctx context.Context, msg agentcore.ResultEnvelope) error {
-		if err := validateResultEnvelope(msg); err != nil {
+	err := n.agentClient.RegisterResultHandler(target, func(ctx context.Context, msg agentcore.ResultEnvelope) error {
+		if err := validateResultEnvelope(target, msg); err != nil {
 			return err
 		}
 		handler(msg)
@@ -183,7 +195,25 @@ func (n *NATSClient) SubscribeResults(ctx context.Context, handler func(agentcor
 	return err
 }
 
-func validateResultEnvelope(msg agentcore.ResultEnvelope) error {
+func validateResultEnvelope(expectedTarget string, msg agentcore.ResultEnvelope) error {
+	if msg.Version != contracts.EnvelopeVersion {
+		return fmt.Errorf("invalid envelope version: expected %q, got %q", contracts.EnvelopeVersion, msg.Version)
+	}
+	if msg.Target != expectedTarget {
+		return fmt.Errorf("target mismatch: got %q, expected %q", msg.Target, expectedTarget)
+	}
+
+	if !contracts.ResultType(msg.Result).Valid() {
+		return fmt.Errorf("invalid result state: %q", msg.Result)
+	}
+
+	command := contracts.CommandType(msg.CommandType)
+	action := contracts.ActionType(msg.Action)
+
+	if !contracts.ValidCommandAction(command, action) {
+		return fmt.Errorf("invalid command/action combination: command=%q action=%q", command, action)
+	}
+
 	if msg.CommandType == string(contracts.CommandConfigure) {
 		uuid, err := strconv.ParseInt(msg.UUID, 10, 64)
 		if err != nil || uuid <= 0 {

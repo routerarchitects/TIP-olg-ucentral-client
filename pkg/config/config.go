@@ -8,8 +8,6 @@ import (
 	"os"
 	"strings"
 	"time"
-
-	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/contracts"
 )
 
 const (
@@ -58,7 +56,6 @@ type CloudConfig struct {
 }
 
 type NATSConfig struct {
-	Target                string   `json:"target,omitempty"`
 	Servers               []string `json:"servers"`
 	CredentialsFile       string   `json:"credentials_file"`
 	CAFile                string   `json:"ca_file"`
@@ -265,13 +262,6 @@ func (c *Config) Validate() error {
 	c.Serial = strings.TrimSpace(c.Serial)
 	if c.Serial == "" {
 		return fmt.Errorf("serial is required")
-	}
-	c.NATS.Target = strings.TrimSpace(c.NATS.Target)
-	if c.NATS.Target == "" {
-		c.NATS.Target = c.Serial
-	}
-	if err := contracts.ValidateNATSTarget(c.NATS.Target); err != nil {
-		return fmt.Errorf("invalid nats target: %w", err)
 	}
 	if err := c.Cloud.Validate(); err != nil {
 		return err

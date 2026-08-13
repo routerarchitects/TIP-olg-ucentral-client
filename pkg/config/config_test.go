@@ -198,17 +198,6 @@ func TestConfig_Validation(t *testing.T) {
 	if err := validConfig.Validate(); err != nil {
 		t.Fatalf("Expected valid config to pass, got: %v", err)
 	}
-	if validConfig.NATS.Target != "serial-123" {
-		t.Fatalf("Expected derived target 'serial-123', got %v", validConfig.NATS.Target)
-	}
-
-	validConfig.NATS.Target = "  foo  "
-	if err := validConfig.Validate(); err != nil {
-		t.Fatalf("Expected valid config to pass, got: %v", err)
-	}
-	if validConfig.NATS.Target != "foo" {
-		t.Fatalf("Expected target 'foo', got %v", validConfig.NATS.Target)
-	}
 
 	tests := []struct {
 		name string
@@ -228,8 +217,6 @@ func TestConfig_Validation(t *testing.T) {
 		{"Invalid NATS scheme", func(c *Config) { c.NATS.Servers = []string{"tcp://localhost"} }},
 		{"Missing NATS CA", func(c *Config) { c.NATS.CAFile = "/missing/ca.pem" }},
 		{"Directory NATS CA", func(c *Config) { c.NATS.CAFile = tmpDir }},
-		{"Wildcard NATS target", func(c *Config) { c.NATS.Target = "foo.*" }},
-		{"Whitespace in NATS target", func(c *Config) { c.NATS.Target = "foo bar" }},
 		{"Negative queue capacity", func(c *Config) { c.Queues.WSWriterCapacity = -100 }},
 		{"Zero queue capacity", func(c *Config) { c.Queues.TelemetryCapacity = 0 }},
 	}

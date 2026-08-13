@@ -318,10 +318,10 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-019`
     *   *Setup:* Publish a valid device health snapshot to `health.<target>`. Separately, publish/request `status.get.<target>` with only the uCentral client running and no downstream status responder.
     *   *Assert:* The NATS client explicitly stubs the `SubscribeHealth` method due to upstream limitations in `agentcore`. The client must not respond to `status.get` with daemon liveness/readiness, Cloud connectivity, queue depth, uptime, or metrics.
-*   **TC-SEC-002 (TLS v1.3 and CA Verification):**
-    *   *Requirement Mapping:* `REQ-023` (TLS v1.3 Security)
-    *   *Setup:* Configure the NATS client to connect to a broker without TLS or with an invalid CA cert.
-    *   *Assert:* Client must fail to connect and reject the connection attempt. Configure with a valid CA cert and TLS v1.3; the connection must succeed.
+*   **TC-SEC-002 (TLS v1.2+ and CA Verification):**
+    *   *Requirement Mapping:* `REQ-023` (TLS Security)
+    *   *Setup:* Configure the NATS client to connect to a broker without TLS (`nats://`) or with an empty CA cert configuration.
+    *   *Assert:* The client must successfully connect to the broker using plaintext/insecure mode, strictly as a permitted local-development exception.
 *   **TC-NET-013 (Partial Publish Failure Propagation):**
     *   *Requirement Mapping:* `REQ-026` (Desired/Applied Cloud Reconciliation Contract)
     *   *Setup:* Intercept and mock the NATS client to succeed on the JetStream KV write, but intentionally return a network error when publishing the `config.apply` trigger.

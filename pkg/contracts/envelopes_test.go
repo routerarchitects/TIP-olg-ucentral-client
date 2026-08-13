@@ -126,3 +126,15 @@ func TestValidateCommandPayload(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateCommandPayload_Configure(t *testing.T) {
+	err := ValidateCommandPayload(CommandConfigure, "", json.RawMessage(`{}`))
+	if err == nil {
+		t.Error("Expected error for missing fields in configure payload")
+	}
+
+	err = ValidateCommandPayload(CommandConfigure, "", json.RawMessage(`{"serial": "123", "uuid": 1, "config": {}}`))
+	if err != nil {
+		t.Errorf("Expected valid configure payload to pass, got: %v", err)
+	}
+}

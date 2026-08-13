@@ -193,17 +193,17 @@ func (n *NATSConfig) Validate() error {
 		}
 	}
 
-	if n.ClientCertFile != "" {
+	if (n.ClientCertFile != "" && n.ClientKeyFile == "") || (n.ClientCertFile == "" && n.ClientKeyFile != "") {
+		return fmt.Errorf("nats client_cert_file and client_key_file must both be provided for mTLS")
+	}
+
+	if n.ClientCertFile != "" && n.ClientKeyFile != "" {
 		if err := checkFile(n.ClientCertFile, "nats client_cert_file"); err != nil {
 			return err
 		}
-	}
-	if n.ClientKeyFile != "" {
 		if err := checkFile(n.ClientKeyFile, "nats client_key_file"); err != nil {
 			return err
 		}
-	}
-	if n.ClientCertFile != "" && n.ClientKeyFile != "" {
 		if _, err := tls.LoadX509KeyPair(n.ClientCertFile, n.ClientKeyFile); err != nil {
 			return fmt.Errorf("invalid nats client certificate or key: %w", err)
 		}

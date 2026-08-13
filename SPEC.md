@@ -1156,9 +1156,9 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     func (n *NATSClient) SubscribeLogs(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error)
     func (n *NATSClient) SubscribeHealth(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error)
     func (n *NATSClient) SubscribeState(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error)
-    func (n *NATSClient) WriteDesiredConfig(ctx context.Context, record agentcore.DesiredConfigRecord) (uint64, error)
+    // State Management (Stubbed due to agentcore limitations)
     func (n *NATSClient) GetDesiredConfigMetadata(ctx context.Context) (uint64, string, error)
-    
+
 
     ```
 

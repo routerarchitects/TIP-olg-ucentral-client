@@ -86,6 +86,8 @@ func ValidateCommandPayload(command CommandType, action ActionType, payload json
 	var req interface{ Validate() error }
 
 	switch {
+	case command == CommandConfigure:
+		req = &CloudConfigureRequest{}
 	case action == ActionFactory:
 		req = &CloudFactoryRequest{}
 	case action == ActionCertupdate:

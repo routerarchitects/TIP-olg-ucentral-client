@@ -1133,14 +1133,12 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
 
     // NATSConfig defines the mandatory secure connection parameters for the NATS bus.
     type NATSConfig struct {
-        Servers         []string // Must strictly use tls:// scheme. nats:// is rejected.
+        Servers         []string // Normally uses tls://. nats:// is permitted for local plaintext development.
         CredentialsFile string   // Path to NATS credentials (NKEY/JWT).
-        CAFile          string   // Mandatory path to the trusted Root CA. Cannot be empty.
+        CAFile          string   // Optional path to the trusted Root CA. If empty, allows plaintext/insecure connection.
     }
 
     // NewNATSClient initializes a NATS connection.
-    // SECURITY CONTRACT: This constructor MUST enforce tls.Config{MinVersion: tls.VersionTLS13}.
-    // It must return a fatal error if CAFile is empty, or if any Server URL is insecure.
     func NewNATSClient(cfg config.NATSConfig, onStateChange func(contracts.LinkState)) (*NATSClient, error)
 
     func (n *NATSClient) SubmitConfigure(ctx context.Context, cmd *agentcore.ConfigureCommand) error
@@ -1199,7 +1197,7 @@ The uCentral client must not register a NATS responder for `status.get.<target>`
         *   `cloud.max_frame_size_bytes`: Default 11534336 (11MB); must be >= 0
         *   `cloud.max_consecutive_frame_errors`: Default 20; must be >= 0
         *   `cloud.stable_session_threshold_seconds`: Default 60; must be > 0
-        *   `nats.servers`: At least one entry; each must use `tls://`
+        *   `nats.servers`: At least one entry; can use `tls://` or `nats://`
         *   `nats.credentials_file`: Required and readable file path
         *   `nats.ca_file`: Required and readable file path
         *   `queues.ws_writer_capacity`: Default 500; must be > 0

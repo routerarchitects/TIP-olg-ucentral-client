@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
 )
 
 // EnvelopeVersion is the required wire protocol version for all NATS envelopes.
@@ -25,7 +24,6 @@ func ValidateNATSTarget(target string) error {
 	}
 	return nil
 }
-
 
 // ValidateDesiredConfigRecord verifies that a DesiredConfigRecord is complete and valid.
 
@@ -80,4 +78,3 @@ type DeviceStatus struct {
 }
 
 // ValidateStatusEnvelope verifies a StatusEnvelope is well-formed.
-

@@ -318,9 +318,13 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Requirement Mapping:* `REQ-019`
     *   *Setup:* Publish a valid device health snapshot to `health.<target>`. Separately, publish/request `status.get.<target>` with only the uCentral client running and no downstream status responder.
     *   *Assert:* The NATS client explicitly stubs the `SubscribeHealth` method due to upstream limitations in `agentcore`. The client must not respond to `status.get` with daemon liveness/readiness, Cloud connectivity, queue depth, uptime, or metrics.
-*   **TC-SEC-002 (TLS v1.2+ and CA Verification):**
+*   **TC-SEC-002A (Production TLS v1.2+ and CA Verification):**
     *   *Requirement Mapping:* `REQ-023` (TLS Security)
-    *   *Setup:* Configure the NATS client to connect to a broker without TLS (`nats://`) or with an empty CA cert configuration.
+    *   *Setup:* Configure the NATS client to connect to a broker with TLS (`tls://`).
+    *   *Assert:* Connection succeeds with a valid CA. Connection is rejected synchronously or asynchronously if the CA is invalid/untrusted, or if the broker is limited below TLS 1.2.
+*   **TC-SEC-002B (Local Development Plaintext Exception):**
+    *   *Requirement Mapping:* `REQ-023` (TLS Security)
+    *   *Setup:* Configure the NATS client to connect to a broker without TLS (`nats://`) and with an empty CA cert configuration.
     *   *Assert:* The client must successfully connect to the broker using plaintext/insecure mode, strictly as a permitted local-development exception.
 *   **TC-NET-013 (Partial Publish Failure Propagation):**
     *   *Requirement Mapping:* `REQ-026` (Desired/Applied Cloud Reconciliation Contract)

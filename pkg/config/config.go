@@ -166,8 +166,16 @@ func (n *NATSConfig) Validate() error {
 		if !n.AllowInsecureLocalDev && u.Scheme != "tls" {
 			return fmt.Errorf("nats server must use tls:// (nats:// is only permitted if allow_insecure_local_dev is true)")
 		}
-		if n.AllowInsecureLocalDev && u.Scheme != "tls" && u.Scheme != "nats" {
-			return fmt.Errorf("nats server must use tls:// or nats://")
+		if n.AllowInsecureLocalDev {
+			if u.Scheme != "tls" && u.Scheme != "nats" {
+				return fmt.Errorf("nats server must use tls:// or nats://")
+			}
+			if u.Scheme == "nats" {
+				host := u.Hostname()
+				if host != "localhost" && host != "127.0.0.1" && host != "::1" {
+					return fmt.Errorf("insecure nats:// is only permitted for loopback addresses (localhost, 127.0.0.1, ::1)")
+				}
+			}
 		}
 	}
 

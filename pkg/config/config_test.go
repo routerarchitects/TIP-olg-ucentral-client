@@ -317,13 +317,18 @@ func TestConfig_Validation(t *testing.T) {
 	t.Run("NATS AllowInsecureLocalDev Exception", func(t *testing.T) {
 		cfg := validConfig
 		cfg.NATS = validNATS
-		cfg.NATS.Servers = []string{"nats://nats.example.com"}
+		cfg.NATS.Servers = []string{"nats://remote.example.com"}
 		cfg.NATS.CredentialsFile = ""
 		cfg.NATS.CAFile = ""
 		cfg.NATS.AllowInsecureLocalDev = true
 
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "loopback addresses") {
+			t.Errorf("Expected AllowInsecureLocalDev to reject non-loopback nats://, got: %v", err)
+		}
+
+		cfg.NATS.Servers = []string{"nats://localhost"}
 		if err := cfg.Validate(); err != nil {
-			t.Fatalf("Expected AllowInsecureLocalDev to permit nats:// and empty creds/CA, got: %v", err)
+			t.Fatalf("Expected AllowInsecureLocalDev to permit nats://localhost and empty creds/CA, got: %v", err)
 		}
 	})
 }

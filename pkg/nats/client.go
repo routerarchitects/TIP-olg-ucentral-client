@@ -81,6 +81,9 @@ func (n *NATSClient) SubmitConfigure(ctx context.Context, cmd *agentcore.Configu
 	if cmd == nil {
 		return errors.New("command cannot be nil")
 	}
+	if cmd.Version != contracts.EnvelopeVersion {
+		return fmt.Errorf("invalid envelope version: expected %q, got %q", contracts.EnvelopeVersion, cmd.Version)
+	}
 	if len(cmd.Payload) == 0 {
 		return errors.New("command payload cannot be empty")
 	}
@@ -124,8 +127,19 @@ func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *agentcore.ActionCom
 	if len(cmd.Payload) == 0 {
 		return errors.New("command payload cannot be empty")
 	}
+	if cmd.Version != contracts.EnvelopeVersion {
+		return fmt.Errorf("invalid envelope version: expected %q, got %q", contracts.EnvelopeVersion, cmd.Version)
+	}
+
+	command := contracts.CommandType(cmd.CommandType)
+	action := contracts.ActionType(cmd.Action)
+
+	if !contracts.ValidCommandAction(command, action) {
+		return fmt.Errorf("invalid command/action combination: command=%q action=%q", command, action)
+	}
+
 	// uCentral Payload Validation
-	if err := contracts.ValidateCommandPayload(contracts.CommandType(cmd.CommandType), contracts.ActionType(cmd.Action), cmd.Payload); err != nil {
+	if err := contracts.ValidateCommandPayload(command, action, cmd.Payload); err != nil {
 		return fmt.Errorf("invalid action payload: %w", err)
 	}
 	if cmd.Target != n.target {

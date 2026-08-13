@@ -206,9 +206,17 @@ func ValidateResultPayload(command CommandType, action ActionType, payload json.
 		case ActionPing:
 			// Ping does not use a status struct in the payload for NATS
 			return nil
+		case ActionReboot:
+			var status CloudRebootStatus
+			return decoder.Decode(&status)
+		case ActionUpgrade:
+			var status CloudUpgradeStatus
+			return decoder.Decode(&status)
+		case ActionExecute:
+			var status CloudScriptStatus
+			return decoder.Decode(&status)
 		default:
-			// If it's an action we don't strictly validate, allow it.
-			return nil
+			return fmt.Errorf("unrecognized action for result: %q", action)
 		}
 	default:
 		// Other commands (like query) might not have payload validation defined yet.

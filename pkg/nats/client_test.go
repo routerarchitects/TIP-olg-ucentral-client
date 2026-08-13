@@ -124,7 +124,7 @@ func TestNewNATSClient_ConfigWiring(t *testing.T) {
 	if capturedConfig.NATS.TLS.CAFile != cfg.CAFile {
 		t.Errorf("expected CAFile %q, got %q", cfg.CAFile, capturedConfig.NATS.TLS.CAFile)
 	}
-	
+
 	expectedConfigurePattern := "cmd.configure.%s"
 	if capturedConfig.Subjects.ConfigurePattern != expectedConfigurePattern {
 		t.Errorf("expected ConfigurePattern %q, got %q", expectedConfigurePattern, capturedConfig.Subjects.ConfigurePattern)

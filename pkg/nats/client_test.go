@@ -31,12 +31,12 @@ func TestSubmitConfigure_Validation(t *testing.T) {
 
 	// Test target mismatch with otherwise valid payload
 	err = client.SubmitConfigure(ctx, &agentcore.ConfigureCommand{
-		Target:      "wrong-target",
-		Version:     contracts.EnvelopeVersion,
-		RPCID:       "123",
-		UUID:        "999",
-		Payload:     json.RawMessage(`{"serial":"serial-123","uuid":999,"config":{}}`),
-		Timestamp:   time.Now(),
+		Target:    "wrong-target",
+		Version:   contracts.EnvelopeVersion,
+		RPCID:     "123",
+		UUID:      "999",
+		Payload:   json.RawMessage(`{"serial":"serial-123","uuid":999,"config":{}}`),
+		Timestamp: time.Now(),
 	})
 	if err == nil || !strings.Contains(err.Error(), "target mismatch") {
 		t.Fatalf("expected target mismatch error, got: %v", err)

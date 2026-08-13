@@ -120,8 +120,8 @@ TIP-olg-ucentral-client/
     // * be rejected as unsupported rather than silently ignored. This is a deliberate OLG compatibility limitation.
     type CloudConfigureRequest struct {
         Serial     string          `json:"serial"`
-        UUID       uint64          `json:"uuid"`
-        When       uint64          `json:"when"`
+        UUID       int64           `json:"uuid"`
+        When       int64           `json:"when,omitempty"`
         Config     json.RawMessage `json:"config,omitempty"`
         Compress64 string          `json:"compress_64,omitempty"` // Base64+zlib compressed payload
         CompressSz uint32          `json:"compress_sz,omitempty"` // Original uncompressed size
@@ -551,9 +551,12 @@ TIP-olg-ucentral-client/
     }
 
     type NATSConfig struct {
+        Target          string   `json:"target"`
         Servers         []string `json:"servers"`
         CredentialsFile string   `json:"credentials_file"`
         CAFile          string   `json:"ca_file"`
+        ClientCertFile  string   `json:"client_cert_file,omitempty"`
+        ClientKeyFile   string   `json:"client_key_file,omitempty"`
     }
 
     type QueueConfig struct {

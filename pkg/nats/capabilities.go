@@ -54,7 +54,11 @@ func (c *CapabilityCache) LoadFromDisk(filePath string) ([]byte, string, error) 
 		return nil, "", errors.New("capabilities 'version.olg' missing numeric major, minor, or patch fields")
 	}
 
-	firmware := fmt.Sprintf("%v.%v.%v", major, minor, patch)
+	if major != float64(int64(major)) || minor != float64(int64(minor)) || patch != float64(int64(patch)) {
+		return nil, "", errors.New("capabilities 'version.olg' major, minor, and patch must be integers")
+	}
+
+	firmware := fmt.Sprintf("%d.%d.%d", int64(major), int64(minor), int64(patch))
 
 	return data, firmware, nil
 }
@@ -67,13 +71,14 @@ func (c *CapabilityCache) GetCapabilities() ([]byte, error) {
 
 	// Cache miss: attempt to load from disk (Stub for NATS fetch)
 	if !loaded {
-		data, firmware, err := c.LoadFromDisk("capabilities.json")
-		if err != nil {
-			return nil, err
-		}
-
 		c.mu.Lock()
+		// Double-check under write lock to avoid stampedes
 		if len(c.capabilities) == 0 {
+			data, firmware, err := c.LoadFromDisk("capabilities.json")
+			if err != nil {
+				c.mu.Unlock()
+				return nil, err
+			}
 			c.capabilities = data
 			c.firmware = firmware
 		}

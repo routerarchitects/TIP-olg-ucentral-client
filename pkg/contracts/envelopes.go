@@ -208,37 +208,97 @@ func ValidateResultPayload(command CommandType, action ActionType, payload json.
 		switch action {
 		case ActionFactory:
 			var status CloudFactoryStatus
-			return decoder.Decode(&status)
+			if err := decoder.Decode(&status); err != nil {
+				return err
+			}
+			if err := decoder.Decode(&struct{}{}); err != io.EOF {
+				return errors.New("trailing JSON in payload")
+			}
+			return status.Validate()
 		case ActionTelemetry:
 			var status CloudTelemetryStatus
-			return decoder.Decode(&status)
+			if err := decoder.Decode(&status); err != nil {
+				return err
+			}
+			if err := decoder.Decode(&struct{}{}); err != io.EOF {
+				return errors.New("trailing JSON in payload")
+			}
+			return status.Validate()
 		case ActionRTTY:
 			var status CloudRemoteAccessStatus
-			return decoder.Decode(&status)
+			if err := decoder.Decode(&status); err != nil {
+				return err
+			}
+			if err := decoder.Decode(&struct{}{}); err != io.EOF {
+				return errors.New("trailing JSON in payload")
+			}
+			return status.Validate()
 		case ActionCertupdate:
 			var status CloudCertupdateStatus
-			return decoder.Decode(&status)
+			if err := decoder.Decode(&status); err != nil {
+				return err
+			}
+			if err := decoder.Decode(&struct{}{}); err != io.EOF {
+				return errors.New("trailing JSON in payload")
+			}
+			return status.Validate()
 		case ActionReenroll:
 			var status CloudReenrollStatus
-			return decoder.Decode(&status)
+			if err := decoder.Decode(&status); err != nil {
+				return err
+			}
+			if err := decoder.Decode(&struct{}{}); err != io.EOF {
+				return errors.New("trailing JSON in payload")
+			}
+			return status.Validate()
 		case ActionLeds:
 			var status CloudLedsStatus
-			return decoder.Decode(&status)
+			if err := decoder.Decode(&status); err != nil {
+				return err
+			}
+			if err := decoder.Decode(&struct{}{}); err != io.EOF {
+				return errors.New("trailing JSON in payload")
+			}
+			return status.Validate()
 		case ActionTrace:
 			var status CloudTraceStatus
-			return decoder.Decode(&status)
+			if err := decoder.Decode(&status); err != nil {
+				return err
+			}
+			if err := decoder.Decode(&struct{}{}); err != io.EOF {
+				return errors.New("trailing JSON in payload")
+			}
+			return status.Validate()
 		case ActionPing:
 			// Ping does not use a status struct in the payload for NATS
 			return nil
 		case ActionReboot:
 			var status CloudRebootStatus
-			return decoder.Decode(&status)
+			if err := decoder.Decode(&status); err != nil {
+				return err
+			}
+			if err := decoder.Decode(&struct{}{}); err != io.EOF {
+				return errors.New("trailing JSON in payload")
+			}
+			return status.Validate()
 		case ActionUpgrade:
 			var status CloudUpgradeStatus
-			return decoder.Decode(&status)
+			if err := decoder.Decode(&status); err != nil {
+				return err
+			}
+			if err := decoder.Decode(&struct{}{}); err != io.EOF {
+				return errors.New("trailing JSON in payload")
+			}
+			return status.Validate()
 		case ActionExecute:
 			var status CloudScriptStatus
-			return decoder.Decode(&status)
+			if err := decoder.Decode(&status); err != nil {
+				return err
+			}
+			if err := decoder.Decode(&struct{}{}); err != io.EOF {
+				return errors.New("trailing JSON in payload")
+			}
+			return status.Validate()
 		default:
 			return fmt.Errorf("unrecognized action for result: %q", action)
 		}

@@ -138,3 +138,63 @@ func TestValidateCommandPayload_Configure(t *testing.T) {
 		t.Errorf("Expected valid configure payload to pass, got: %v", err)
 	}
 }
+
+func TestValidateResultPayload(t *testing.T) {
+	tests := []struct {
+		name    string
+		command CommandType
+		action  ActionType
+		payload string
+		wantErr bool
+	}{
+		{
+			name:    "Configure Result - Valid",
+			command: CommandConfigure,
+			payload: `{"error": 0, "text": "Success"}`,
+			wantErr: false,
+		},
+		{
+			name:    "Configure Result - Missing Text",
+			command: CommandConfigure,
+			payload: `{}`,
+			wantErr: true,
+		},
+		{
+			name:    "Action Factory - Missing Text",
+			command: CommandAction,
+			action:  ActionFactory,
+			payload: `{}`,
+			wantErr: true,
+		},
+		{
+			name:    "Action Upgrade - Missing Text",
+			command: CommandAction,
+			action:  ActionUpgrade,
+			payload: `{}`,
+			wantErr: true,
+		},
+		{
+			name:    "Action Factory - Valid",
+			command: CommandAction,
+			action:  ActionFactory,
+			payload: `{"error": 0, "text": "Success", "when": 1234567890}`,
+			wantErr: false,
+		},
+		{
+			name:    "Action Factory - Trailing JSON",
+			command: CommandAction,
+			action:  ActionFactory,
+			payload: `{"error": 0, "text": "Success", "when": 1234567890}{"trailing": true}`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateResultPayload(tt.command, tt.action, json.RawMessage(tt.payload))
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateResultPayload() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}

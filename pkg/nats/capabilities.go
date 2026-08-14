@@ -20,17 +20,18 @@ func NewCapabilityCache() *CapabilityCache {
 	return &CapabilityCache{}
 }
 
-// LoadFromDisk loads the capabilities from the provided file path (e.g., capabilities.json)
-// and updates the cache. This stubs out the missing NATS fetch logic.
-func (c *CapabilityCache) LoadFromDisk(filePath string) error {
+// LoadFromDisk reads and parses the capabilities from the provided file path.
+// It returns the raw payload and extracted firmware string without mutating state.
+// This stubs out the missing NATS fetch logic.
+func (c *CapabilityCache) LoadFromDisk(filePath string) ([]byte, string, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		return fmt.Errorf("failed to read capabilities file: %w", err)
+		return nil, "", fmt.Errorf("failed to read capabilities file: %w", err)
 	}
 
 	var caps map[string]interface{}
 	if err := json.Unmarshal(data, &caps); err != nil {
-		return fmt.Errorf("failed to parse capabilities JSON: %w", err)
+		return nil, "", fmt.Errorf("failed to parse capabilities JSON: %w", err)
 	}
 
 	// Try to extract a firmware version string for caching
@@ -41,11 +42,7 @@ func (c *CapabilityCache) LoadFromDisk(filePath string) error {
 		}
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.capabilities = data
-	c.firmware = firmware
-	return nil
+	return data, firmware, nil
 }
 
 // GetCapabilities returns the cached capabilities payload, lazy-loading if necessary.
@@ -56,9 +53,17 @@ func (c *CapabilityCache) GetCapabilities() ([]byte, error) {
 
 	// Cache miss: attempt to load from disk (Stub for NATS fetch)
 	if !loaded {
-		if err := c.LoadFromDisk("capabilities.json"); err != nil {
+		data, firmware, err := c.LoadFromDisk("capabilities.json")
+		if err != nil {
 			return nil, err
 		}
+		
+		c.mu.Lock()
+		if len(c.capabilities) == 0 {
+			c.capabilities = data
+			c.firmware = firmware
+		}
+		c.mu.Unlock()
 	}
 
 	c.mu.RLock()
@@ -74,16 +79,15 @@ func (c *CapabilityCache) GetCapabilities() ([]byte, error) {
 }
 
 // GetFirmware returns the cached firmware version, lazy-loading if necessary.
-func (c *CapabilityCache) GetFirmware() string {
-	c.mu.RLock()
-	loaded := len(c.capabilities) > 0
-	c.mu.RUnlock()
-
-	if !loaded {
-		_ = c.LoadFromDisk("capabilities.json")
+func (c *CapabilityCache) GetFirmware() (string, error) {
+	if _, err := c.GetCapabilities(); err != nil {
+		return "", err
 	}
 
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.firmware
+	if c.firmware == "" {
+		return "", errors.New("firmware not populated")
+	}
+	return c.firmware, nil
 }

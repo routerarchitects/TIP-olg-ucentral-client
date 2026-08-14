@@ -18,7 +18,7 @@ func TestCapabilityCache_LoadFromDisk_Success(t *testing.T) {
 			}
 		}
 	}`
-	
+
 	tmpFile, err := os.CreateTemp("", "capabilities-*.json")
 	if err != nil {
 		t.Fatalf("Failed to create temp file: %v", err)
@@ -70,7 +70,7 @@ func TestCapabilityCache_LazyLoad(t *testing.T) {
 			}
 		}
 	}`
-	
+
 	err := os.WriteFile("capabilities.json", []byte(mockJSON), 0644)
 	if err != nil {
 		t.Fatalf("Failed to create local capabilities.json: %v", err)
@@ -78,13 +78,13 @@ func TestCapabilityCache_LazyLoad(t *testing.T) {
 	defer os.Remove("capabilities.json")
 
 	cache := NewCapabilityCache()
-	
+
 	// Lazy load triggered by GetCapabilities
 	caps, err := cache.GetCapabilities()
 	if err != nil {
 		t.Fatalf("GetCapabilities failed: %v", err)
 	}
-	
+
 	if len(caps) == 0 {
 		t.Error("Expected non-empty capabilities payload")
 	}
@@ -105,12 +105,12 @@ func TestCapabilityCache_Concurrency(t *testing.T) {
 			}
 		}
 	}`
-	
+
 	_ = os.WriteFile("capabilities.json", []byte(mockJSON), 0644)
 	defer os.Remove("capabilities.json")
 
 	cache := NewCapabilityCache()
-	
+
 	var wg sync.WaitGroup
 	// Spawn multiple goroutines to lazily load and read at the same time
 	for i := 0; i < 10; i++ {

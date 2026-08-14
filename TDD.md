@@ -324,8 +324,8 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Assert:* Connection succeeds with a valid CA. Connection is rejected synchronously or asynchronously if the CA is invalid/untrusted, or if the broker is limited below TLS 1.2.
 *   **TC-SEC-002B (Local Development Plaintext Exception):**
     *   *Requirement Mapping:* `REQ-023` (TLS Security)
-    *   *Setup:* Configure the NATS client to connect to a broker without TLS (`nats://`) and with an empty CA cert configuration.
-    *   *Assert:* The client must successfully connect to the broker using plaintext/insecure mode, strictly as a permitted local-development exception.
+    *   *Setup:* Configure the NATS client to connect to a broker without TLS (`nats://`) and with an empty CA cert configuration, explicitly enabling the `allow_insecure_local_dev` flag.
+    *   *Assert:* The client must successfully connect to the broker using plaintext/insecure mode, strictly as a permitted local-development exception. Connections must fail if the flag is omitted.
 *   **TC-NET-013 (Partial Publish Failure Propagation):**
     *   *Requirement Mapping:* `REQ-026` (Desired/Applied Cloud Reconciliation Contract)
     *   *Setup:* Intercept and mock the NATS client to succeed on the JetStream KV write, but intentionally return a network error when publishing the `config.apply` trigger.

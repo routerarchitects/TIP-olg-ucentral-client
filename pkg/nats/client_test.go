@@ -37,17 +37,20 @@ func TestSubmitConfigure_Validation(t *testing.T) {
 		t.Fatal("expected error for nil command")
 	}
 
-	// Test empty target
-	err = client.SubmitConfigure(ctx, &agentcore.ConfigureCommand{
-		Target:    "",
-		Version:   contracts.EnvelopeVersion,
-		RPCID:     "123",
-		UUID:      "999",
-		Payload:   json.RawMessage(`{"serial":"serial-123","uuid":999,"config":{}}`),
-		Timestamp: time.Now(),
-	})
-	if err == nil || !strings.Contains(err.Error(), "target cannot be empty") {
-		t.Fatalf("expected empty target error, got: %v", err)
+	// Test invalid targets
+	invalidTargets := []string{"", " router", "router a", "router.a", "*", "router.>"}
+	for _, target := range invalidTargets {
+		err = client.SubmitConfigure(ctx, &agentcore.ConfigureCommand{
+			Target:    target,
+			Version:   contracts.EnvelopeVersion,
+			RPCID:     "123",
+			UUID:      "999",
+			Payload:   json.RawMessage(`{"serial":"serial-123","uuid":999,"config":{}}`),
+			Timestamp: time.Now(),
+		})
+		if err == nil || !strings.Contains(err.Error(), "invalid target") {
+			t.Errorf("expected invalid target error for target %q, got: %v", target, err)
+		}
 	}
 }
 
@@ -61,18 +64,21 @@ func TestExecuteAction_Validation(t *testing.T) {
 		t.Fatal("expected error for invalid action")
 	}
 
-	// Test empty target
-	err = client.ExecuteAction(ctx, &agentcore.ActionCommand{
-		Target:      "",
-		Version:     contracts.EnvelopeVersion,
-		RPCID:       "123",
-		CommandType: "reboot",
-		Action:      "reboot",
-		Payload:     json.RawMessage(`{"serial":"serial-123","when":0}`),
-		Timestamp:   time.Now(),
-	})
-	if err == nil || !strings.Contains(err.Error(), "target cannot be empty") {
-		t.Fatalf("expected empty target error, got: %v", err)
+	// Test invalid targets
+	invalidTargets := []string{"", " router", "router a", "router.a", "*", "router.>"}
+	for _, target := range invalidTargets {
+		err = client.ExecuteAction(ctx, &agentcore.ActionCommand{
+			Target:      target,
+			Version:     contracts.EnvelopeVersion,
+			RPCID:       "123",
+			CommandType: "reboot",
+			Action:      "reboot",
+			Payload:     json.RawMessage(`{"serial":"serial-123","when":0}`),
+			Timestamp:   time.Now(),
+		})
+		if err == nil || !strings.Contains(err.Error(), "invalid target") {
+			t.Errorf("expected invalid target error for target %q, got: %v", target, err)
+		}
 	}
 }
 
@@ -81,6 +87,17 @@ func TestSubscribeResults_NilHandler(t *testing.T) {
 	err := client.SubscribeResults(context.Background(), "ucentral-test", nil)
 	if err == nil || err.Error() != "handler cannot be nil" {
 		t.Errorf("Expected 'handler cannot be nil' error, got: %v", err)
+	}
+}
+
+func TestSubscribeResults_InvalidTarget(t *testing.T) {
+	client := &NATSClient{}
+	invalidTargets := []string{"", " router", "router a", "router.a", "*", "router.>"}
+	for _, target := range invalidTargets {
+		err := client.SubscribeResults(context.Background(), target, func(agentcore.ResultEnvelope) {})
+		if err == nil || !strings.Contains(err.Error(), "invalid target") {
+			t.Errorf("expected invalid target error for target %q, got: %v", target, err)
+		}
 	}
 }
 func TestSubmitConfigure_UUIDMismatch_Plain(t *testing.T) {
@@ -181,6 +198,31 @@ func TestValidateResultEnvelope_Negative(t *testing.T) {
 		wantErr        string
 	}{
 		{
+			name:           "empty rpcid",
+			expectedTarget: "target-123",
+			msg: agentcore.ResultEnvelope{
+				Version:     contracts.EnvelopeVersion,
+				Target:      "target-123",
+				Result:      string(contracts.ResultSuccess),
+				CommandType: string(contracts.CommandConfigure),
+				UUID:        "123",
+			},
+			wantErr: "rpc_id cannot be empty",
+		},
+		{
+			name:           "zero timestamp",
+			expectedTarget: "target-123",
+			msg: agentcore.ResultEnvelope{
+				Version:     contracts.EnvelopeVersion,
+				Target:      "target-123",
+				Result:      string(contracts.ResultSuccess),
+				CommandType: string(contracts.CommandConfigure),
+				UUID:        "123",
+				RPCID:       "rpc-123",
+			},
+			wantErr: "timestamp cannot be zero",
+		},
+		{
 			name:           "invalid configure uuid type",
 			expectedTarget: "target-123",
 			msg: agentcore.ResultEnvelope{
@@ -189,6 +231,8 @@ func TestValidateResultEnvelope_Negative(t *testing.T) {
 				Result:      string(contracts.ResultSuccess),
 				CommandType: string(contracts.CommandConfigure),
 				UUID:        "not-a-number",
+				RPCID:       "rpc-123",
+				Timestamp:   time.Now(),
 			},
 			wantErr: "uuid must be a positive int64 for configure results",
 		},
@@ -201,6 +245,8 @@ func TestValidateResultEnvelope_Negative(t *testing.T) {
 				Result:      string(contracts.ResultSuccess),
 				CommandType: string(contracts.CommandConfigure),
 				UUID:        "-1",
+				RPCID:       "rpc-123",
+				Timestamp:   time.Now(),
 			},
 			wantErr: "uuid must be a positive int64 for configure results",
 		},
@@ -214,6 +260,8 @@ func TestValidateResultEnvelope_Negative(t *testing.T) {
 				CommandType: string(contracts.CommandConfigure),
 				UUID:        "123",
 				Payload:     []byte(`{bad json}`), // Invalid payload
+				RPCID:       "rpc-123",
+				Timestamp:   time.Now(),
 			},
 			wantErr: "invalid result payload",
 		},
@@ -236,6 +284,8 @@ func TestValidateResultEnvelope_Negative(t *testing.T) {
 				Target:      "target-123",
 				Result:      "mostly_done",
 				CommandType: string(contracts.CommandConfigure),
+				RPCID:       "rpc-123",
+				Timestamp:   time.Now(),
 			},
 			wantErr: "invalid result state",
 		},
@@ -248,6 +298,8 @@ func TestValidateResultEnvelope_Negative(t *testing.T) {
 				Result:      string(contracts.ResultSuccess),
 				CommandType: string(contracts.CommandQuery),
 				Action:      string(contracts.ActionReboot),
+				RPCID:       "rpc-123",
+				Timestamp:   time.Now(),
 			},
 			wantErr: "invalid command/action combination",
 		},

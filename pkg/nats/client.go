@@ -111,8 +111,8 @@ func (n *NATSClient) SubmitConfigure(ctx context.Context, cmd *agentcore.Configu
 	// Note: We intentionally do NOT restrict cmd.Target == n.target here.
 	// uCentral acts as a 1-to-N gateway for local services.
 	// The internal Request Manager is trusted to supply the correct downstream target.
-	if cmd.Target == "" {
-		return errors.New("target cannot be empty")
+	if err := contracts.ValidateNATSTarget(cmd.Target); err != nil {
+		return fmt.Errorf("invalid target: %w", err)
 	}
 
 	if n.agentClient == nil {
@@ -151,8 +151,8 @@ func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *agentcore.ActionCom
 	// Note: We intentionally do NOT restrict cmd.Target == n.target here.
 	// uCentral acts as a 1-to-N gateway for local services.
 	// The internal Request Manager is trusted to supply the correct downstream target.
-	if cmd.Target == "" {
-		return errors.New("target cannot be empty")
+	if err := contracts.ValidateNATSTarget(cmd.Target); err != nil {
+		return fmt.Errorf("invalid target: %w", err)
 	}
 
 	if n.agentClient == nil {
@@ -175,8 +175,8 @@ func (n *NATSClient) SubscribeResults(ctx context.Context, target string, handle
 	if ctx == nil || ctx.Err() != nil {
 		return errors.New("invalid or canceled context")
 	}
-	if target == "" {
-		return errors.New("target cannot be empty")
+	if err := contracts.ValidateNATSTarget(target); err != nil {
+		return fmt.Errorf("invalid target: %w", err)
 	}
 	if handler == nil {
 		return errors.New("handler cannot be nil")
@@ -201,6 +201,12 @@ func validateResultEnvelope(expectedTarget string, msg agentcore.ResultEnvelope)
 	}
 	if msg.Target != expectedTarget {
 		return fmt.Errorf("target mismatch: got %q, expected %q", msg.Target, expectedTarget)
+	}
+	if msg.RPCID == "" {
+		return errors.New("rpc_id cannot be empty")
+	}
+	if msg.Timestamp.IsZero() {
+		return errors.New("timestamp cannot be zero")
 	}
 
 	if !contracts.ResultType(msg.Result).Valid() {

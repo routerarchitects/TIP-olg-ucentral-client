@@ -170,16 +170,40 @@ func ValidateResultPayload(command CommandType, action ActionType, payload json.
 	switch command {
 	case CommandConfigure:
 		var status CloudConfigureResultStatus
-		return decoder.Decode(&status)
+		if err := decoder.Decode(&status); err != nil {
+			return err
+		}
+		if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			return errors.New("trailing JSON in payload")
+		}
+		return status.Validate()
 	case CommandReboot:
 		var status CloudRebootStatus
-		return decoder.Decode(&status)
+		if err := decoder.Decode(&status); err != nil {
+			return err
+		}
+		if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			return errors.New("trailing JSON in payload")
+		}
+		return status.Validate()
 	case CommandScript:
 		var status CloudScriptStatus
-		return decoder.Decode(&status)
+		if err := decoder.Decode(&status); err != nil {
+			return err
+		}
+		if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			return errors.New("trailing JSON in payload")
+		}
+		return status.Validate()
 	case CommandUpgrade:
 		var status CloudUpgradeStatus
-		return decoder.Decode(&status)
+		if err := decoder.Decode(&status); err != nil {
+			return err
+		}
+		if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			return errors.New("trailing JSON in payload")
+		}
+		return status.Validate()
 	case CommandAction:
 		switch action {
 		case ActionFactory:

@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"github.com/nats-io/jwt/v2"
+	"github.com/nats-io/nkeys"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -122,19 +124,7 @@ func TestSubmitConfigure_UUIDMismatch_Plain(t *testing.T) {
 func TestNewNATSClient_ConfigWiring(t *testing.T) {
 	tmpDir := t.TempDir()
 	credsFile := filepath.Join(tmpDir, "creds")
-	validCreds := `-----BEGIN NATS USER JWT-----
-eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.eyJqdGkiOiJLN1IzTk5KQjc0REYyWkIyQ0ZISFRBWE9HRVhDWFVXNERaNFYyUjRGRVFZUVBINENUUUlRIiwiaWF0IjoxNzg2NjgzOTA1LCJpc3MiOiJBQllTWFRSRVlONlZDUURDNkVJUlpMVDJZR0xEVFRBSDZLSU1TWUsyNVdFS0g2NUhGRFVUVlVWUSIsInN1YiI6IlVCU1c2UTYzNDJJRlFUWk82VEtaSlJNWlg3NjVXSDU0WjNCWEs2WTdHQVhJWVE2T1pOS0VCNlZVIiwibmF0cyI6eyJwdWIiOnt9LCJzdWIiOnt9LCJzdWJzIjotMSwiZGF0YSI6LTEsInBheWxvYWQiOi0xLCJ0eXBlIjoidXNlciIsInZlcnNpb24iOjJ9fQ.IUi_IMxsbD8j__E9BGKqGgwqjYtPnfwVSjpdc3lKAlFEMjAFIrB4wFShx2oU3R0cMl9U4ZkEBCRtkn7_B0TMBQ
-------END NATS USER JWT------
-
-************************* IMPORTANT *************************
-NKEY Seed printed below can be used to sign and prove identity.
-NKEYs are sensitive and should be treated as secrets.
-
------BEGIN USER NKEY SEED-----
-SUABWBLYYAMMEYKNX4YTFNVTEXKI65B7EDVGTCCGL7F5JKFEL2CKQCZRZA
-------END USER NKEY SEED------
-`
-	os.WriteFile(credsFile, []byte(validCreds), 0644)
+	os.WriteFile(credsFile, []byte(generateTestCreds(t)), 0644)
 
 	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := x509.Certificate{SerialNumber: big.NewInt(1), IsCA: true}
@@ -325,4 +315,42 @@ func TestValidateResultEnvelope_Negative(t *testing.T) {
 			}
 		})
 	}
+}
+
+func generateTestCreds(t *testing.T) string {
+	t.Helper()
+	userKP, err := nkeys.CreateUser()
+	if err != nil {
+		t.Fatalf("failed to create user nkey: %v", err)
+	}
+	userSeed, err := userKP.Seed()
+	if err != nil {
+		t.Fatalf("failed to get user seed: %v", err)
+	}
+	userPub, err := userKP.PublicKey()
+	if err != nil {
+		t.Fatalf("failed to get user pubkey: %v", err)
+	}
+
+	accKP, err := nkeys.CreateAccount()
+	if err != nil {
+		t.Fatalf("failed to create account nkey: %v", err)
+	}
+	accPub, err := accKP.PublicKey()
+	if err != nil {
+		t.Fatalf("failed to get account pubkey: %v", err)
+	}
+
+	claims := jwt.NewUserClaims(userPub)
+	claims.Issuer = accPub
+	jwtStr, err := claims.Encode(accKP)
+	if err != nil {
+		t.Fatalf("failed to encode claims: %v", err)
+	}
+
+	creds, err := jwt.FormatUserConfig(jwtStr, userSeed)
+	if err != nil {
+		t.Fatalf("failed to format user config: %v", err)
+	}
+	return string(creds)
 }

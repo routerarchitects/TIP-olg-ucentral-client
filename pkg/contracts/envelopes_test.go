@@ -187,6 +187,27 @@ func TestValidateResultPayload(t *testing.T) {
 			payload: `{"error": 0, "text": "Success", "when": 1234567890}{"trailing": true}`,
 			wantErr: true,
 		},
+		{
+			name:    "Action Ping - Empty",
+			command: CommandAction,
+			action:  ActionPing,
+			payload: ``,
+			wantErr: false,
+		},
+		{
+			name:    "Action Ping - Null",
+			command: CommandAction,
+			action:  ActionPing,
+			payload: `null`,
+			wantErr: false,
+		},
+		{
+			name:    "Action Ping - Non-Empty",
+			command: CommandAction,
+			action:  ActionPing,
+			payload: `{"error": 0}`,
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {

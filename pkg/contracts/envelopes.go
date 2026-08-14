@@ -270,8 +270,7 @@ func ValidateResultPayload(command CommandType, action ActionType, payload json.
 			}
 			return status.Validate()
 		case ActionPing:
-			// Ping does not use a status struct in the payload for NATS
-			return nil
+			return errors.New("ping result payload must be empty")
 		case ActionReboot:
 			var status CloudRebootStatus
 			if err := decoder.Decode(&status); err != nil {

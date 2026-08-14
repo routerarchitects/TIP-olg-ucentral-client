@@ -6,56 +6,88 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strconv"
-
-	"github.com/Telecominfraproject/olg-nats-agent-core/agentcore"
+	"strings"
+	"time"
 )
 
 // EnvelopeVersion is the required wire protocol version for all NATS envelopes.
 const EnvelopeVersion = "1.0"
 
-func ValidateConfigureNotification(c *agentcore.ConfigureNotification) error {
-	if c.Version != EnvelopeVersion {
-		return fmt.Errorf("unsupported envelope version: %q", c.Version)
+// ValidateNATSTarget strictly validates that a NATS target string is valid.
+func ValidateNATSTarget(target string) error {
+	if target == "" {
+		return errors.New("nats target is required and cannot be empty")
 	}
-	if c.RPCID == "" || c.Target == "" || c.KVBucket == "" || c.KVKey == "" || c.Timestamp.IsZero() {
-		return errors.New("missing required fields in ConfigureNotification")
+	if strings.TrimSpace(target) != target {
+		return errors.New("nats target must not contain leading or trailing whitespace")
 	}
-	uuid, err := strconv.ParseInt(c.UUID, 10, 64)
-	if err != nil || uuid <= 0 {
-		return errors.New("uuid must be a positive int64")
+	if strings.ContainsAny(target, ".*> \t\r\n") {
+		return errors.New("nats target must not contain wildcards, dots, or internal whitespace")
 	}
 	return nil
 }
 
+// ValidateDesiredConfigRecord verifies that a DesiredConfigRecord is complete and valid.
+
 // ValidateActionCommand strictly validates an incoming ActionCommand envelope.
-func ValidateActionCommand(c *agentcore.ActionCommand) error {
-	if CommandType(c.CommandType) == CommandConfigure {
-		return errors.New("command 'configure' must use ConfigureNotification envelope, not ActionCommand")
+
+// ValidateCommandPayload decodes and strictly validates action-specific payloads based on command and action.
+
+// ValidateResultPayload verifies that the downstream agent's result payload
+// matches the expected shape of the corresponding cloud status structure.
+
+type DeviceCapabilities struct {
+	Capabilities json.RawMessage `json:"capabilities"`
+	Firmware     string          `json:"firmware"`
+}
+
+type CloudCapabilitiesQuery struct {
+	Version   string    `json:"version"`
+	RPCID     string    `json:"rpc_id"`
+	Target    string    `json:"target"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+func (q *CloudCapabilitiesQuery) Validate() error {
+	if q.Version != EnvelopeVersion {
+		return fmt.Errorf("unsupported envelope version: %q", q.Version)
 	}
-	if c.Version != EnvelopeVersion {
-		return fmt.Errorf("unsupported envelope version: %q", c.Version)
-	}
-	if c.RPCID == "" || c.Target == "" || c.Timestamp.IsZero() {
-		return errors.New("missing required fields in ActionCommand")
-	}
-	if !CommandType(c.CommandType).Valid() {
-		return fmt.Errorf("invalid command_type: %q", c.CommandType)
-	}
-	if !ValidCommandAction(CommandType(c.CommandType), ActionType(c.Action)) {
-		return fmt.Errorf("inconsistent action %q for command_type %q", c.Action, c.CommandType)
-	}
-	if err := ValidateCommandPayload(CommandType(c.CommandType), ActionType(c.Action), c.Payload); err != nil {
-		return err
+	if q.RPCID == "" || q.Target == "" || q.Timestamp.IsZero() {
+		return errors.New("missing required fields in CloudCapabilitiesQuery")
 	}
 	return nil
 }
+
+type CloudDeviceStatusQuery struct {
+	Version   string    `json:"version"`
+	RPCID     string    `json:"rpc_id"`
+	Target    string    `json:"target"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+func (q *CloudDeviceStatusQuery) Validate() error {
+	if q.Version != EnvelopeVersion {
+		return fmt.Errorf("unsupported envelope version: %q", q.Version)
+	}
+	if q.RPCID == "" || q.Target == "" || q.Timestamp.IsZero() {
+		return errors.New("missing required fields in CloudDeviceStatusQuery")
+	}
+	return nil
+}
+
+type DeviceStatus struct {
+	Status json.RawMessage `json:"status"`
+}
+
+// ValidateStatusEnvelope verifies a StatusEnvelope is well-formed.
 
 // ValidateCommandPayload decodes and strictly validates action-specific payloads based on command and action.
 func ValidateCommandPayload(command CommandType, action ActionType, payload json.RawMessage) error {
 	var req interface{ Validate() error }
 
 	switch {
+	case command == CommandConfigure:
+		req = &CloudConfigureRequest{}
 	case action == ActionFactory:
 		req = &CloudFactoryRequest{}
 	case action == ActionCertupdate:
@@ -138,97 +170,139 @@ func ValidateResultPayload(command CommandType, action ActionType, payload json.
 	switch command {
 	case CommandConfigure:
 		var status CloudConfigureResultStatus
-		return decoder.Decode(&status)
+		if err := decoder.Decode(&status); err != nil {
+			return err
+		}
+		if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			return errors.New("trailing JSON in payload")
+		}
+		return status.Validate()
 	case CommandReboot:
 		var status CloudRebootStatus
-		return decoder.Decode(&status)
+		if err := decoder.Decode(&status); err != nil {
+			return err
+		}
+		if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			return errors.New("trailing JSON in payload")
+		}
+		return status.Validate()
 	case CommandScript:
 		var status CloudScriptStatus
-		return decoder.Decode(&status)
+		if err := decoder.Decode(&status); err != nil {
+			return err
+		}
+		if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			return errors.New("trailing JSON in payload")
+		}
+		return status.Validate()
 	case CommandUpgrade:
 		var status CloudUpgradeStatus
-		return decoder.Decode(&status)
+		if err := decoder.Decode(&status); err != nil {
+			return err
+		}
+		if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			return errors.New("trailing JSON in payload")
+		}
+		return status.Validate()
 	case CommandAction:
 		switch action {
 		case ActionFactory:
 			var status CloudFactoryStatus
-			return decoder.Decode(&status)
+			if err := decoder.Decode(&status); err != nil {
+				return err
+			}
+			if err := decoder.Decode(&struct{}{}); err != io.EOF {
+				return errors.New("trailing JSON in payload")
+			}
+			return status.Validate()
 		case ActionTelemetry:
 			var status CloudTelemetryStatus
-			return decoder.Decode(&status)
+			if err := decoder.Decode(&status); err != nil {
+				return err
+			}
+			if err := decoder.Decode(&struct{}{}); err != io.EOF {
+				return errors.New("trailing JSON in payload")
+			}
+			return status.Validate()
 		case ActionRTTY:
 			var status CloudRemoteAccessStatus
-			return decoder.Decode(&status)
+			if err := decoder.Decode(&status); err != nil {
+				return err
+			}
+			if err := decoder.Decode(&struct{}{}); err != io.EOF {
+				return errors.New("trailing JSON in payload")
+			}
+			return status.Validate()
 		case ActionCertupdate:
 			var status CloudCertupdateStatus
-			return decoder.Decode(&status)
+			if err := decoder.Decode(&status); err != nil {
+				return err
+			}
+			if err := decoder.Decode(&struct{}{}); err != io.EOF {
+				return errors.New("trailing JSON in payload")
+			}
+			return status.Validate()
 		case ActionReenroll:
 			var status CloudReenrollStatus
-			return decoder.Decode(&status)
+			if err := decoder.Decode(&status); err != nil {
+				return err
+			}
+			if err := decoder.Decode(&struct{}{}); err != io.EOF {
+				return errors.New("trailing JSON in payload")
+			}
+			return status.Validate()
 		case ActionLeds:
 			var status CloudLedsStatus
-			return decoder.Decode(&status)
+			if err := decoder.Decode(&status); err != nil {
+				return err
+			}
+			if err := decoder.Decode(&struct{}{}); err != io.EOF {
+				return errors.New("trailing JSON in payload")
+			}
+			return status.Validate()
 		case ActionTrace:
 			var status CloudTraceStatus
-			return decoder.Decode(&status)
+			if err := decoder.Decode(&status); err != nil {
+				return err
+			}
+			if err := decoder.Decode(&struct{}{}); err != io.EOF {
+				return errors.New("trailing JSON in payload")
+			}
+			return status.Validate()
 		case ActionPing:
-			// Ping does not use a status struct in the payload for NATS
-			return nil
+			return errors.New("ping result payload must be empty")
+		case ActionReboot:
+			var status CloudRebootStatus
+			if err := decoder.Decode(&status); err != nil {
+				return err
+			}
+			if err := decoder.Decode(&struct{}{}); err != io.EOF {
+				return errors.New("trailing JSON in payload")
+			}
+			return status.Validate()
+		case ActionUpgrade:
+			var status CloudUpgradeStatus
+			if err := decoder.Decode(&status); err != nil {
+				return err
+			}
+			if err := decoder.Decode(&struct{}{}); err != io.EOF {
+				return errors.New("trailing JSON in payload")
+			}
+			return status.Validate()
+		case ActionExecute:
+			var status CloudScriptStatus
+			if err := decoder.Decode(&status); err != nil {
+				return err
+			}
+			if err := decoder.Decode(&struct{}{}); err != io.EOF {
+				return errors.New("trailing JSON in payload")
+			}
+			return status.Validate()
 		default:
-			// If it's an action we don't strictly validate, allow it.
-			return nil
+			return fmt.Errorf("unrecognized action for result: %q", action)
 		}
 	default:
 		// Other commands (like query) might not have payload validation defined yet.
 		return nil
 	}
-}
-
-type DeviceCapabilities struct {
-	Capabilities json.RawMessage `json:"capabilities"`
-	Firmware     string          `json:"firmware"`
-}
-
-// ValidateStatusEnvelope verifies a StatusEnvelope is well-formed.
-func ValidateStatusEnvelope(s *agentcore.StatusEnvelope) error {
-	if s.Version != EnvelopeVersion {
-		return fmt.Errorf("unsupported envelope version: %q", s.Version)
-	}
-	if s.Target == "" || s.Status == "" || s.Timestamp.IsZero() {
-		return errors.New("missing required fields in StatusEnvelope")
-	}
-	return nil
-}
-
-func ValidateResultEnvelope(r *agentcore.ResultEnvelope) error {
-	if r.Version != EnvelopeVersion {
-		return fmt.Errorf("unsupported envelope version: %q", r.Version)
-	}
-	if r.RPCID == "" || r.Target == "" || r.CommandType == "" || r.Result == "" || r.Timestamp.IsZero() {
-		return errors.New("missing required fields in ResultEnvelope")
-	}
-	if !CommandType(r.CommandType).Valid() {
-		return fmt.Errorf("invalid command_type: %q", r.CommandType)
-	}
-	if !ResultType(r.Result).Valid() {
-		return fmt.Errorf("invalid result: %q", r.Result)
-	}
-	if len(r.Payload) > 0 && !json.Valid(r.Payload) {
-		return errors.New("payload contains invalid JSON")
-	}
-	if r.CommandType == string(CommandConfigure) {
-		uuid, err := strconv.ParseInt(r.UUID, 10, 64)
-		if err != nil || uuid <= 0 {
-			return errors.New("uuid must be a positive int64 for configure results")
-		}
-	}
-
-	// For successful or error results that carry a payload, validate the shape.
-	// Some operations might not strictly mandate a payload on every error type depending on the Cloud,
-	// but the NATS contract generally expects the status block. We enforce shape matching here.
-	if err := ValidateResultPayload(CommandType(r.CommandType), ActionType(r.Action), r.Payload); err != nil {
-		return fmt.Errorf("invalid result payload for %q (action: %q): %w", r.CommandType, r.Action, err)
-	}
-
-	return nil
 }

@@ -119,10 +119,12 @@ TIP-olg-ucentral-client/
     // * A missing or zero `when` value is accepted. A non-zero future `when` value MUST
     // * be rejected as unsupported rather than silently ignored. This is a deliberate OLG compatibility limitation.
     type CloudConfigureRequest struct {
-    	Serial string          `json:"serial"`
-    	UUID   int64           `json:"uuid"`
-    	When   int64           `json:"when,omitempty"`
-    	Config json.RawMessage `json:"config"`
+        Serial     string          `json:"serial"`
+        UUID       int64           `json:"uuid"`
+        When       int64           `json:"when,omitempty"`
+        Config     json.RawMessage `json:"config,omitempty"`
+        Compress64 string          `json:"compress_64,omitempty"` // Base64+zlib compressed payload
+        CompressSz uint32          `json:"compress_sz,omitempty"` // Original uncompressed size
     }
 
     type ConfigureRejectedParameter struct {
@@ -549,9 +551,12 @@ TIP-olg-ucentral-client/
     }
 
     type NATSConfig struct {
-        Servers         []string `json:"servers"`
-        CredentialsFile string   `json:"credentials_file"`
-        CAFile          string   `json:"ca_file"`
+        Servers               []string `json:"servers"`
+        CredentialsFile       string   `json:"credentials_file"`
+        CAFile                string   `json:"ca_file"`
+        ClientCertFile        string   `json:"client_cert_file,omitempty"`
+        ClientKeyFile         string   `json:"client_key_file,omitempty"`
+        AllowInsecureLocalDev bool     `json:"allow_insecure_local_dev,omitempty"`
     }
 
     type QueueConfig struct {
@@ -1133,40 +1138,36 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
 
     // NATSConfig defines the mandatory secure connection parameters for the NATS bus.
     type NATSConfig struct {
-        Servers         []string // Must strictly use tls:// scheme. nats:// is rejected.
-        CredentialsFile string   // Path to NATS credentials (NKEY/JWT).
-        CAFile          string   // Mandatory path to the trusted Root CA. Cannot be empty.
+        Servers               []string // Normally uses tls://. nats:// is permitted ONLY for local plaintext development if AllowInsecureLocalDev is true.
+        CredentialsFile       string   // Path to NATS credentials (NKEY/JWT). Required unless AllowInsecureLocalDev is true.
+        CAFile                string   // Path to the trusted Root CA. Required unless AllowInsecureLocalDev is true (and loopback addresses are used).
+        AllowInsecureLocalDev bool     // Explicitly permits insecure loopback features (nats://, missing creds, missing CA).
     }
 
     // NewNATSClient initializes a NATS connection.
-    // SECURITY CONTRACT: This constructor MUST enforce tls.Config{MinVersion: tls.VersionTLS13}.
-    // It must return a fatal error if CAFile is empty, or if any Server URL is insecure.
-    func NewNATSClient(cfg NATSConfig) (*NATSClient, error)
+    func NewNATSClient(agentName string, cfg config.NATSConfig, onStateChange func(contracts.LinkState)) (*NATSClient, error)
 
-    // Asynchronous State-Changing Commands (uses NATS reply-to inbox and CommandResultQueue)
-    func (n *NATSClient) PublishConfigTrigger(ctx context.Context, cmd *ConfigureCommand, replyTo string) error
-    func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *ActionCommand, replyTo string) error
-    func (n *NATSClient) SubscribeCommandReplies(inbox string, handler func(msg *nats.Msg)) (*nats.Subscription, error)
+    func (n *NATSClient) SubmitConfigure(ctx context.Context, cmd *agentcore.ConfigureCommand) error
+    func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *agentcore.ActionCommand) error
+    // Subscribes to results for a specific target. The registered handler will validate that incoming result envelopes precisely match this expected target.
+    func (n *NATSClient) SubscribeResults(ctx context.Context, target string, handler func(env agentcore.ResultEnvelope)) error
 
-    // Query Envelopes (Defined in pkg/contracts/envelopes.go)
+    // Query Envelopes (Stubbed due to agentcore limitations)
+    func (n *NATSClient) QueryCapabilities(ctx context.Context, query *contracts.CloudCapabilitiesQuery) ([]byte, error)
+    func (n *NATSClient) QueryDeviceStatus(ctx context.Context, query *contracts.CloudDeviceStatusQuery) (*agentcore.StatusEnvelope, error)
 
-    // Synchronous Read-Only Queries (blocks waiting for ResultEnvelope)
-    // QueryCapabilities returns a ResultEnvelope whose Payload must be deserialized into a DeviceCapabilities struct.
-    func (n *NATSClient) QueryCapabilities(ctx context.Context, query *contracts.CloudCapabilitiesQuery) (*contracts.ResultEnvelope, error)
-    func (n *NATSClient) QueryDeviceStatus(ctx context.Context, query *contracts.CloudDeviceStatusQuery) (*contracts.DeviceStatus, error)
+    // Subscriptions
+    func (n *NATSClient) SubscribeTelemetry(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error)
+    func (n *NATSClient) SubscribeLogs(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error)
+    func (n *NATSClient) SubscribeHealth(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error)
+    func (n *NATSClient) SubscribeState(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error)
+    // State Management (Stubbed due to agentcore limitations)
+    func (n *NATSClient) GetDesiredConfigMetadata(ctx context.Context) (uint64, string, error)
 
-    // Streaming & Data Subscriptions
-    func (n *NATSClient) SubscribeTelemetry(serial string, handler func(msg *nats.Msg)) (*nats.Subscription, error)
-    func (n *NATSClient) SubscribeLogs(serial string, handler func(msg *nats.Msg)) (*nats.Subscription, error)
-    func (n *NATSClient) SubscribeHealth(serial string, handler func(msg *nats.Msg)) (*nats.Subscription, error)
-    func (n *NATSClient) SubscribeState(serial string, handler func(msg *nats.Msg)) (*nats.Subscription, error)
-    func (n *NATSClient) WriteDesiredConfig(ctx context.Context, serial string, config []byte) (uint64, error)
-    func (n *NATSClient) GetDesiredConfigMetadata(ctx context.Context, serial string) (uint64, string, error)
-    
 
     ```
 
-The uCentral client must not register a NATS responder for `ucentral.v1.device.<own-serial>.status.get`. This subject is queried by the uCentral client and served by the downstream device/local agent.
+The uCentral client must not register a NATS responder for `status.get.<target>`. This subject is queried by the uCentral client and served by the downstream device/local agent.
 
 #### PR 4.3: Dynamic Capabilities & Local Signal Sockets
 *   **Target File:** `pkg/nats/capabilities.go`
@@ -1203,9 +1204,10 @@ The uCentral client must not register a NATS responder for `ucentral.v1.device.<
         *   `cloud.max_frame_size_bytes`: Default 11534336 (11MB); must be >= 0
         *   `cloud.max_consecutive_frame_errors`: Default 20; must be >= 0
         *   `cloud.stable_session_threshold_seconds`: Default 60; must be > 0
-        *   `nats.servers`: At least one entry; each must use `tls://`
-        *   `nats.credentials_file`: Required and readable file path
-        *   `nats.ca_file`: Required and readable file path
+        *   `nats.servers`: At least one entry; must use `tls://` unless `allow_insecure_local_dev` is true.
+        *   `nats.credentials_file`: Required and readable file path (unless `allow_insecure_local_dev` is true).
+        *   `nats.ca_file`: Required and readable file path (unless `allow_insecure_local_dev` is true).
+        *   `nats.allow_insecure_local_dev`: Optional boolean flag to explicitly permit unencrypted `nats://` and bypass credentials for local development.
         *   `queues.ws_writer_capacity`: Default 500; must be > 0
         *   `queues.emergency_capacity`: Default 100; must be > 0
         *   `queues.nats_publish_capacity`: Default 100; must be > 0

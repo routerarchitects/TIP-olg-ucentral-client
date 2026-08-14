@@ -68,11 +68,11 @@ func TestValidCommandAction(t *testing.T) {
 
 		// Direct commands
 		{"Upgrade with Upgrade", CommandUpgrade, ActionUpgrade, true},
-		{"Upgrade with empty", CommandUpgrade, "", true},
+		{"Upgrade with empty", CommandUpgrade, "", false},
 		{"Reboot with Reboot", CommandReboot, ActionReboot, true},
-		{"Reboot with empty", CommandReboot, "", true},
+		{"Reboot with empty", CommandReboot, "", false},
 		{"Configure with empty", CommandConfigure, "", true},
-		{"Script with empty", CommandScript, "", true},
+		{"Script with empty", CommandScript, "", false},
 		{"Query with CapabilitiesGet", CommandQuery, ActionCapabilitiesGet, true},
 		{"Query with StatusGet", CommandQuery, ActionStatusGet, true},
 
@@ -80,7 +80,7 @@ func TestValidCommandAction(t *testing.T) {
 		{"Reboot with Upgrade", CommandReboot, ActionUpgrade, false},
 		{"Upgrade with Reboot", CommandUpgrade, ActionReboot, false},
 		{"Configure with Action", CommandConfigure, ActionReboot, false},
-		{"Script with Execute", CommandScript, ActionExecute, false},
+		{"Script with Execute", CommandScript, ActionExecute, true},
 		{"Action with empty", CommandAction, "", false},
 		{"Query with invalid action", CommandQuery, ActionUpgrade, false},
 		{"Query with empty", CommandQuery, "", false},

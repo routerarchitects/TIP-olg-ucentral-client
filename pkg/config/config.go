@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/nats-io/jwt/v2"
 )
 
 const (
@@ -56,9 +58,12 @@ type CloudConfig struct {
 }
 
 type NATSConfig struct {
-	Servers         []string `json:"servers"`
-	CredentialsFile string   `json:"credentials_file"`
-	CAFile          string   `json:"ca_file"`
+	Servers               []string `json:"servers"`
+	CredentialsFile       string   `json:"credentials_file"`
+	CAFile                string   `json:"ca_file"`
+	ClientCertFile        string   `json:"client_cert_file,omitempty"`
+	ClientKeyFile         string   `json:"client_key_file,omitempty"`
+	AllowInsecureLocalDev bool     `json:"allow_insecure_local_dev,omitempty"`
 }
 
 type QueueConfig struct {
@@ -152,34 +157,94 @@ func (n *NATSConfig) Validate() error {
 	if len(n.Servers) == 0 {
 		return fmt.Errorf("nats servers are required")
 	}
+	hasInsecureFeatures := false
+	if n.CredentialsFile == "" || n.CAFile == "" {
+		hasInsecureFeatures = true
+	}
+
 	for _, srv := range n.Servers {
 		u, err := url.ParseRequestURI(srv)
-		if err != nil || u.Scheme != "tls" || u.Host == "" {
-			return fmt.Errorf("nats server must be a valid tls URL")
+		if err != nil || u.Host == "" {
+			return fmt.Errorf("nats server must be a valid URL")
+		}
+		// NATS doesn't use HTTP-like paths, query parameters, or fragments.
+		// We intentionally permit user info (u.User != nil) because NATS supports
+		// inline username/password authentication (e.g. nats://user:pass@host:port).
+		if (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+			return fmt.Errorf("nats server URL must contain only scheme, host, and port (no paths, queries, or fragments)")
+		}
+		if u.Scheme == "nats" {
+			hasInsecureFeatures = true
+		}
+		if !n.AllowInsecureLocalDev && u.Scheme != "tls" {
+			return fmt.Errorf("nats server must use tls:// (nats:// is only permitted if allow_insecure_local_dev is true)")
+		}
+		if n.AllowInsecureLocalDev && u.Scheme != "tls" && u.Scheme != "nats" {
+			return fmt.Errorf("nats server must use tls:// or nats://")
 		}
 	}
-	if err := checkFile(n.CredentialsFile, "nats credentials_file"); err != nil {
-		return err
-	}
-	if err := checkFile(n.CAFile, "nats ca_file"); err != nil {
-		return err
+
+	if hasInsecureFeatures && n.AllowInsecureLocalDev {
+		for _, srv := range n.Servers {
+			u, _ := url.ParseRequestURI(srv)
+			host := u.Hostname()
+			if host != "localhost" && host != "127.0.0.1" && host != "::1" {
+				return fmt.Errorf("insecure features (nats://, missing creds, missing CA) are only permitted for loopback addresses (localhost, 127.0.0.1, ::1)")
+			}
+		}
 	}
 
-	natsCaCert, err := os.ReadFile(n.CAFile)
-	if err != nil {
-		return fmt.Errorf("failed to read nats ca_file: %w", err)
+	if !n.AllowInsecureLocalDev && n.CredentialsFile == "" {
+		return fmt.Errorf("nats credentials_file is strictly required in production")
 	}
-	natsCaCertPool := x509.NewCertPool()
-	if ok := natsCaCertPool.AppendCertsFromPEM(natsCaCert); !ok {
-		return fmt.Errorf("failed to parse nats ca_file as a valid PEM CA bundle")
+	if n.CredentialsFile != "" {
+		if err := checkFile(n.CredentialsFile, "nats credentials_file"); err != nil {
+			return err
+		}
+		natsCreds, err := os.ReadFile(n.CredentialsFile)
+		if err != nil {
+			return fmt.Errorf("failed to read nats credentials_file: %w", err)
+		}
+		if _, err := jwt.ParseDecoratedJWT(natsCreds); err != nil {
+			return fmt.Errorf("failed to parse JWT from nats credentials_file: %w", err)
+		}
+		if _, err := jwt.ParseDecoratedNKey(natsCreds); err != nil {
+			return fmt.Errorf("failed to parse NKey from nats credentials_file: %w", err)
+		}
 	}
 
-	natsCreds, err := os.ReadFile(n.CredentialsFile)
-	if err != nil {
-		return fmt.Errorf("failed to read nats credentials_file: %w", err)
+	if !n.AllowInsecureLocalDev && n.CAFile == "" {
+		return fmt.Errorf("nats ca_file is strictly required in production")
 	}
-	if len(natsCreds) == 0 {
-		return fmt.Errorf("nats credentials_file is empty")
+	if n.CAFile != "" {
+		if err := checkFile(n.CAFile, "nats ca_file"); err != nil {
+			return err
+		}
+
+		natsCaCert, err := os.ReadFile(n.CAFile)
+		if err != nil {
+			return fmt.Errorf("failed to read nats ca_file: %w", err)
+		}
+		natsCaCertPool := x509.NewCertPool()
+		if ok := natsCaCertPool.AppendCertsFromPEM(natsCaCert); !ok {
+			return fmt.Errorf("failed to parse nats ca_file as a valid PEM CA bundle")
+		}
+	}
+
+	if (n.ClientCertFile != "" && n.ClientKeyFile == "") || (n.ClientCertFile == "" && n.ClientKeyFile != "") {
+		return fmt.Errorf("nats client_cert_file and client_key_file must both be provided for mTLS")
+	}
+
+	if n.ClientCertFile != "" && n.ClientKeyFile != "" {
+		if err := checkFile(n.ClientCertFile, "nats client_cert_file"); err != nil {
+			return err
+		}
+		if err := checkFile(n.ClientKeyFile, "nats client_key_file"); err != nil {
+			return err
+		}
+		if _, err := tls.LoadX509KeyPair(n.ClientCertFile, n.ClientKeyFile); err != nil {
+			return fmt.Errorf("invalid nats client certificate or key: %w", err)
+		}
 	}
 
 	return nil
@@ -205,6 +270,7 @@ func (q *QueueConfig) Validate() error {
 }
 
 func (c *Config) Validate() error {
+	c.Serial = strings.TrimSpace(c.Serial)
 	if c.Serial == "" {
 		return fmt.Errorf("serial is required")
 	}

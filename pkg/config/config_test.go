@@ -7,8 +7,11 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"github.com/nats-io/jwt/v2"
+	"github.com/nats-io/nkeys"
 	"math/big"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -157,7 +160,7 @@ func TestConfig_Validation(t *testing.T) {
 	caFile := createTempFile("ca.pem", certPEM)
 	certFile := createTempFile("cert.pem", certPEM)
 	keyFile := createTempFile("key.pem", keyPEM)
-	credsFile := createTempFile("creds.creds", []byte("dummy-jwt-or-creds"))
+	credsFile := createTempFile("creds.creds", []byte(generateTestCreds(t)))
 
 	validTLS := CloudTLSConfig{
 		CAFile:         caFile,
@@ -213,7 +216,10 @@ func TestConfig_Validation(t *testing.T) {
 		{"Missing TLS CA", func(c *Config) { c.Cloud.TLS.CAFile = "/missing/ca.pem" }},
 		{"Directory TLS CA", func(c *Config) { c.Cloud.TLS.CAFile = tmpDir }},
 		{"Malformed NATS URL", func(c *Config) { c.NATS.Servers = []string{"tls://"} }},
-		{"Invalid NATS scheme", func(c *Config) { c.NATS.Servers = []string{"nats://localhost"} }},
+		{"Invalid NATS scheme", func(c *Config) { c.NATS.Servers = []string{"tcp://localhost"} }},
+		{"NATS URL with path", func(c *Config) { c.NATS.Servers = []string{"tls://localhost/path"} }},
+		{"NATS URL with query", func(c *Config) { c.NATS.Servers = []string{"tls://localhost?query=1"} }},
+		{"NATS URL with fragment", func(c *Config) { c.NATS.Servers = []string{"tls://localhost#frag"} }},
 		{"Missing NATS CA", func(c *Config) { c.NATS.CAFile = "/missing/ca.pem" }},
 		{"Directory NATS CA", func(c *Config) { c.NATS.CAFile = tmpDir }},
 		{"Negative queue capacity", func(c *Config) { c.Queues.WSWriterCapacity = -100 }},
@@ -278,4 +284,81 @@ func TestConfig_Validation(t *testing.T) {
 			t.Errorf("Expected preserved max errors 50, got %d", cfg.Cloud.MaxConsecutiveFrameErrors)
 		}
 	})
+
+	t.Run("NATS Production Security Enforcement", func(t *testing.T) {
+		cfg := validConfig
+		cfg.NATS = validNATS
+		cfg.NATS.Servers = []string{"nats://nats.example.com"}
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "must use tls://") {
+			t.Errorf("Expected production config to reject nats://, got: %v", err)
+		}
+
+		cfg.NATS.Servers = []string{"tls://nats.example.com"}
+		cfg.NATS.CredentialsFile = ""
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "credentials_file is strictly required") {
+			t.Errorf("Expected production config to reject empty credentials, got: %v", err)
+		}
+
+		cfg.NATS.CredentialsFile = credsFile
+		cfg.NATS.CAFile = ""
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ca_file is strictly required") {
+			t.Errorf("Expected production config to reject empty CA file, got: %v", err)
+		}
+	})
+
+	t.Run("NATS AllowInsecureLocalDev Exception", func(t *testing.T) {
+		cfg := validConfig
+		cfg.NATS = validNATS
+		cfg.NATS.Servers = []string{"nats://remote.example.com"}
+		cfg.NATS.CredentialsFile = ""
+		cfg.NATS.CAFile = ""
+		cfg.NATS.AllowInsecureLocalDev = true
+
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "loopback addresses") {
+			t.Errorf("Expected AllowInsecureLocalDev to reject non-loopback nats://, got: %v", err)
+		}
+
+		cfg.NATS.Servers = []string{"nats://localhost"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Expected AllowInsecureLocalDev to permit nats://localhost and empty creds/CA, got: %v", err)
+		}
+	})
+}
+
+func generateTestCreds(t *testing.T) string {
+	t.Helper()
+	userKP, err := nkeys.CreateUser()
+	if err != nil {
+		t.Fatalf("failed to create user nkey: %v", err)
+	}
+	userSeed, err := userKP.Seed()
+	if err != nil {
+		t.Fatalf("failed to get user seed: %v", err)
+	}
+	userPub, err := userKP.PublicKey()
+	if err != nil {
+		t.Fatalf("failed to get user pubkey: %v", err)
+	}
+
+	accKP, err := nkeys.CreateAccount()
+	if err != nil {
+		t.Fatalf("failed to create account nkey: %v", err)
+	}
+	accPub, err := accKP.PublicKey()
+	if err != nil {
+		t.Fatalf("failed to get account pubkey: %v", err)
+	}
+
+	claims := jwt.NewUserClaims(userPub)
+	claims.Issuer = accPub
+	jwtStr, err := claims.Encode(accKP)
+	if err != nil {
+		t.Fatalf("failed to encode claims: %v", err)
+	}
+
+	creds, err := jwt.FormatUserConfig(jwtStr, userSeed)
+	if err != nil {
+		t.Fatalf("failed to format user config: %v", err)
+	}
+	return string(creds)
 }

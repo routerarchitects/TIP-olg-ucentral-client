@@ -290,6 +290,13 @@ type CloudConfigureResultStatus struct {
 	Rejected []ConfigureRejectedParameter `json:"rejected,omitempty"`
 }
 
+func (r *CloudConfigureResultStatus) Validate() error {
+	if r.Text == "" {
+		return errors.New("text is required")
+	}
+	return nil
+}
+
 type CloudConfigureResponse struct {
 	Serial string                     `json:"serial"`
 	UUID   int64                      `json:"uuid"`
@@ -315,6 +322,13 @@ type CloudRebootStatus struct {
 	Error int    `json:"error"`
 	Text  string `json:"text"`
 	When  int64  `json:"when"`
+}
+
+func (r *CloudRebootStatus) Validate() error {
+	if r.Text == "" {
+		return errors.New("text is required")
+	}
+	return nil
 }
 
 type CloudRebootResponse struct {
@@ -349,6 +363,13 @@ type CloudFactoryStatus struct {
 	Error int    `json:"error"`
 	Text  string `json:"text"`
 	When  int64  `json:"when"`
+}
+
+func (r *CloudFactoryStatus) Validate() error {
+	if r.Text == "" {
+		return errors.New("text is required")
+	}
+	return nil
 }
 
 type CloudFactoryResponse struct {
@@ -387,6 +408,13 @@ type CloudUpgradeStatus struct {
 	Error int    `json:"error"`
 	Text  string `json:"text"`
 	When  int64  `json:"when"`
+}
+
+func (r *CloudUpgradeStatus) Validate() error {
+	if r.Text == "" {
+		return errors.New("text is required")
+	}
+	return nil
 }
 
 type CloudUpgradeResponse struct {
@@ -451,6 +479,13 @@ type CloudTraceStatus struct {
 	When  int64  `json:"when,omitempty"`
 }
 
+func (r *CloudTraceStatus) Validate() error {
+	if r.Text == "" {
+		return errors.New("text is required")
+	}
+	return nil
+}
+
 type CloudTraceResponse struct {
 	Serial string           `json:"serial"`
 	Status CloudTraceStatus `json:"status"`
@@ -501,6 +536,13 @@ type CloudLedsStatus struct {
 	Text  string `json:"text"`
 }
 
+func (r *CloudLedsStatus) Validate() error {
+	if r.Text == "" {
+		return errors.New("text is required")
+	}
+	return nil
+}
+
 type CloudLedsResponse struct {
 	Serial string          `json:"serial"`
 	Status CloudLedsStatus `json:"status"`
@@ -529,6 +571,13 @@ func (r *CloudTelemetryRequest) Validate() error {
 type CloudTelemetryStatus struct {
 	Error int    `json:"error"`
 	Text  string `json:"text"`
+}
+
+func (r *CloudTelemetryStatus) Validate() error {
+	if r.Text == "" {
+		return errors.New("text is required")
+	}
+	return nil
 }
 
 type CloudTelemetryResponse struct {
@@ -587,6 +636,13 @@ type CloudRemoteAccessStatus struct {
 	Meta  json.RawMessage `json:"meta,omitempty"`
 }
 
+func (r *CloudRemoteAccessStatus) Validate() error {
+	if r.Text == "" {
+		return errors.New("text is required")
+	}
+	return nil
+}
+
 type CloudRemoteAccessResponse struct {
 	Serial string                  `json:"serial"`
 	Status CloudRemoteAccessStatus `json:"status"`
@@ -626,6 +682,13 @@ type CloudCertupdateStatus struct {
 	Txt   string `json:"txt"`
 }
 
+func (r *CloudCertupdateStatus) Validate() error {
+	if r.Txt == "" {
+		return errors.New("txt is required")
+	}
+	return nil
+}
+
 type CloudCertupdateResponse struct {
 	Serial string                `json:"serial"`
 	Status CloudCertupdateStatus `json:"status"`
@@ -649,6 +712,13 @@ func (r *CloudReenrollRequest) Validate() error {
 type CloudReenrollStatus struct {
 	Error int    `json:"error"`
 	Txt   string `json:"txt"`
+}
+
+func (r *CloudReenrollStatus) Validate() error {
+	if r.Txt == "" {
+		return errors.New("txt is required")
+	}
+	return nil
 }
 
 type CloudReenrollResponse struct {
@@ -728,7 +798,43 @@ type CloudScriptStatus struct {
 	Result   string `json:"result,omitempty"`
 }
 
+func (r *CloudScriptStatus) Validate() error {
+	if r.Result == "" && r.Result64 == "" && r.Error == 0 {
+		return errors.New("result is required")
+	}
+	return nil
+}
+
 type CloudScriptResponse struct {
 	Serial string            `json:"serial"`
 	Status CloudScriptStatus `json:"status"`
+}
+
+func (r *CloudConfigureRequest) EffectiveUUID() (int64, error) {
+	if len(r.Config) > 0 && string(r.Config) != "null" {
+		return r.UUID, nil
+	}
+	if r.Compress64 == "" {
+		return 0, errors.New("neither config nor compress_64 is provided")
+	}
+
+	decoder := base64.NewDecoder(base64.StdEncoding, strings.NewReader(r.Compress64))
+	zlibReader, err := zlib.NewReader(decoder)
+	if err != nil {
+		return 0, fmt.Errorf("invalid zlib data: %w", err)
+	}
+	defer zlibReader.Close()
+
+	limitReader := io.LimitReader(zlibReader, int64(r.CompressSz)+1)
+	bytesRead, err := io.ReadAll(limitReader)
+	if err != nil {
+		return 0, fmt.Errorf("decompression error: %w", err)
+	}
+
+	trimmed := bytes.TrimSpace(bytesRead)
+	var innerReq CloudConfigureRequest
+	if err := json.Unmarshal(trimmed, &innerReq); err != nil {
+		return 0, errors.New("decompressed payload must be a JSON configuration object")
+	}
+	return innerReq.UUID, nil
 }

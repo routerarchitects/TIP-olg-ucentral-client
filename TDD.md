@@ -188,7 +188,7 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Assert:* In both cases, the client must immediately return an initial "started" status response matching the `CloudUpgradeResponse` schema (with `status.error = 0`). The initial JSON-RPC exchange must be closed while the background upgrade operation remains active. For case A, the client must NOT send any `upgrade_progress` notifications. For case B, optional progress notifications matching the `CloudUpgradeProgressNotification` schema may be emitted.
 *   **TC-UPG-002 (Upgrade Crash Recovery via Durable Store and Status Query):**
     *   *Requirement Mapping:* `REQ-011`
-    *   *Setup:* Simulate a daemon crash/restart while an upgrade is active downstream. Populate `OperationStore` with an active operation record. Mock a downstream device/local-agent responder on `ucentral.v1.device.<own-serial>.status.get`.
+    *   *Setup:* Simulate a daemon crash/restart while an upgrade is active downstream. Populate `OperationStore` with an active operation record. Mock a downstream device/local-agent responder on `status.get.<target>`.
     *   *Assert:* On boot, the daemon must load the `OperationStore` to recover the Cloud JSON-RPC `id` and immediately re-acquire the in-memory `activeStateTx` lock. It must then publish a request to `status.get` generating a **fresh internal `rpc_id`**, receive the downstream status response, correlate the generic status using the locally persisted `operation_id` from the OperationStore, and release the lock if a terminal state is reached. The downstream agent is not required or expected to return the operation_id over NATS. The uCentral client itself must not subscribe to or respond on `status.get`.
 *   **TC-UPG-003 (Pending Terminal Delivery Crash Recovery):**
     *   *Requirement Mapping:* `REQ-011`
@@ -312,16 +312,20 @@ This document details the test plans, test cases, and verification strategies fo
     *   *Assert:* The intercepted trigger must contain `uuid`, `kv_bucket`, `kv_key`, `target`, and `rpc_id` while strictly omitting the full configuration `payload`.
 *   **TC-SEC-001 (Target Subject Isolation Constraints):**
     *   *Requirement Mapping:* `REQ-004` (Subject Schema Versioning), `REQ-016` (NATS Security & Target Isolation)
-    *   *Setup:* Attempt to publish or subscribe to a subject with a different target serial (e.g. `ucentral.v1.device.different-serial.state`).
+    *   *Setup:* Attempt to publish or subscribe to a subject with a different target serial (e.g. `status.different-serial`).
     *   *Assert:* Connection/authorization must block or reject the operation, ensuring target-serial isolation.
 *   **TC-NET-007 (Device Health Forwarding and No Daemon Status Responder):**
     *   *Requirement Mapping:* `REQ-019`
-    *   *Setup:* Publish a valid device health snapshot to `ucentral.v1.device.<own-serial>.health`. Separately, publish/request `ucentral.v1.device.<own-serial>.status.get` with only the uCentral client running and no downstream status responder.
-    *   *Assert:* The client must subscribe to `.health`, validate/rate-limit the payload, and enqueue accepted health updates for Cloud forwarding. The client must not respond to `status.get` with daemon liveness/readiness, Cloud connectivity, queue depth, uptime, or metrics.
-*   **TC-SEC-002 (TLS v1.3 and CA Verification):**
-    *   *Requirement Mapping:* `REQ-023` (TLS v1.3 Security)
-    *   *Setup:* Configure the NATS client to connect to a broker without TLS or with an invalid CA cert.
-    *   *Assert:* Client must fail to connect and reject the connection attempt. Configure with a valid CA cert and TLS v1.3; the connection must succeed.
+    *   *Setup:* Publish a valid device health snapshot to `health.<target>`. Separately, publish/request `status.get.<target>` with only the uCentral client running and no downstream status responder.
+    *   *Assert:* The NATS client explicitly stubs the `SubscribeHealth` method due to upstream limitations in `agentcore`. The client must not respond to `status.get` with daemon liveness/readiness, Cloud connectivity, queue depth, uptime, or metrics.
+*   **TC-SEC-002A (Production TLS v1.2+ and CA Verification):**
+    *   *Requirement Mapping:* `REQ-023` (TLS Security)
+    *   *Setup:* Configure the NATS client to connect to a broker with TLS (`tls://`).
+    *   *Assert:* Local unit tests must prove that production config validation strictly requires valid TLS configurations, and that these parameters are correctly mapped and wired into the `agentcore.Config` struct. The actual cryptographic handshake, invalid CA rejection, and minimum TLS version enforcement are explicitly delegated to and handled by the upstream `agentcore` library.
+*   **TC-SEC-002B (Local Development Plaintext Exception):**
+    *   *Requirement Mapping:* `REQ-023` (TLS Security)
+    *   *Setup:* Configure the NATS client to connect to a broker without TLS (`nats://`) and with an empty CA cert configuration, explicitly enabling the `allow_insecure_local_dev` flag.
+    *   *Assert:* The client must successfully connect to the broker using plaintext/insecure mode, strictly as a permitted local-development exception. Connections must fail if the flag is omitted.
 *   **TC-NET-013 (Partial Publish Failure Propagation):**
     *   *Requirement Mapping:* `REQ-026` (Desired/Applied Cloud Reconciliation Contract)
     *   *Setup:* Intercept and mock the NATS client to succeed on the JetStream KV write, but intentionally return a network error when publishing the `config.apply` trigger.

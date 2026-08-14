@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/nats-io/jwt/v2"
 )
 
 const (
@@ -197,8 +199,11 @@ func (n *NATSConfig) Validate() error {
 		if err != nil {
 			return fmt.Errorf("failed to read nats credentials_file: %w", err)
 		}
-		if !strings.Contains(string(natsCreds), "-----BEGIN USER NKEY SEED-----") {
-			return fmt.Errorf("failed to parse nats credentials_file as a valid NKey User Seed")
+		if _, err := jwt.ParseDecoratedJWT(natsCreds); err != nil {
+			return fmt.Errorf("failed to parse JWT from nats credentials_file: %w", err)
+		}
+		if _, err := jwt.ParseDecoratedNKey(natsCreds); err != nil {
+			return fmt.Errorf("failed to parse NKey from nats credentials_file: %w", err)
 		}
 	}
 

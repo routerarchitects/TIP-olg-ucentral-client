@@ -321,7 +321,7 @@ This document details the test plans, test cases, and verification strategies fo
 *   **TC-SEC-002A (Production TLS v1.2+ and CA Verification):**
     *   *Requirement Mapping:* `REQ-023` (TLS Security)
     *   *Setup:* Configure the NATS client to connect to a broker with TLS (`tls://`).
-    *   *Assert:* Connection succeeds with a valid CA. Connection is rejected synchronously or asynchronously if the CA is invalid/untrusted, or if the broker is limited below TLS 1.2.
+    *   *Assert:* Local unit tests must prove that production config validation strictly requires valid TLS configurations, and that these parameters are correctly mapped and wired into the `agentcore.Config` struct. The actual cryptographic handshake, invalid CA rejection, and minimum TLS version enforcement are explicitly delegated to and handled by the upstream `agentcore` library.
 *   **TC-SEC-002B (Local Development Plaintext Exception):**
     *   *Requirement Mapping:* `REQ-023` (TLS Security)
     *   *Setup:* Configure the NATS client to connect to a broker without TLS (`nats://`) and with an empty CA cert configuration, explicitly enabling the `allow_insecure_local_dev` flag.

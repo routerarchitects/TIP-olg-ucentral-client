@@ -396,7 +396,7 @@ Exposes a priority-aware message dispatch queue writing to the WebSocket connect
 ## 5. Security Architecture
 
 ### 5.1 NATS Security Configuration
-*   **Authentication:** Authenticates with the NATS bus using **NKeys/Seed files** or **JWT Tokens** specified in the daemon configuration file.
+*   **Authentication:** Authenticates with the NATS bus using standard **.creds files** containing an NKEY user seed, as specified in the daemon configuration file.
 *   **TLS Requirements:** TLS 1.2+ is enforced on the NATS connection with CA certificates validation.
 *   **Authorization & Access Control (ACLs):** The client acts as a 1-to-N gateway and its NATS credentials must authorize it to route messages to/from specific downstream targets:
     *   *Publish:* `cmd.configure.<target>`, `cmd.action.<target>.*`, `capabilities.get.<target>`, `status.get.<target>`

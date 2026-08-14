@@ -1138,9 +1138,10 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
 
     // NATSConfig defines the mandatory secure connection parameters for the NATS bus.
     type NATSConfig struct {
-        Servers         []string // Normally uses tls://. nats:// is permitted for local plaintext development.
-        CredentialsFile string   // Path to NATS credentials (NKEY/JWT).
-        CAFile          string   // Optional path to the trusted Root CA. If empty, allows plaintext/insecure connection.
+        Servers               []string // Normally uses tls://. nats:// is permitted ONLY for local plaintext development if AllowInsecureLocalDev is true.
+        CredentialsFile       string   // Path to NATS credentials (NKEY/JWT). Required unless AllowInsecureLocalDev is true.
+        CAFile                string   // Path to the trusted Root CA. Required unless AllowInsecureLocalDev is true (and loopback addresses are used).
+        AllowInsecureLocalDev bool     // Explicitly permits insecure loopback features (nats://, missing creds, missing CA).
     }
 
     // NewNATSClient initializes a NATS connection.
@@ -1148,7 +1149,8 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
 
     func (n *NATSClient) SubmitConfigure(ctx context.Context, cmd *agentcore.ConfigureCommand) error
     func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *agentcore.ActionCommand) error
-    func (n *NATSClient) SubscribeResults(ctx context.Context, handler func(env agentcore.ResultEnvelope)) error
+    // Subscribes to results for a specific target. The registered handler will validate that incoming result envelopes precisely match this expected target.
+    func (n *NATSClient) SubscribeResults(ctx context.Context, target string, handler func(env agentcore.ResultEnvelope)) error
 
     // Query Envelopes (Stubbed due to agentcore limitations)
     func (n *NATSClient) QueryCapabilities(ctx context.Context, query *contracts.CloudCapabilitiesQuery) ([]byte, error)

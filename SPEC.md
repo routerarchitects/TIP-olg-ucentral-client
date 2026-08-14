@@ -551,7 +551,6 @@ TIP-olg-ucentral-client/
     }
 
     type NATSConfig struct {
-        Target                string   `json:"target"`
         Servers               []string `json:"servers"`
         CredentialsFile       string   `json:"credentials_file"`
         CAFile                string   `json:"ca_file"`
@@ -1145,7 +1144,7 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     }
 
     // NewNATSClient initializes a NATS connection.
-    func NewNATSClient(cfg config.NATSConfig, onStateChange func(contracts.LinkState)) (*NATSClient, error)
+    func NewNATSClient(agentName string, cfg config.NATSConfig, onStateChange func(contracts.LinkState)) (*NATSClient, error)
 
     func (n *NATSClient) SubmitConfigure(ctx context.Context, cmd *agentcore.ConfigureCommand) error
     func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *agentcore.ActionCommand) error

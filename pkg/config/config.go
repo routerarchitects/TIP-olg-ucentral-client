@@ -167,6 +167,12 @@ func (n *NATSConfig) Validate() error {
 		if err != nil || u.Host == "" {
 			return fmt.Errorf("nats server must be a valid URL")
 		}
+		// NATS doesn't use HTTP-like paths, query parameters, or fragments.
+		// We intentionally permit user info (u.User != nil) because NATS supports
+		// inline username/password authentication (e.g. nats://user:pass@host:port).
+		if (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+			return fmt.Errorf("nats server URL must contain only scheme, host, and port (no paths, queries, or fragments)")
+		}
 		if u.Scheme == "nats" {
 			hasInsecureFeatures = true
 		}

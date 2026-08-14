@@ -1,12 +1,15 @@
 package nats
 
 import (
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 )
+
+//go:embed capabilities.json
+var DefaultCapabilities []byte
 
 // CapabilityCache holds the cached capabilities and firmware version.
 type CapabilityCache struct {
@@ -20,45 +23,29 @@ func NewCapabilityCache() *CapabilityCache {
 	return &CapabilityCache{}
 }
 
-// LoadFromDisk reads and parses the capabilities from the provided file path.
+// parseCapabilities parses capabilities from a raw payload byte slice.
 // It returns the raw payload and extracted firmware string without mutating state.
-// This stubs out the missing NATS fetch logic.
-func (c *CapabilityCache) LoadFromDisk(filePath string) ([]byte, string, error) {
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to read capabilities file: %w", err)
+// This parses the embedded JSON stub for the missing NATS fetch logic.
+func (c *CapabilityCache) parseCapabilities(data []byte) ([]byte, string, error) {
+	var metadata struct {
+		Version struct {
+			OLG struct {
+				Major *int `json:"major"`
+				Minor *int `json:"minor"`
+				Patch *int `json:"patch"`
+			} `json:"olg"`
+		} `json:"version"`
 	}
 
-	var caps map[string]interface{}
-	if err := json.Unmarshal(data, &caps); err != nil {
+	if err := json.Unmarshal(data, &metadata); err != nil {
 		return nil, "", fmt.Errorf("failed to parse capabilities JSON: %w", err)
 	}
 
-	// Strictly extract firmware version for caching
-	version, ok := caps["version"].(map[string]interface{})
-	if !ok {
-		return nil, "", errors.New("capabilities missing 'version' object")
-	}
-
-	olg, ok := version["olg"].(map[string]interface{})
-	if !ok {
-		return nil, "", errors.New("capabilities missing 'version.olg' object")
-	}
-
-	// json.Unmarshal decodes numbers to float64
-	major, majorOk := olg["major"].(float64)
-	minor, minorOk := olg["minor"].(float64)
-	patch, patchOk := olg["patch"].(float64)
-
-	if !majorOk || !minorOk || !patchOk {
+	if metadata.Version.OLG.Major == nil || metadata.Version.OLG.Minor == nil || metadata.Version.OLG.Patch == nil {
 		return nil, "", errors.New("capabilities 'version.olg' missing numeric major, minor, or patch fields")
 	}
 
-	if major != float64(int64(major)) || minor != float64(int64(minor)) || patch != float64(int64(patch)) {
-		return nil, "", errors.New("capabilities 'version.olg' major, minor, and patch must be integers")
-	}
-
-	firmware := fmt.Sprintf("%d.%d.%d", int64(major), int64(minor), int64(patch))
+	firmware := fmt.Sprintf("%d.%d.%d", *metadata.Version.OLG.Major, *metadata.Version.OLG.Minor, *metadata.Version.OLG.Patch)
 
 	return data, firmware, nil
 }
@@ -74,7 +61,7 @@ func (c *CapabilityCache) GetCapabilities() ([]byte, error) {
 		c.mu.Lock()
 		// Double-check under write lock to avoid stampedes
 		if len(c.capabilities) == 0 {
-			data, firmware, err := c.LoadFromDisk("capabilities.json")
+			data, firmware, err := c.parseCapabilities(DefaultCapabilities)
 			if err != nil {
 				c.mu.Unlock()
 				return nil, err

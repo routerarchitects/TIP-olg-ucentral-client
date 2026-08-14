@@ -1,14 +1,12 @@
 package nats
 
 import (
-	"os"
 	"sync"
 	"testing"
 )
 
-func TestCapabilityCache_LoadFromDisk_Success(t *testing.T) {
-	// Setup a temporary JSON file
-	mockJSON := `{
+func TestCapabilityCache_Parse_Success(t *testing.T) {
+	mockJSON := []byte(`{
 		"platform": "olg",
 		"version": {
 			"olg": {
@@ -17,27 +15,16 @@ func TestCapabilityCache_LoadFromDisk_Success(t *testing.T) {
 				"patch": 0
 			}
 		}
-	}`
-
-	tmpFile, err := os.CreateTemp("", "capabilities-*.json")
-	if err != nil {
-		t.Fatalf("Failed to create temp file: %v", err)
-	}
-	defer os.Remove(tmpFile.Name())
-
-	if _, err := tmpFile.Write([]byte(mockJSON)); err != nil {
-		t.Fatalf("Failed to write mock JSON: %v", err)
-	}
-	tmpFile.Close()
+	}`)
 
 	cache := NewCapabilityCache()
-	data, fwStr, err := cache.LoadFromDisk(tmpFile.Name())
+	data, fwStr, err := cache.parseCapabilities(mockJSON)
 	if err != nil {
-		t.Fatalf("LoadFromDisk failed: %v", err)
+		t.Fatalf("parseCapabilities failed: %v", err)
 	}
 
 	if len(data) == 0 {
-		t.Error("Expected non-empty data from LoadFromDisk")
+		t.Error("Expected non-empty data from parseCapabilities")
 	}
 
 	if fwStr != "3.2.0" {
@@ -45,27 +32,16 @@ func TestCapabilityCache_LoadFromDisk_Success(t *testing.T) {
 	}
 }
 
-func TestCapabilityCache_LoadFromDisk_InvalidJSON(t *testing.T) {
-	tmpFile, err := os.CreateTemp("", "capabilities-*.json")
-	if err != nil {
-		t.Fatalf("Failed to create temp file: %v", err)
-	}
-	defer os.Remove(tmpFile.Name())
-
-	if _, err := tmpFile.Write([]byte(`{ "invalid": json `)); err != nil {
-		t.Fatalf("Failed to write mock JSON: %v", err)
-	}
-	tmpFile.Close()
-
+func TestCapabilityCache_Parse_InvalidJSON(t *testing.T) {
 	cache := NewCapabilityCache()
-	_, _, err = cache.LoadFromDisk(tmpFile.Name())
+	_, _, err := cache.parseCapabilities([]byte(`{ "invalid": json `))
 	if err == nil {
 		t.Error("Expected error for invalid JSON, got nil")
 	}
 }
 
 func TestCapabilityCache_InvalidFirmwareStructure(t *testing.T) {
-	mockJSON := `{
+	mockJSON := []byte(`{
 		"platform": "olg",
 		"version": {
 			"olg": {
@@ -73,28 +49,17 @@ func TestCapabilityCache_InvalidFirmwareStructure(t *testing.T) {
 				"minor": "two"
 			}
 		}
-	}`
-
-	tmpFile, err := os.CreateTemp("", "capabilities-*.json")
-	if err != nil {
-		t.Fatalf("Failed to create temp file: %v", err)
-	}
-	defer os.Remove(tmpFile.Name())
-
-	if _, err := tmpFile.Write([]byte(mockJSON)); err != nil {
-		t.Fatalf("Failed to write mock JSON: %v", err)
-	}
-	tmpFile.Close()
+	}`)
 
 	cache := NewCapabilityCache()
-	_, _, err = cache.LoadFromDisk(tmpFile.Name())
+	_, _, err := cache.parseCapabilities(mockJSON)
 	if err == nil {
 		t.Error("Expected error for invalid firmware structure, got nil")
 	}
 }
 
 func TestCapabilityCache_NonIntegerFirmware(t *testing.T) {
-	mockJSON := `{
+	mockJSON := []byte(`{
 		"platform": "olg",
 		"version": {
 			"olg": {
@@ -103,43 +68,32 @@ func TestCapabilityCache_NonIntegerFirmware(t *testing.T) {
 				"patch": 0
 			}
 		}
-	}`
-
-	tmpFile, err := os.CreateTemp("", "capabilities-*.json")
-	if err != nil {
-		t.Fatalf("Failed to create temp file: %v", err)
-	}
-	defer os.Remove(tmpFile.Name())
-
-	if _, err := tmpFile.Write([]byte(mockJSON)); err != nil {
-		t.Fatalf("Failed to write mock JSON: %v", err)
-	}
-	tmpFile.Close()
+	}`)
 
 	cache := NewCapabilityCache()
-	_, _, err = cache.LoadFromDisk(tmpFile.Name())
+	_, _, err := cache.parseCapabilities(mockJSON)
 	if err == nil {
 		t.Error("Expected error for non-integer firmware fields, got nil")
 	}
 }
 
-func TestCapabilityCache_LazyLoad(t *testing.T) {
-	mockJSON := `{
-		"version": {
-			"olg": {
-				"major": 1,
-				"minor": 0,
-				"patch": 0
-			}
-		}
-	}`
-
-	err := os.WriteFile("capabilities.json", []byte(mockJSON), 0644)
+func TestCapabilityCache_DefaultStub(t *testing.T) {
+	cache := NewCapabilityCache()
+	// Validate that the actual shipped operational capabilities.json parses successfully
+	data, fwStr, err := cache.parseCapabilities(DefaultCapabilities)
 	if err != nil {
-		t.Fatalf("Failed to create temp file: %v", err)
+		t.Fatalf("Failed to parse the real shipped capabilities.json: %v", err)
 	}
-	defer os.Remove("capabilities.json")
+	if len(data) == 0 {
+		t.Error("Default capabilities parsed as empty payload")
+	}
+	if fwStr == "unknown" || fwStr == "" {
+		t.Errorf("Failed to extract firmware from default capabilities, got %s", fwStr)
+	}
+}
 
+func TestCapabilityCache_LazyLoad(t *testing.T) {
+	// The lazy load test relies on the real capabilities.json via DefaultCapabilities
 	cache := NewCapabilityCache()
 
 	// Lazy load triggered by GetCapabilities
@@ -156,29 +110,13 @@ func TestCapabilityCache_LazyLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetFirmware failed: %v", err)
 	}
-	if fw != "1.0.0" {
-		t.Errorf("Expected firmware 1.0.0, got %s", fw)
+	if fw == "" {
+		t.Errorf("Expected firmware string, got empty")
 	}
 }
 
 func TestCapabilityCache_Concurrency(t *testing.T) {
 	// Ensure that GetCapabilities can be called concurrently without data races
-	mockJSON := `{
-		"version": {
-			"olg": {
-				"major": 2,
-				"minor": 5,
-				"patch": 1
-			}
-		}
-	}`
-
-	err := os.WriteFile("capabilities.json", []byte(mockJSON), 0644)
-	if err != nil {
-		t.Fatalf("Failed to create temp file: %v", err)
-	}
-	defer os.Remove("capabilities.json")
-
 	cache := NewCapabilityCache()
 
 	var wg sync.WaitGroup
@@ -198,43 +136,15 @@ func TestCapabilityCache_Concurrency(t *testing.T) {
 			if err != nil {
 				t.Errorf("GetFirmware failed: %v", err)
 			}
-			if fw != "2.5.1" {
-				t.Errorf("Expected firmware 2.5.1, got %s", fw)
+			if fw == "" {
+				t.Errorf("Expected firmware string, got empty")
 			}
 		}()
 	}
 	wg.Wait()
 }
 
-func TestCapabilityCache_MissingFile(t *testing.T) {
-	cache := NewCapabilityCache()
-	os.Remove("capabilities.json")
-	// Attempting to get capabilities from a cache mapped to a missing file
-	_, err := cache.GetCapabilities()
-	if err == nil {
-		t.Error("Expected error when lazy loading a missing file, got nil")
-	}
-}
-
 func TestCapabilityCache_DefensiveCopy(t *testing.T) {
-	// Setup a temporary JSON file
-	mockJSON := `{
-		"platform": "test",
-		"version": {
-			"olg": {
-				"major": 1,
-				"minor": 0,
-				"patch": 0
-			}
-		}
-	}`
-
-	err := os.WriteFile("capabilities.json", []byte(mockJSON), 0644)
-	if err != nil {
-		t.Fatalf("Failed to create temp file: %v", err)
-	}
-	defer os.Remove("capabilities.json")
-
 	cache := NewCapabilityCache()
 
 	caps1, err := cache.GetCapabilities()

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/Telecominfraproject/olg-nats-agent-core/agentcore"
 	"github.com/nats-io/nats.go"
@@ -36,7 +38,7 @@ func NewNATSClient(agentName string, cfg config.NATSConfig, onStateChange func(c
 			Servers:         cfg.Servers,
 			CredentialsFile: cfg.CredentialsFile,
 			TLS: &agentcore.TLSConfig{
-				Enabled:  cfg.CAFile != "" || cfg.ClientCertFile != "" || cfg.ClientKeyFile != "",
+				Enabled:  allServersUseTLS(cfg.Servers),
 				CAFile:   cfg.CAFile,
 				CertFile: cfg.ClientCertFile,
 				KeyFile:  cfg.ClientKeyFile,
@@ -121,6 +123,19 @@ func (n *NATSClient) SubmitConfigure(ctx context.Context, cmd *agentcore.Configu
 
 	_, err = n.agentClient.SubmitConfigure(ctx, *cmd)
 	return err
+}
+
+func allServersUseTLS(servers []string) bool {
+	if len(servers) == 0 {
+		return false
+	}
+	for _, srv := range servers {
+		u, err := url.Parse(srv)
+		if err != nil || strings.ToLower(u.Scheme) != "tls" {
+			return false
+		}
+	}
+	return true
 }
 
 func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *agentcore.ActionCommand) error {

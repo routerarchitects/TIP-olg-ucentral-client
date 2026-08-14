@@ -1,14 +1,18 @@
 package nats
 
 import (
+	"bytes"
+	"compress/zlib"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nkeys"
 	"math/big"
@@ -103,7 +107,8 @@ func TestSubscribeResults_InvalidTarget(t *testing.T) {
 	}
 }
 func TestSubmitConfigure_UUIDMismatch_Plain(t *testing.T) {
-	client := &NATSClient{target: "serial-123", agentClient: &agentcore.Client{}}
+	ac, _ := agentcore.New(agentcore.Config{AgentName: "serial-123"})
+	client := &NATSClient{target: "serial-123", agentClient: ac}
 
 	// Valid envelope, mismatched payload UUID
 	cmd := &agentcore.ConfigureCommand{
@@ -119,6 +124,114 @@ func TestSubmitConfigure_UUIDMismatch_Plain(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "does not match payload UUID") {
 		t.Errorf("Expected UUID mismatch error, got: %v", err)
 	}
+}
+
+func compressPayload(payload string) (string, int) {
+	var buf bytes.Buffer
+	w := zlib.NewWriter(&buf)
+	w.Write([]byte(payload))
+	w.Close()
+	return base64.StdEncoding.EncodeToString(buf.Bytes()), len(payload)
+}
+
+func TestSubmitConfigure_Compressed(t *testing.T) {
+	ac, _ := agentcore.New(agentcore.Config{AgentName: "serial-123"})
+	client := &NATSClient{target: "serial-123", agentClient: ac}
+
+	t.Run("Valid Matching UUID", func(t *testing.T) {
+		b64, sz := compressPayload(`{"serial":"serial-123","uuid":123,"config":{}}`)
+		// No serial/uuid/when in outer wrapper
+		payloadJSON := fmt.Sprintf(`{"compress_64":"%s","compress_sz":%d}`, b64, sz)
+		cmd := &agentcore.ConfigureCommand{
+			Version:   "1.0",
+			RPCID:     "rpc1",
+			Target:    "serial-123",
+			UUID:      "123",
+			Timestamp: time.Now(),
+			Payload:   json.RawMessage(payloadJSON),
+		}
+
+		err := client.SubmitConfigure(context.Background(), cmd)
+		// Should bypass validation and fail on agentcore client call (not connected)
+		if err == nil {
+			t.Fatal("expected connection error from agentcore, got nil")
+		}
+		if strings.Contains(err.Error(), "does not match payload UUID") || strings.Contains(err.Error(), "validation") {
+			t.Errorf("expected validation to pass, but got validation error: %v", err)
+		}
+	})
+
+	t.Run("Mismatched Inner UUID", func(t *testing.T) {
+		b64, sz := compressPayload(`{"serial":"serial-123","uuid":999,"config":{}}`)
+		payloadJSON := fmt.Sprintf(`{"compress_64":"%s","compress_sz":%d}`, b64, sz)
+		cmd := &agentcore.ConfigureCommand{
+			Version:   "1.0",
+			RPCID:     "rpc1",
+			Target:    "serial-123",
+			UUID:      "123",
+			Timestamp: time.Now(),
+			Payload:   json.RawMessage(payloadJSON),
+		}
+
+		err := client.SubmitConfigure(context.Background(), cmd)
+		if err == nil || !strings.Contains(err.Error(), "does not match payload UUID") {
+			t.Errorf("expected UUID mismatch error, got: %v", err)
+		}
+	})
+
+	t.Run("Bad Base64", func(t *testing.T) {
+		payloadJSON := `{"compress_64":"!!!invalid-base64!!!","compress_sz":100}`
+		cmd := &agentcore.ConfigureCommand{
+			Version:   "1.0",
+			RPCID:     "rpc1",
+			Target:    "serial-123",
+			UUID:      "123",
+			Timestamp: time.Now(),
+			Payload:   json.RawMessage(payloadJSON),
+		}
+
+		err := client.SubmitConfigure(context.Background(), cmd)
+		if err == nil || !strings.Contains(err.Error(), "base64") {
+			t.Errorf("expected base64 decoding error, got: %v", err)
+		}
+	})
+
+	t.Run("Bad Zlib", func(t *testing.T) {
+		badZlib := base64.StdEncoding.EncodeToString([]byte("not zlib compressed data"))
+		payloadJSON := fmt.Sprintf(`{"compress_64":"%s","compress_sz":100}`, badZlib)
+		cmd := &agentcore.ConfigureCommand{
+			Version:   "1.0",
+			RPCID:     "rpc1",
+			Target:    "serial-123",
+			UUID:      "123",
+			Timestamp: time.Now(),
+			Payload:   json.RawMessage(payloadJSON),
+		}
+
+		err := client.SubmitConfigure(context.Background(), cmd)
+		if err == nil || !strings.Contains(err.Error(), "zlib") {
+			t.Errorf("expected zlib decompression error, got: %v", err)
+		}
+	})
+
+	t.Run("Incorrect compress_sz", func(t *testing.T) {
+		b64, sz := compressPayload(`{"serial":"serial-123","uuid":123,"config":{}}`)
+		// Pass incorrect size
+		payloadJSON := fmt.Sprintf(`{"compress_64":"%s","compress_sz":%d}`, b64, sz+10)
+		cmd := &agentcore.ConfigureCommand{
+			Version:   "1.0",
+			RPCID:     "rpc1",
+			Target:    "serial-123",
+			UUID:      "123",
+			Timestamp: time.Now(),
+			Payload:   json.RawMessage(payloadJSON),
+		}
+
+		err := client.SubmitConfigure(context.Background(), cmd)
+		if err == nil || !strings.Contains(err.Error(), "does not match compress_sz") {
+			t.Errorf("expected size mismatch error, got: %v", err)
+		}
+	})
 }
 
 func TestNewNATSClient_ConfigWiring(t *testing.T) {

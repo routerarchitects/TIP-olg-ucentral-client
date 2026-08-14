@@ -64,9 +64,36 @@ func TestCapabilityCache_LoadFromDisk_InvalidJSON(t *testing.T) {
 	}
 }
 
+func TestCapabilityCache_InvalidFirmwareStructure(t *testing.T) {
+	mockJSON := `{
+		"platform": "olg",
+		"version": {
+			"olg": {
+				"major": 3,
+				"minor": "two"
+			}
+		}
+	}`
+
+	tmpFile, err := os.CreateTemp("", "capabilities-*.json")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.Write([]byte(mockJSON)); err != nil {
+		t.Fatalf("Failed to write mock JSON: %v", err)
+	}
+	tmpFile.Close()
+
+	cache := NewCapabilityCache()
+	_, _, err = cache.LoadFromDisk(tmpFile.Name())
+	if err == nil {
+		t.Error("Expected error for invalid firmware structure, got nil")
+	}
+}
+
 func TestCapabilityCache_LazyLoad(t *testing.T) {
-	// Because lazy loading hardcodes "capabilities.json" in the current working directory,
-	// we will create it locally in the test directory for this execution.
 	mockJSON := `{
 		"version": {
 			"olg": {
@@ -79,7 +106,7 @@ func TestCapabilityCache_LazyLoad(t *testing.T) {
 
 	err := os.WriteFile("capabilities.json", []byte(mockJSON), 0644)
 	if err != nil {
-		t.Fatalf("Failed to create local capabilities.json: %v", err)
+		t.Fatalf("Failed to create temp file: %v", err)
 	}
 	defer os.Remove("capabilities.json")
 
@@ -116,7 +143,10 @@ func TestCapabilityCache_Concurrency(t *testing.T) {
 		}
 	}`
 
-	_ = os.WriteFile("capabilities.json", []byte(mockJSON), 0644)
+	err := os.WriteFile("capabilities.json", []byte(mockJSON), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
 	defer os.Remove("capabilities.json")
 
 	cache := NewCapabilityCache()
@@ -148,16 +178,26 @@ func TestCapabilityCache_Concurrency(t *testing.T) {
 
 func TestCapabilityCache_MissingFile(t *testing.T) {
 	cache := NewCapabilityCache()
-	// Attempting to load a file that definitely does not exist
-	_, _, err := cache.LoadFromDisk("does_not_exist_12345.json")
+	os.Remove("capabilities.json")
+	// Attempting to get capabilities from a cache mapped to a missing file
+	_, err := cache.GetCapabilities()
 	if err == nil {
-		t.Error("Expected error when loading a missing file, got nil")
+		t.Error("Expected error when lazy loading a missing file, got nil")
 	}
 }
 
 func TestCapabilityCache_DefensiveCopy(t *testing.T) {
 	// Setup a temporary JSON file
-	mockJSON := `{"platform": "test"}`
+	mockJSON := `{
+		"platform": "test",
+		"version": {
+			"olg": {
+				"major": 1,
+				"minor": 0,
+				"patch": 0
+			}
+		}
+	}`
 
 	err := os.WriteFile("capabilities.json", []byte(mockJSON), 0644)
 	if err != nil {

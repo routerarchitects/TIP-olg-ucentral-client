@@ -34,13 +34,27 @@ func (c *CapabilityCache) LoadFromDisk(filePath string) ([]byte, string, error) 
 		return nil, "", fmt.Errorf("failed to parse capabilities JSON: %w", err)
 	}
 
-	// Try to extract a firmware version string for caching
-	firmware := "unknown"
-	if version, ok := caps["version"].(map[string]interface{}); ok {
-		if olg, ok := version["olg"].(map[string]interface{}); ok {
-			firmware = fmt.Sprintf("%v.%v.%v", olg["major"], olg["minor"], olg["patch"])
-		}
+	// Strictly extract firmware version for caching
+	version, ok := caps["version"].(map[string]interface{})
+	if !ok {
+		return nil, "", errors.New("capabilities missing 'version' object")
 	}
+
+	olg, ok := version["olg"].(map[string]interface{})
+	if !ok {
+		return nil, "", errors.New("capabilities missing 'version.olg' object")
+	}
+
+	// json.Unmarshal decodes numbers to float64
+	major, majorOk := olg["major"].(float64)
+	minor, minorOk := olg["minor"].(float64)
+	patch, patchOk := olg["patch"].(float64)
+
+	if !majorOk || !minorOk || !patchOk {
+		return nil, "", errors.New("capabilities 'version.olg' missing numeric major, minor, or patch fields")
+	}
+
+	firmware := fmt.Sprintf("%v.%v.%v", major, minor, patch)
 
 	return data, firmware, nil
 }

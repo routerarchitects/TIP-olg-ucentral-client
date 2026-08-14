@@ -35,7 +35,7 @@ func TestCapabilityCache_LoadFromDisk_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFromDisk failed: %v", err)
 	}
-	
+
 	if len(data) == 0 {
 		t.Error("Expected non-empty data from LoadFromDisk")
 	}
@@ -158,7 +158,7 @@ func TestCapabilityCache_MissingFile(t *testing.T) {
 func TestCapabilityCache_DefensiveCopy(t *testing.T) {
 	// Setup a temporary JSON file
 	mockJSON := `{"platform": "test"}`
-	
+
 	err := os.WriteFile("capabilities.json", []byte(mockJSON), 0644)
 	if err != nil {
 		t.Fatalf("Failed to create temp file: %v", err)

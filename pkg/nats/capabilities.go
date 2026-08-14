@@ -57,7 +57,7 @@ func (c *CapabilityCache) GetCapabilities() ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		
+
 		c.mu.Lock()
 		if len(c.capabilities) == 0 {
 			c.capabilities = data

@@ -1,32 +1,38 @@
 package nats
 
 import (
-	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 )
-
-//go:embed capabilities.json
-var DefaultCapabilities []byte
 
 // CapabilityCache holds the cached capabilities and firmware version.
 type CapabilityCache struct {
 	mu           sync.RWMutex
 	capabilities []byte
 	firmware     string
+	stubPath     string
 }
 
 // NewCapabilityCache initializes a new cache.
-func NewCapabilityCache() *CapabilityCache {
-	return &CapabilityCache{}
+// stubPath points to the runtime JSON file fallback.
+func NewCapabilityCache(stubPath string) *CapabilityCache {
+	return &CapabilityCache{
+		stubPath: stubPath,
+	}
 }
 
-// parseCapabilities parses capabilities from a raw payload byte slice.
+// LoadFromDisk reads and parses the capabilities from the provided file path.
 // It returns the raw payload and extracted firmware string without mutating state.
-// This parses the embedded JSON stub for the missing NATS fetch logic.
-func (c *CapabilityCache) parseCapabilities(data []byte) ([]byte, string, error) {
+// This stubs out the missing NATS fetch logic.
+func (c *CapabilityCache) LoadFromDisk(filePath string) ([]byte, string, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to read capabilities file: %w", err)
+	}
+
 	var metadata struct {
 		Version struct {
 			OLG struct {
@@ -61,7 +67,7 @@ func (c *CapabilityCache) GetCapabilities() ([]byte, error) {
 		c.mu.Lock()
 		// Double-check under write lock to avoid stampedes
 		if len(c.capabilities) == 0 {
-			data, firmware, err := c.parseCapabilities(DefaultCapabilities)
+			data, firmware, err := c.LoadFromDisk(c.stubPath)
 			if err != nil {
 				c.mu.Unlock()
 				return nil, err

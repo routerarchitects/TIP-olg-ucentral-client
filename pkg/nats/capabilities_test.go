@@ -122,6 +122,36 @@ func TestCapabilityCache_NonIntegerFirmware(t *testing.T) {
 	}
 }
 
+func TestCapabilityCache_NegativeFirmware(t *testing.T) {
+	mockJSON := `{
+		"platform": "olg",
+		"version": {
+			"olg": {
+				"major": -1,
+				"minor": 2,
+				"patch": 0
+			}
+		}
+	}`
+
+	tmpFile, err := os.CreateTemp("", "capabilities-*.json")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.Write([]byte(mockJSON)); err != nil {
+		t.Fatalf("Failed to write mock JSON: %v", err)
+	}
+	tmpFile.Close()
+
+	cache := NewCapabilityCache(tmpFile.Name())
+	_, _, err = cache.LoadFromDisk(tmpFile.Name())
+	if err == nil {
+		t.Error("Expected error for negative firmware fields, got nil")
+	}
+}
+
 func TestCapabilityCache_LazyLoad(t *testing.T) {
 	mockJSON := `{
 		"version": {

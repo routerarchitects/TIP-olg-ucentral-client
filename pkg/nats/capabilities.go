@@ -51,6 +51,10 @@ func (c *CapabilityCache) LoadFromDisk(filePath string) ([]byte, string, error) 
 		return nil, "", errors.New("capabilities 'version.olg' missing numeric major, minor, or patch fields")
 	}
 
+	if *metadata.Version.OLG.Major < 0 || *metadata.Version.OLG.Minor < 0 || *metadata.Version.OLG.Patch < 0 {
+		return nil, "", errors.New("capabilities 'version.olg' major, minor, and patch must be non-negative integers")
+	}
+
 	firmware := fmt.Sprintf("%d.%d.%d", *metadata.Version.OLG.Major, *metadata.Version.OLG.Minor, *metadata.Version.OLG.Patch)
 
 	return data, firmware, nil

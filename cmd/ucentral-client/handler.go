@@ -201,6 +201,7 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 	if len(frame.Payload) > limit {
 		log.Printf("[FrameHandler] Payload size %d exceeds limit of %d for method %s\n", len(frame.Payload), limit, rpcReq.Method)
 		errObj, _ := contracts.NewInternalJSONRPCError(contracts.ErrValidationFailed, fmt.Sprintf("Payload size exceeds method limit of %d", limit))
+		errObj.Code = contracts.ErrInvalidParams
 		h.pushResponse(frame.SessionID, rpcReq.ID, nil, errObj)
 		return websocket.FrameRejectedKeepConnection, nil
 	}

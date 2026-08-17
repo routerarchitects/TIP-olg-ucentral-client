@@ -3,6 +3,7 @@ package config
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -16,6 +17,7 @@ const (
 	DefaultCompressionThresholdBytes = 2048
 	DefaultMaxFrameSizeBytes         = 11 * 1024 * 1024
 	DefaultMaxConsecutiveFrameErrors = 20
+	DefaultMaxConcurrentRequests     = 100
 )
 
 func checkFile(path, name string) error {
@@ -72,6 +74,7 @@ type QueueConfig struct {
 	NATSPublishCapacity   int `json:"nats_publish_capacity"`
 	CommandResultCapacity int `json:"command_result_capacity"`
 	TelemetryCapacity     int `json:"telemetry_capacity"`
+	MaxConcurrentRequests int `json:"max_concurrent_requests"`
 }
 
 type Config struct {
@@ -266,6 +269,11 @@ func (q *QueueConfig) Validate() error {
 	if q.TelemetryCapacity <= 0 {
 		return fmt.Errorf("telemetry_capacity must be positive")
 	}
+	if q.MaxConcurrentRequests == 0 {
+		q.MaxConcurrentRequests = DefaultMaxConcurrentRequests
+	} else if q.MaxConcurrentRequests < 0 {
+		return fmt.Errorf("max_concurrent_requests must be positive")
+	}
 	return nil
 }
 
@@ -378,4 +386,19 @@ func (c CacheTTLConfig) TTLForMethod(method string) int {
 	default:
 		return c.Default
 	}
+}
+
+// LoadConfig reads the configuration file from the specified path and unmarshals it.
+func LoadConfig(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read configuration file: %w", err)
+	}
+
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("failed to parse configuration JSON: %w", err)
+	}
+
+	return &cfg, nil
 }

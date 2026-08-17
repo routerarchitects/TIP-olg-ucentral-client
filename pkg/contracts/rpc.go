@@ -16,8 +16,9 @@ type Validatable interface {
 	Validate() error
 }
 
-// Standard JSON-RPC 2.0 Error Codes
+// Standard JSON-RPC 2.0 Error Codes and Version
 const (
+	JSONRPCVersion    = "2.0"
 	ErrParse          = -32700
 	ErrInvalidRequest = -32600
 	ErrMethodNotFound = -32601
@@ -81,8 +82,8 @@ func validateJSONRPCID(id json.RawMessage, allowNull bool) error {
 
 // Validate ensures the JSONRPCRequest strictly follows JSON-RPC 2.0 invariants.
 func (r *JSONRPCRequest) Validate() error {
-	if r.JSONRPC != "2.0" {
-		return errors.New("invalid jsonrpc version, must be '2.0'")
+	if r.JSONRPC != JSONRPCVersion {
+		return fmt.Errorf("invalid jsonrpc version, must be %q", JSONRPCVersion)
 	}
 	if r.Method == "" {
 		return errors.New("method must be specified")
@@ -121,8 +122,8 @@ type JSONRPCResponse struct {
 
 // Validate ensures the JSONRPCResponse strictly follows JSON-RPC 2.0 invariants.
 func (r *JSONRPCResponse) Validate() error {
-	if r.JSONRPC != "2.0" {
-		return errors.New("invalid jsonrpc version, must be '2.0'")
+	if r.JSONRPC != JSONRPCVersion {
+		return fmt.Errorf("invalid jsonrpc version, must be %q", JSONRPCVersion)
 	}
 	if len(r.ID) == 0 {
 		return errors.New("id is required in JSON-RPC responses")

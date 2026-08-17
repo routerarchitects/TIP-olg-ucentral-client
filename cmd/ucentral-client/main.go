@@ -2,14 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/Telecominfraproject/olg-nats-agent-core/agentcore"
 	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/config"
 	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/contracts"
 	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/nats"
@@ -71,10 +74,69 @@ func main() {
 
 	// 5. Launch Reconnection & Reader loops
 	handler := &frameHandler{
-		reqMgr:    reqManager,
-		stateMgr:  stateMgr,
-		scheduler: scheduler,
+		reqMgr:     reqManager,
+		stateMgr:   stateMgr,
+		scheduler:  scheduler,
+		natsClient: natsClient,
+		serial:     cfg.Serial,
 	}
+
+	// Subscribe to NATS command execution results asynchronously (REQ-013)
+	if natsClient != nil {
+		err = natsClient.SubscribeResults(ctx, cfg.Serial, func(res agentcore.ResultEnvelope) {
+			log.Printf("[NATS RESULT] Received result for rpc_id=%s, command=%s, result=%s\n", res.RPCID, res.CommandType, res.Result)
+
+			// Recover session ID and Cloud JSON-RPC ID from res.RPCID (sessionID:cloudRPCID format)
+			parts := strings.SplitN(res.RPCID, ":", 2)
+			if len(parts) != 2 {
+				log.Printf("[NATS RESULT] ERROR: Invalid rpc_id format: %s\n", res.RPCID)
+				return
+			}
+			sessionID := parts[0]
+			rawCloudID := json.RawMessage(parts[1])
+
+			isNotification := len(rawCloudID) == 0 || string(rawCloudID) == "null" || strings.Contains(res.RPCID, ":notification:")
+
+			if res.Result == string(contracts.ResultSuccess) {
+				// Mark complete in RequestManager
+				_ = reqManager.Complete(res.RPCID, res.Payload)
+				if !isNotification {
+					resp := contracts.JSONRPCResponse{
+						JSONRPC: contracts.JSONRPCVersion,
+						Result:  res.Payload,
+						ID:      rawCloudID,
+					}
+					respBytes, _ := json.Marshal(resp)
+					_ = scheduler.Push(queues.OutboundMessage{
+						SessionID: sessionID,
+						Priority:  queues.PriorityHighest,
+						Payload:   respBytes,
+					})
+				}
+			} else {
+				// Mark fail in RequestManager
+				errObj, _ := contracts.NewInternalJSONRPCError(contracts.ErrAppFailure, res.Message)
+				resp := contracts.JSONRPCResponse{
+					JSONRPC: contracts.JSONRPCVersion,
+					Error:   errObj,
+					ID:      rawCloudID,
+				}
+				respBytes, _ := json.Marshal(resp)
+				_ = reqManager.Fail(res.RPCID, respBytes)
+				if !isNotification {
+					_ = scheduler.Push(queues.OutboundMessage{
+						SessionID: sessionID,
+						Priority:  queues.PriorityHighest,
+						Payload:   respBytes,
+					})
+				}
+			}
+		})
+		if err != nil {
+			log.Fatalf("FATAL: Failed to subscribe to NATS results: %v", err)
+		}
+	}
+
 	go func() {
 		if err := wsClient.ReconnectLoop(ctx, handler); err != nil {
 			log.Printf("WS ReconnectLoop exited: %v\n", err)

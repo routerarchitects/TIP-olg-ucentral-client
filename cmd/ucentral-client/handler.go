@@ -74,12 +74,25 @@ func (s *systemStateManager) GetSystemState() contracts.ConnectionState {
 
 // frameHandler routes inbound websocket frames to NATS via the RequestManager
 type frameHandler struct {
-	reqMgr     *reqmgr.DefaultRequestManager
-	stateMgr   *systemStateManager
-	scheduler  *queues.PriorityScheduler
+	mu             sync.RWMutex
+	reqMgr         *reqmgr.DefaultRequestManager
+	stateMgr       *systemStateManager
+	scheduler      *queues.PriorityScheduler
 	natsClient     *nats.NATSClient
 	serial         string
 	dispatchBuffer chan struct{}
+}
+
+func (h *frameHandler) GetNATSClient() *nats.NATSClient {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.natsClient
+}
+
+func (h *frameHandler) SetNATSClient(nc *nats.NATSClient) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.natsClient = nc
 }
 
 func getCommandAction(method string) (contracts.CommandType, contracts.ActionType, bool) {
@@ -297,6 +310,12 @@ func (h *frameHandler) executeTransaction(ctx context.Context, tx *reqmgr.Transa
 	dispatchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
+	nClient := h.GetNATSClient()
+	if nClient == nil {
+		h.failTransactionWithCode(tx, errors.New("NATS client not initialized"), contracts.ErrServiceUnavailable, "Local NATS service is unavailable")
+		return
+	}
+
 	var dispatchErr error
 	switch command {
 	case contracts.CommandConfigure:
@@ -308,7 +327,7 @@ func (h *frameHandler) executeTransaction(ctx context.Context, tx *reqmgr.Transa
 			Payload:   params,
 			Timestamp: time.Now().UTC(),
 		}
-		dispatchErr = h.natsClient.SubmitConfigure(dispatchCtx, cmd)
+		dispatchErr = nClient.SubmitConfigure(dispatchCtx, cmd)
 
 	case contracts.CommandQuery:
 		if action == contracts.ActionCapabilitiesGet {
@@ -318,7 +337,7 @@ func (h *frameHandler) executeTransaction(ctx context.Context, tx *reqmgr.Transa
 				Target:    h.serial,
 				Timestamp: time.Now().UTC(),
 			}
-			res, err := h.natsClient.QueryCapabilities(dispatchCtx, query)
+			res, err := nClient.QueryCapabilities(dispatchCtx, query)
 			if err != nil {
 				h.failTransaction(tx, err)
 				return
@@ -333,7 +352,7 @@ func (h *frameHandler) executeTransaction(ctx context.Context, tx *reqmgr.Transa
 				Target:    h.serial,
 				Timestamp: time.Now().UTC(),
 			}
-			res, err := h.natsClient.QueryDeviceStatus(dispatchCtx, query)
+			res, err := nClient.QueryDeviceStatus(dispatchCtx, query)
 			if err != nil {
 				h.failTransaction(tx, err)
 				return
@@ -354,7 +373,7 @@ func (h *frameHandler) executeTransaction(ctx context.Context, tx *reqmgr.Transa
 			Payload:     params,
 			Timestamp:   time.Now().UTC(),
 		}
-		dispatchErr = h.natsClient.ExecuteAction(dispatchCtx, cmd)
+		dispatchErr = nClient.ExecuteAction(dispatchCtx, cmd)
 	}
 
 	if dispatchErr != nil {

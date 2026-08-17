@@ -91,9 +91,9 @@ func main() {
 	// Initialize the bounded Command Result Queue (REQ-013)
 	resultQueue := make(chan agentcore.ResultEnvelope, cfg.Queues.CommandResultCapacity)
 
-	// Subscribe to NATS command execution results asynchronously
-	if natsClient != nil {
-		err = natsClient.SubscribeResults(ctx, cfg.Serial, func(res agentcore.ResultEnvelope) {
+	// Helper to subscribe to NATS results
+	subscribeResults := func(nc *nats.NATSClient) {
+		err := nc.SubscribeResults(ctx, cfg.Serial, func(res agentcore.ResultEnvelope) {
 			select {
 			case resultQueue <- res:
 			default:
@@ -102,8 +102,39 @@ func main() {
 			}
 		})
 		if err != nil {
-			log.Fatalf("FATAL: Failed to subscribe to NATS results: %v", err)
+			log.Printf("ERROR: Failed to subscribe to NATS results: %v\n", err)
 		}
+	}
+
+	// Subscribe if client is ready; otherwise start retry loop in background (resilience against boot outages)
+	if natsClient != nil {
+		subscribeResults(natsClient)
+	} else {
+		go func() {
+			ticker := time.NewTicker(15 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					log.Println("[NATS] Retrying NATS client initialization...")
+					natsStateChange := func(state contracts.LinkState) {
+						log.Printf("[NATS STATE] Changed to: %v\n", state)
+						stateMgr.UpdateNATSLink(state)
+					}
+					nc, err := nats.NewNATSClient(cfg.Serial, cfg.NATS, natsStateChange)
+					if err != nil {
+						log.Printf("[NATS] Dynamic NATS initialization failed: %v\n", err)
+						continue
+					}
+					log.Println("[NATS] Dynamic NATS initialization succeeded!")
+					handler.SetNATSClient(nc)
+					subscribeResults(nc)
+					return
+				}
+			}
+		}()
 	}
 
 	// Launch background worker to process results from the Command Result Queue

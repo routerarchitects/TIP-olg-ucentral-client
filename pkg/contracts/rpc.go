@@ -115,7 +115,7 @@ func (r *JSONRPCRequest) Validate() error {
 
 type JSONRPCResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
-	Result  json.RawMessage `json:"result,omitempty"`
+	Result  json.RawMessage `json:"result"`
 	Error   *JSONRPCError   `json:"error,omitempty"`
 	ID      json.RawMessage `json:"id"`
 }

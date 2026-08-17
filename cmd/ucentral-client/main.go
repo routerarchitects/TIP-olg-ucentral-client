@@ -81,61 +81,84 @@ func main() {
 		serial:     cfg.Serial,
 	}
 
-	// Subscribe to NATS command execution results asynchronously (REQ-013)
+	// Start the RequestManager background routines (recovery / sweepers)
+	reqManager.Start(ctx)
+
+	// Initialize the bounded Command Result Queue (REQ-013)
+	resultQueue := make(chan agentcore.ResultEnvelope, cfg.Queues.CommandResultCapacity)
+
+	// Subscribe to NATS command execution results asynchronously
 	if natsClient != nil {
 		err = natsClient.SubscribeResults(ctx, cfg.Serial, func(res agentcore.ResultEnvelope) {
-			log.Printf("[NATS RESULT] Received result for rpc_id=%s, command=%s, result=%s\n", res.RPCID, res.CommandType, res.Result)
-
-			// Recover session ID and Cloud JSON-RPC ID from res.RPCID (sessionID:cloudRPCID format)
-			parts := strings.SplitN(res.RPCID, ":", 2)
-			if len(parts) != 2 {
-				log.Printf("[NATS RESULT] ERROR: Invalid rpc_id format: %s\n", res.RPCID)
-				return
-			}
-			sessionID := parts[0]
-			rawCloudID := json.RawMessage(parts[1])
-
-			isNotification := len(rawCloudID) == 0 || string(rawCloudID) == "null" || strings.Contains(res.RPCID, ":notification:")
-
-			if res.Result == string(contracts.ResultSuccess) {
-				// Mark complete in RequestManager
-				_ = reqManager.Complete(res.RPCID, res.Payload)
-				if !isNotification {
-					resp := contracts.JSONRPCResponse{
-						JSONRPC: contracts.JSONRPCVersion,
-						Result:  res.Payload,
-						ID:      rawCloudID,
-					}
-					respBytes, _ := json.Marshal(resp)
-					_ = scheduler.Push(queues.OutboundMessage{
-						SessionID: sessionID,
-						Priority:  queues.PriorityHighest,
-						Payload:   respBytes,
-					})
-				}
-			} else {
-				// Mark fail in RequestManager
-				errObj, _ := contracts.NewInternalJSONRPCError(contracts.ErrAppFailure, res.Message)
-				resp := contracts.JSONRPCResponse{
-					JSONRPC: contracts.JSONRPCVersion,
-					Error:   errObj,
-					ID:      rawCloudID,
-				}
-				respBytes, _ := json.Marshal(resp)
-				_ = reqManager.Fail(res.RPCID, respBytes)
-				if !isNotification {
-					_ = scheduler.Push(queues.OutboundMessage{
-						SessionID: sessionID,
-						Priority:  queues.PriorityHighest,
-						Payload:   respBytes,
-					})
-				}
+			select {
+			case resultQueue <- res:
+			default:
+				// Log overflow metric and drop result to protect NATS event loop
+				log.Printf("ERROR: command_result_overflow! Dropped result for rpc_id=%s, command=%s (queue capacity %d reached)\n", res.RPCID, res.CommandType, cfg.Queues.CommandResultCapacity)
 			}
 		})
 		if err != nil {
 			log.Fatalf("FATAL: Failed to subscribe to NATS results: %v", err)
 		}
 	}
+
+	// Launch background worker to process results from the Command Result Queue
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case res := <-resultQueue:
+				log.Printf("[NATS RESULT] Processing result for rpc_id=%s, command=%s, result=%s\n", res.RPCID, res.CommandType, res.Result)
+
+				// Recover session ID and Cloud JSON-RPC ID from res.RPCID (sessionID:cloudRPCID format)
+				parts := strings.SplitN(res.RPCID, ":", 2)
+				if len(parts) != 2 {
+					log.Printf("[NATS RESULT] ERROR: Invalid rpc_id format: %s\n", res.RPCID)
+					continue
+				}
+				sessionID := parts[0]
+				rawCloudID := json.RawMessage(parts[1])
+
+				isNotification := len(rawCloudID) == 0 || string(rawCloudID) == "null" || strings.Contains(res.RPCID, ":notification:")
+
+				if res.Result == string(contracts.ResultSuccess) {
+					// Mark complete in RequestManager
+					_ = reqManager.Complete(res.RPCID, res.Payload)
+					if !isNotification {
+						resp := contracts.JSONRPCResponse{
+							JSONRPC: contracts.JSONRPCVersion,
+							Result:  res.Payload,
+							ID:      rawCloudID,
+						}
+						respBytes, _ := json.Marshal(resp)
+						_ = scheduler.Push(queues.OutboundMessage{
+							SessionID: sessionID,
+							Priority:  queues.PriorityHighest,
+							Payload:   respBytes,
+						})
+					}
+				} else {
+					// Mark fail in RequestManager
+					errObj, _ := contracts.NewInternalJSONRPCError(contracts.ErrAppFailure, res.Message)
+					resp := contracts.JSONRPCResponse{
+						JSONRPC: contracts.JSONRPCVersion,
+						Error:   errObj,
+						ID:      rawCloudID,
+					}
+					respBytes, _ := json.Marshal(resp)
+					_ = reqManager.Fail(res.RPCID, respBytes)
+					if !isNotification {
+						_ = scheduler.Push(queues.OutboundMessage{
+							SessionID: sessionID,
+							Priority:  queues.PriorityHighest,
+							Payload:   respBytes,
+						})
+					}
+				}
+			}
+		}
+	}()
 
 	go func() {
 		if err := wsClient.ReconnectLoop(ctx, handler); err != nil {

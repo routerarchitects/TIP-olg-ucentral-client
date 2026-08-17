@@ -72,13 +72,17 @@ func main() {
 		log.Fatalf("FATAL: Initialization failed: %v", err)
 	}
 
+	// Initialize the NATS Dispatch Buffer (REQ-012)
+	dispatchBuffer := make(chan struct{}, cfg.Queues.NATSPublishCapacity)
+
 	// 5. Launch Reconnection & Reader loops
 	handler := &frameHandler{
-		reqMgr:     reqManager,
-		stateMgr:   stateMgr,
-		scheduler:  scheduler,
-		natsClient: natsClient,
-		serial:     cfg.Serial,
+		reqMgr:         reqManager,
+		stateMgr:       stateMgr,
+		scheduler:      scheduler,
+		natsClient:     natsClient,
+		serial:         cfg.Serial,
+		dispatchBuffer: dispatchBuffer,
 	}
 
 	// Start the RequestManager background routines (recovery / sweepers)

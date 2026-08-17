@@ -77,8 +77,9 @@ type frameHandler struct {
 	reqMgr     *reqmgr.DefaultRequestManager
 	stateMgr   *systemStateManager
 	scheduler  *queues.PriorityScheduler
-	natsClient *nats.NATSClient
-	serial     string
+	natsClient     *nats.NATSClient
+	serial         string
+	dispatchBuffer chan struct{}
 }
 
 func getCommandAction(method string) (contracts.CommandType, contracts.ActionType, bool) {
@@ -223,6 +224,17 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 	// Create transaction (REQ-007, REQ-008, REQ-009)
 	tx, err := h.reqMgr.CreateTransaction(frame.SessionID, rpcReq.ID, true, rpcReq.Method, timeout, isStateChanging)
 	if err != nil {
+		var cacheErr *reqmgr.CachedResponseError
+		if errors.As(err, &cacheErr) {
+			log.Printf("[FrameHandler] Duplicate request detected, replaying cached response for ID %s\n", string(rpcReq.ID))
+			_ = h.scheduler.Push(queues.OutboundMessage{
+				SessionID: frame.SessionID,
+				Priority:  queues.PriorityHighest,
+				Payload:   cacheErr.Payload,
+			})
+			return websocket.FrameAccepted, nil
+		}
+
 		log.Printf("[FrameHandler] Transaction admission failed: %v\n", err)
 		if errors.Is(err, reqmgr.ErrCapacityExceeded) || strings.Contains(err.Error(), "busy") || strings.Contains(err.Error(), "concurrency lock") {
 			errObj := &contracts.JSONRPCError{
@@ -244,6 +256,16 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 }
 
 func (h *frameHandler) executeTransaction(ctx context.Context, tx *reqmgr.Transaction, command contracts.CommandType, action contracts.ActionType, params json.RawMessage) {
+	// Enforce NATS dispatch buffer limits (REQ-012)
+	select {
+	case h.dispatchBuffer <- struct{}{}:
+		defer func() { <-h.dispatchBuffer }()
+	default:
+		log.Println("[FrameHandler] NATS dispatch buffer is full, failing fast")
+		h.failTransactionWithCode(tx, errors.New("NATS dispatch buffer is full"), contracts.ErrServiceUnavailable, "Local NATS service is unavailable")
+		return
+	}
+
 	// Transition to PreparingDispatch
 	if err := h.reqMgr.MarkPreparingDispatch(tx.RPCID); err != nil {
 		log.Printf("[FrameHandler] MarkPreparingDispatch failed: %v\n", err)
@@ -347,15 +369,35 @@ func (h *frameHandler) executeTransaction(ctx context.Context, tx *reqmgr.Transa
 }
 
 func (h *frameHandler) completeTransaction(tx *reqmgr.Transaction, payload []byte) {
-	if err := h.reqMgr.Complete(tx.RPCID, payload); err != nil {
+	resp := contracts.JSONRPCResponse{
+		JSONRPC: contracts.JSONRPCVersion,
+		Result:  payload,
+		ID:      tx.CloudRPCID,
+	}
+	respBytes, err := json.Marshal(resp)
+	if err != nil {
+		log.Printf("[FrameHandler] ERROR: Failed to marshal response: %v\n", err)
+		return
+	}
+
+	if err := h.reqMgr.Complete(tx.RPCID, respBytes); err != nil {
 		log.Printf("[FrameHandler] Complete transaction failed: %v\n", err)
 		return
 	}
-	h.pushResponse(tx.CloudSessionID, tx.CloudRPCID, payload, nil)
+
+	_ = h.scheduler.Push(queues.OutboundMessage{
+		SessionID: tx.CloudSessionID,
+		Priority:  queues.PriorityHighest,
+		Payload:   respBytes,
+	})
 }
 
 func (h *frameHandler) failTransaction(tx *reqmgr.Transaction, err error) {
-	errObj, _ := contracts.NewInternalJSONRPCError(contracts.ErrAppFailure, err.Error())
+	h.failTransactionWithCode(tx, err, contracts.ErrAppFailure, err.Error())
+}
+
+func (h *frameHandler) failTransactionWithCode(tx *reqmgr.Transaction, err error, appCode int, message string) {
+	errObj, _ := contracts.NewInternalJSONRPCError(appCode, message)
 	resp := contracts.JSONRPCResponse{
 		JSONRPC: contracts.JSONRPCVersion,
 		Error:   errObj,
@@ -363,5 +405,10 @@ func (h *frameHandler) failTransaction(tx *reqmgr.Transaction, err error) {
 	}
 	respBytes, _ := json.Marshal(resp)
 	_ = h.reqMgr.Fail(tx.RPCID, respBytes)
-	h.pushResponse(tx.CloudSessionID, tx.CloudRPCID, nil, errObj)
+	
+	_ = h.scheduler.Push(queues.OutboundMessage{
+		SessionID: tx.CloudSessionID,
+		Priority:  queues.PriorityHighest,
+		Payload:   respBytes,
+	})
 }

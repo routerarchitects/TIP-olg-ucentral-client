@@ -764,3 +764,10 @@ func (m *DefaultRequestManager) recoverToInFlight(tx *Transaction) error {
 	tx.State = TxInFlight
 	return nil
 }
+
+func (m *DefaultRequestManager) GetTransaction(rpcID string) (*Transaction, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	tx, exists := m.transactionsByRPCID[rpcID]
+	return tx, exists
+}

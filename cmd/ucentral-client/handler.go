@@ -144,10 +144,16 @@ func getMethodPayloadLimit(method string) int {
 }
 
 func (h *frameHandler) pushResponse(sessionID string, id json.RawMessage, result json.RawMessage, errObj *contracts.JSONRPCError) {
+	var finalResult json.RawMessage
+	if errObj == nil {
+		finalResult = contracts.EnsureStatusInResult(result)
+	} else {
+		finalResult = result
+	}
 	resp := contracts.JSONRPCResponse{
 		JSONRPC: contracts.JSONRPCVersion,
 		ID:      id,
-		Result:  result,
+		Result:  finalResult,
 		Error:   errObj,
 	}
 	respBytes, err := json.Marshal(resp)
@@ -155,6 +161,7 @@ func (h *frameHandler) pushResponse(sessionID string, id json.RawMessage, result
 		log.Printf("[FrameHandler] ERROR: Failed to marshal JSON-RPC response: %v\n", err)
 		return
 	}
+	log.Printf("[FrameHandler] PUSHING RESPONSE TO CLOUD: %s\n", string(respBytes))
 	_ = h.scheduler.Push(queues.OutboundMessage{
 		SessionID: sessionID,
 		Priority:  queues.PriorityHighest,
@@ -163,7 +170,7 @@ func (h *frameHandler) pushResponse(sessionID string, id json.RawMessage, result
 }
 
 func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundFrame) (websocket.FrameDisposition, error) {
-	log.Printf("[FrameHandler] Received frame: Session=%s, Type=%d, Size=%d\n", frame.SessionID, frame.Type, len(frame.Payload))
+	log.Printf("[FrameHandler] Received frame: Session=%s, Type=%d, Size=%d, Payload=%s\n", frame.SessionID, frame.Type, len(frame.Payload), string(frame.Payload))
 
 	// Parse JSON-RPC request structure
 	var rpcReq contracts.JSONRPCRequest
@@ -322,7 +329,7 @@ func (h *frameHandler) executeTransaction(ctx context.Context, tx *reqmgr.Transa
 		cmd := &agentcore.ConfigureCommand{
 			Version:   contracts.EnvelopeVersion,
 			RPCID:     tx.RPCID,
-			Target:    h.serial,
+			Target:    "vyos",
 			UUID:      uuidVal,
 			Payload:   params,
 			Timestamp: time.Now().UTC(),
@@ -334,7 +341,7 @@ func (h *frameHandler) executeTransaction(ctx context.Context, tx *reqmgr.Transa
 			query := &contracts.CloudCapabilitiesQuery{
 				Version:   contracts.EnvelopeVersion,
 				RPCID:     tx.RPCID,
-				Target:    h.serial,
+				Target:    "vyos",
 				Timestamp: time.Now().UTC(),
 			}
 			res, err := nClient.QueryCapabilities(dispatchCtx, query)
@@ -349,7 +356,7 @@ func (h *frameHandler) executeTransaction(ctx context.Context, tx *reqmgr.Transa
 			query := &contracts.CloudDeviceStatusQuery{
 				Version:   contracts.EnvelopeVersion,
 				RPCID:     tx.RPCID,
-				Target:    h.serial,
+				Target:    "vyos",
 				Timestamp: time.Now().UTC(),
 			}
 			res, err := nClient.QueryDeviceStatus(dispatchCtx, query)
@@ -367,7 +374,7 @@ func (h *frameHandler) executeTransaction(ctx context.Context, tx *reqmgr.Transa
 		cmd := &agentcore.ActionCommand{
 			Version:     contracts.EnvelopeVersion,
 			RPCID:       tx.RPCID,
-			Target:      h.serial,
+			Target:      "vyos",
 			CommandType: string(command),
 			Action:      string(action),
 			Payload:     params,

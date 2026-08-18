@@ -120,6 +120,26 @@ type JSONRPCResponse struct {
 	ID      json.RawMessage `json:"id"`
 }
 
+func (r JSONRPCResponse) MarshalJSON() ([]byte, error) {
+	type Alias JSONRPCResponse
+	aux := &struct {
+		Alias
+	}{
+		Alias: Alias(r),
+	}
+	if len(aux.Result) == 0 {
+		if aux.Error == nil {
+			aux.Result = json.RawMessage(`{"status":{"error":0,"text":"Success"}}`)
+		} else {
+			aux.Result = json.RawMessage("null")
+		}
+	}
+	if len(aux.ID) == 0 {
+		aux.ID = json.RawMessage("null")
+	}
+	return json.Marshal(aux)
+}
+
 // Validate ensures the JSONRPCResponse strictly follows JSON-RPC 2.0 invariants.
 func (r *JSONRPCResponse) Validate() error {
 	if r.JSONRPC != JSONRPCVersion {
@@ -481,9 +501,6 @@ type CloudTraceStatus struct {
 }
 
 func (r *CloudTraceStatus) Validate() error {
-	if r.Text == "" {
-		return errors.New("text is required")
-	}
 	return nil
 }
 
@@ -839,3 +856,93 @@ func (r *CloudConfigureRequest) EffectiveUUID() (int64, error) {
 	}
 	return innerReq.UUID, nil
 }
+
+// EnsureStatusInResult wraps or injects "status":{"error":0,"text":"Success"}
+// into the response payload if it is missing, to satisfy the uCentral gateway.
+func EnsureStatusInResult(payload []byte) json.RawMessage {
+	if len(payload) == 0 || string(payload) == "null" {
+		return json.RawMessage(`{"status":{"error":0,"text":"Success"}}`)
+	}
+
+	var obj map[string]interface{}
+	if err := json.Unmarshal(payload, &obj); err == nil {
+		if _, hasStatus := obj["status"]; hasStatus {
+			return payload
+		}
+		obj["status"] = map[string]interface{}{
+			"error": 0,
+			"text":  "Success",
+		}
+		if merged, err := json.Marshal(obj); err == nil {
+			return merged
+		}
+	}
+
+	return json.RawMessage(`{"status":{"error":0,"text":"Success"}}`)
+}
+
+// BuildDeviceResultObject constructs the standard uCentral device result payload,
+// combining the serial, configuration UUID, status object, and any extra payload.
+func BuildDeviceResultObject(serial, configUUID string, natsResult string, errCode string, msg string, payload []byte) json.RawMessage {
+	resMap := make(map[string]interface{})
+	if len(payload) > 0 && string(payload) != "null" {
+		_ = json.Unmarshal(payload, &resMap)
+	}
+
+	// 1. Ensure serial is present
+	if _, hasSerial := resMap["serial"]; !hasSerial {
+		resMap["serial"] = serial
+	}
+
+	// 2. Ensure uuid is present (try to parse configUUID as int first, uCentral uses int for config UUIDs)
+	if _, hasUUID := resMap["uuid"]; !hasUUID {
+		if configUUID != "" {
+			var uuidInt int64
+			if _, err := fmt.Sscan(configUUID, &uuidInt); err == nil {
+				resMap["uuid"] = uuidInt
+			} else {
+				resMap["uuid"] = configUUID
+			}
+		}
+	}
+
+	// 3. Ensure status object is present
+	var statusObj map[string]interface{}
+	if existingStatus, hasStatus := resMap["status"]; hasStatus {
+		if sMap, ok := existingStatus.(map[string]interface{}); ok {
+			statusObj = sMap
+		}
+	}
+	if statusObj == nil {
+		statusObj = make(map[string]interface{})
+		resMap["status"] = statusObj
+	}
+
+	// 4. Populate status fields if missing
+	if _, hasError := statusObj["error"]; !hasError {
+		var errCodeVal int
+		if natsResult == "success" {
+			errCodeVal = 0
+		} else {
+			if _, err := fmt.Sscan(errCode, &errCodeVal); err != nil {
+				errCodeVal = 1 // Default to 1 (ErrAppFailure)
+			}
+		}
+		statusObj["error"] = errCodeVal
+	}
+
+	if _, hasText := statusObj["text"]; !hasText {
+		if msg != "" {
+			statusObj["text"] = msg
+		} else if natsResult == "success" {
+			statusObj["text"] = "Success"
+		} else {
+			statusObj["text"] = "Failed"
+		}
+	}
+
+	marshaled, _ := json.Marshal(resMap)
+	return json.RawMessage(marshaled)
+}
+
+

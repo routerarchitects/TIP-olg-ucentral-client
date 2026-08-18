@@ -8,7 +8,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -93,7 +92,7 @@ func main() {
 
 	// Helper to subscribe to NATS results
 	subscribeResults := func(nc *nats.NATSClient) {
-		err := nc.SubscribeResults(ctx, cfg.Serial, func(res agentcore.ResultEnvelope) {
+		err := nc.SubscribeResults(ctx, "vyos", func(res agentcore.ResultEnvelope) {
 			select {
 			case resultQueue <- res:
 			default:
@@ -123,7 +122,7 @@ func main() {
 						log.Printf("[NATS STATE] Changed to: %v\n", state)
 						stateMgr.UpdateNATSLink(state)
 					}
-					nc, err := nats.NewNATSClient(cfg.Serial, cfg.NATS, natsStateChange)
+					nc, err := nats.NewNATSClient("vyos", cfg.NATS, natsStateChange)
 					if err != nil {
 						log.Printf("[NATS] Dynamic NATS initialization failed: %v\n", err)
 						continue
@@ -146,50 +145,42 @@ func main() {
 			case res := <-resultQueue:
 				log.Printf("[NATS RESULT] Processing result for rpc_id=%s, command=%s, result=%s\n", res.RPCID, res.CommandType, res.Result)
 
-				// Recover session ID and Cloud JSON-RPC ID from res.RPCID (sessionID:cloudRPCID format)
-				parts := strings.SplitN(res.RPCID, ":", 2)
-				if len(parts) != 2 {
-					log.Printf("[NATS RESULT] ERROR: Invalid rpc_id format: %s\n", res.RPCID)
+				// Retrieve the transaction from RequestManager using NATS RPCID (UUID)
+				tx, exists := reqManager.GetTransaction(res.RPCID)
+				if !exists {
+					log.Printf("[NATS RESULT] WARNING: Transaction not found for NATS RPCID: %s\n", res.RPCID)
 					continue
 				}
-				sessionID := parts[0]
-				rawCloudID := json.RawMessage(parts[1])
+				sessionID := tx.CloudSessionID
+				rawCloudID := tx.CloudRPCID
+				isNotification := !tx.RespondToCloud
 
-				isNotification := len(rawCloudID) == 0 || string(rawCloudID) == "null" || strings.Contains(res.RPCID, ":notification:")
+				// Build standard device result object containing "status", "serial", and "uuid"
+				formattedResult := contracts.BuildDeviceResultObject(
+					cfg.Serial,
+					res.UUID,
+					res.Result,
+					res.ErrorCode,
+					res.Message,
+					res.Payload,
+				)
 
-				if res.Result == string(contracts.ResultSuccess) {
-					// Mark complete in RequestManager
-					_ = reqManager.Complete(res.RPCID, res.Payload)
-					if !isNotification {
-						resp := contracts.JSONRPCResponse{
-							JSONRPC: contracts.JSONRPCVersion,
-							Result:  res.Payload,
-							ID:      rawCloudID,
-						}
-						respBytes, _ := json.Marshal(resp)
-						_ = scheduler.Push(queues.OutboundMessage{
-							SessionID: sessionID,
-							Priority:  queues.PriorityHighest,
-							Payload:   respBytes,
-						})
-					}
-				} else {
-					// Mark fail in RequestManager
-					errObj, _ := contracts.NewInternalJSONRPCError(contracts.ErrAppFailure, res.Message)
+				// Complete the transaction in RequestManager
+				_ = reqManager.Complete(res.RPCID, formattedResult)
+
+				if !isNotification {
 					resp := contracts.JSONRPCResponse{
 						JSONRPC: contracts.JSONRPCVersion,
-						Error:   errObj,
+						Result:  formattedResult,
 						ID:      rawCloudID,
 					}
 					respBytes, _ := json.Marshal(resp)
-					_ = reqManager.Fail(res.RPCID, respBytes)
-					if !isNotification {
-						_ = scheduler.Push(queues.OutboundMessage{
-							SessionID: sessionID,
-							Priority:  queues.PriorityHighest,
-							Payload:   respBytes,
-						})
-					}
+					log.Printf("[NATS RESULT] PUSHING RESPONSE TO CLOUD: %s\n", string(respBytes))
+					_ = scheduler.Push(queues.OutboundMessage{
+						SessionID: sessionID,
+						Priority:  queues.PriorityHighest,
+						Payload:   respBytes,
+					})
 				}
 			}
 		}
@@ -305,7 +296,7 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 	}
 
 	log.Println("Initializing NATS client...")
-	natsClient, err = nats.NewNATSClient(cfg.Serial, cfg.NATS, natsStateChange)
+	natsClient, err = nats.NewNATSClient("vyos", cfg.NATS, natsStateChange)
 	if err != nil {
 		log.Printf("WARNING: NATS failed to initialize (NATSDegraded mode): %v\n", err)
 	}

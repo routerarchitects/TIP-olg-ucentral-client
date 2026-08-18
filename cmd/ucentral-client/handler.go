@@ -135,9 +135,9 @@ func getMethodPayloadLimit(method string) int {
 	case "configure":
 		return 10 * 1024 * 1024 // 10MB
 	case "certupdate":
-		return 2 * 1024 * 1024  // 2MB
+		return 2 * 1024 * 1024 // 2MB
 	case "script":
-		return 1 * 1024 * 1024  // 1MB
+		return 1 * 1024 * 1024 // 1MB
 	default:
 		return 11 * 1024 * 1024 // 11MB (transport frame limit)
 	}
@@ -432,7 +432,7 @@ func (h *frameHandler) failTransactionWithCode(tx *reqmgr.Transaction, err error
 	}
 	respBytes, _ := json.Marshal(resp)
 	_ = h.reqMgr.Fail(tx.RPCID, respBytes)
-	
+
 	_ = h.scheduler.Push(queues.OutboundMessage{
 		SessionID: tx.CloudSessionID,
 		Priority:  queues.PriorityHighest,

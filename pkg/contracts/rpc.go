@@ -944,5 +944,3 @@ func BuildDeviceResultObject(serial, configUUID string, natsResult string, errCo
 	marshaled, _ := json.Marshal(resMap)
 	return json.RawMessage(marshaled)
 }
-
-

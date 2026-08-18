@@ -16,7 +16,7 @@ import (
 // mockStore implements reqmgr.OperationStore for testing
 type mockStore struct{}
 
-func (s *mockStore) Save(ctx context.Context, op *reqmgr.PersistentOperation) error   { return nil }
+func (s *mockStore) Save(ctx context.Context, op *reqmgr.PersistentOperation) error { return nil }
 func (s *mockStore) Get(ctx context.Context, opID string) (*reqmgr.PersistentOperation, error) {
 	return nil, nil
 }
@@ -29,7 +29,7 @@ func setupTestHandler(t *testing.T, dispatchBufCap int) (*frameHandler, *reqmgr.
 	cache := reqmgr.NewTransactionCache()
 	store := &mockStore{}
 	scheduler := queues.NewPriorityScheduler(100, 100)
-	
+
 	// Create RequestManager with 5 max concurrent requests
 	reqMgr, err := reqmgr.NewRequestManager(
 		2*time.Second,
@@ -220,7 +220,7 @@ func TestFrameHandler_DuplicateReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create transaction: %v", err)
 	}
-	
+
 	_ = reqMgr.MarkPreparingDispatch(tx.RPCID)
 	_ = reqMgr.MarkPendingPublish(tx.RPCID)
 	_ = reqMgr.MarkInFlight(tx.RPCID)

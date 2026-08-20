@@ -227,15 +227,25 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 		return websocket.FrameRejectedKeepConnection, nil
 	}
 
+	isNotification := len(rpcReq.ID) == 0 || string(rpcReq.ID) == "null"
+
 	// Get NATS command/action mappings
 	command, action, isStateChanging := getCommandAction(rpcReq.Method)
 	if command == "" {
 		log.Printf("[FrameHandler] Method not found: %s\n", rpcReq.Method)
-		errObj := &contracts.JSONRPCError{
-			Code:    contracts.ErrMethodNotFound,
-			Message: fmt.Sprintf("Method %s not found", rpcReq.Method),
+		if !isNotification {
+			errObj := &contracts.JSONRPCError{
+				Code:    contracts.ErrMethodNotFound,
+				Message: fmt.Sprintf("Method %s not found", rpcReq.Method),
+			}
+			h.pushResponse(frame.SessionID, rpcReq.ID, nil, errObj)
 		}
-		h.pushResponse(frame.SessionID, rpcReq.ID, nil, errObj)
+		return websocket.FrameRejectedKeepConnection, nil
+	}
+
+	// State-changing check for notifications (REQ-029)
+	if isNotification && isStateChanging {
+		log.Printf("[FrameHandler] Rejecting notification: method %s is state-changing (REQ-029)\n", rpcReq.Method)
 		return websocket.FrameRejectedKeepConnection, nil
 	}
 
@@ -243,25 +253,29 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 	limit := getMethodPayloadLimit(rpcReq.Method)
 	if len(frame.Payload) > limit {
 		log.Printf("[FrameHandler] Payload size %d exceeds limit of %d for method %s\n", len(frame.Payload), limit, rpcReq.Method)
-		errObj, _ := contracts.NewInternalJSONRPCError(contracts.ErrValidationFailed, fmt.Sprintf("Payload size exceeds method limit of %d", limit))
-		errObj.Code = contracts.ErrInvalidParams
-		h.pushResponse(frame.SessionID, rpcReq.ID, nil, errObj)
+		if !isNotification {
+			errObj, _ := contracts.NewInternalJSONRPCError(contracts.ErrValidationFailed, fmt.Sprintf("Payload size exceeds method limit of %d", limit))
+			errObj.Code = contracts.ErrInvalidParams
+			h.pushResponse(frame.SessionID, rpcReq.ID, nil, errObj)
+		}
 		return websocket.FrameRejectedKeepConnection, nil
 	}
 
 	// Validate NATS availability. Reject with Service Unavailable if NATS is down (REQ-002)
 	if h.stateMgr.GetSystemState() == contracts.StateNATSDegraded {
 		log.Println("[FrameHandler] Rejecting request: local NATS service is degraded (unavailable)")
-		errObj, _ := contracts.NewInternalJSONRPCError(contracts.ErrServiceUnavailable, "Local NATS service is unavailable")
-		h.pushResponse(frame.SessionID, rpcReq.ID, nil, errObj)
+		if !isNotification {
+			errObj, _ := contracts.NewInternalJSONRPCError(contracts.ErrServiceUnavailable, "Local NATS service is unavailable")
+			h.pushResponse(frame.SessionID, rpcReq.ID, nil, errObj)
+		}
 		return websocket.FrameRejectedKeepConnection, nil
 	}
 
 	// Determine transaction timeout duration.
 	timeout := h.getTransactionTimeout(rpcReq.Method, rpcReq.Params)
 
-	// Create transaction (REQ-007, REQ-008, REQ-009)
-	tx, err := h.reqMgr.CreateTransaction(frame.SessionID, rpcReq.ID, true, rpcReq.Method, timeout, isStateChanging)
+	// Create transaction (REQ-007, REQ-008, REQ-009, REQ-029)
+	tx, err := h.reqMgr.CreateTransaction(frame.SessionID, rpcReq.ID, !isNotification, rpcReq.Method, timeout, isStateChanging)
 	if err != nil {
 		var cacheErr *reqmgr.CachedResponseError
 		if errors.As(err, &cacheErr) {
@@ -275,15 +289,17 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 		}
 
 		log.Printf("[FrameHandler] Transaction admission failed: %v\n", err)
-		if errors.Is(err, reqmgr.ErrCapacityExceeded) || strings.Contains(err.Error(), "busy") || strings.Contains(err.Error(), "concurrency lock") {
-			errObj := &contracts.JSONRPCError{
-				Code:    contracts.ErrInternal,
-				Message: "Device is busy",
+		if !isNotification {
+			if errors.Is(err, reqmgr.ErrCapacityExceeded) || strings.Contains(err.Error(), "busy") || strings.Contains(err.Error(), "concurrency lock") {
+				errObj := &contracts.JSONRPCError{
+					Code:    contracts.ErrInternal,
+					Message: "Device is busy",
+				}
+				h.pushResponse(frame.SessionID, rpcReq.ID, nil, errObj)
+			} else {
+				errObj, _ := contracts.NewInternalJSONRPCError(contracts.ErrAppFailure, fmt.Sprintf("Transaction creation failed: %v", err))
+				h.pushResponse(frame.SessionID, rpcReq.ID, nil, errObj)
 			}
-			h.pushResponse(frame.SessionID, rpcReq.ID, nil, errObj)
-		} else {
-			errObj, _ := contracts.NewInternalJSONRPCError(contracts.ErrAppFailure, fmt.Sprintf("Transaction creation failed: %v", err))
-			h.pushResponse(frame.SessionID, rpcReq.ID, nil, errObj)
 		}
 		return websocket.FrameRejectedKeepConnection, nil
 	}
@@ -430,11 +446,13 @@ func (h *frameHandler) completeTransaction(tx *reqmgr.Transaction, payload []byt
 		return
 	}
 
-	_ = h.scheduler.Push(queues.OutboundMessage{
-		SessionID: tx.CloudSessionID,
-		Priority:  queues.PriorityHighest,
-		Payload:   respBytes,
-	})
+	if tx.RespondToCloud {
+		_ = h.scheduler.Push(queues.OutboundMessage{
+			SessionID: tx.CloudSessionID,
+			Priority:  queues.PriorityHighest,
+			Payload:   respBytes,
+		})
+	}
 }
 
 func (h *frameHandler) failTransaction(tx *reqmgr.Transaction, err error) {
@@ -451,9 +469,11 @@ func (h *frameHandler) failTransactionWithCode(tx *reqmgr.Transaction, err error
 	respBytes, _ := json.Marshal(resp)
 	_ = h.reqMgr.Fail(tx.RPCID, respBytes)
 
-	_ = h.scheduler.Push(queues.OutboundMessage{
-		SessionID: tx.CloudSessionID,
-		Priority:  queues.PriorityHighest,
-		Payload:   respBytes,
-	})
+	if tx.RespondToCloud {
+		_ = h.scheduler.Push(queues.OutboundMessage{
+			SessionID: tx.CloudSessionID,
+			Priority:  queues.PriorityHighest,
+			Payload:   respBytes,
+		})
+	}
 }

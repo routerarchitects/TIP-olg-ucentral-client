@@ -122,10 +122,11 @@ func TestFrameHandler_ParseAndValidationErrors(t *testing.T) {
 	}
 
 	// 3. Size limit exceeded (REQ-020)
+	complexScript := strings.Repeat("echo 'Applying system update...'; sleep 1; systemctl restart network; ping -c 3 8.8.8.8; # ", 30000)
 	frame = websocket.InboundFrame{
 		SessionID: "sess-1",
 		Type:      1,
-		Payload:   []byte(`{"jsonrpc":"2.0","method":"script","id":1,"params":{"script":"` + strings.Repeat("a", 2*1024*1024) + `"}}`),
+		Payload:   []byte(`{"jsonrpc":"2.0","method":"script","id":1,"params":{"script":"` + complexScript + `"}}`),
 	}
 	disp, err = h.HandleFrame(context.Background(), frame)
 	if err != nil {
@@ -282,4 +283,80 @@ func TestFrameHandler_DuplicateReplay(t *testing.T) {
 	if string(msg.Payload) != string(finalResponse) {
 		t.Errorf("expected replayed payload %s, got %s", string(finalResponse), string(msg.Payload))
 	}
+}
+
+func assertNoQueuedResponse(t *testing.T, scheduler *queues.PriorityScheduler, stage string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+
+	if msg, err := scheduler.Next(ctx); err == nil {
+		t.Errorf("unexpected queued response during %s: %s", stage, string(msg.Payload))
+	}
+}
+
+func TestFrameHandler_Notifications(t *testing.T) {
+	h, _, scheduler, _ := setupTestHandler(t, 10)
+
+	// 1. Valid read-only notification (ping has isStateChanging = false)
+	frame := websocket.InboundFrame{
+		SessionID: "sess-1",
+		Type:      1,
+		Payload:   []byte(`{"jsonrpc":"2.0","method":"ping"}`),
+	}
+	disp, err := h.HandleFrame(context.Background(), frame)
+	if err != nil {
+		t.Fatalf("unexpected handle error for read-only notification: %v", err)
+	}
+	if disp != websocket.FrameAccepted {
+		t.Errorf("expected FrameAccepted for read-only notification, got %v", disp)
+	}
+
+	// Verify no response is queued in the scheduler
+	assertNoQueuedResponse(t, scheduler, "read-only notification")
+
+	// 2. State-changing notification (reboot has isStateChanging = true)
+	frame = websocket.InboundFrame{
+		SessionID: "sess-1",
+		Type:      1,
+		Payload:   []byte(`{"jsonrpc":"2.0","method":"reboot"}`),
+	}
+	disp, err = h.HandleFrame(context.Background(), frame)
+	if err != nil {
+		t.Fatalf("unexpected handle error: %v", err)
+	}
+	if disp != websocket.FrameRejectedKeepConnection {
+		t.Errorf("expected FrameRejectedKeepConnection for state-changing notification, got %v", disp)
+	}
+	assertNoQueuedResponse(t, scheduler, "state-changing notification")
+
+	// 3. Method not found notification (method does not exist)
+	frame = websocket.InboundFrame{
+		SessionID: "sess-1",
+		Type:      1,
+		Payload:   []byte(`{"jsonrpc":"2.0","method":"nonexistent"}`),
+	}
+	disp, err = h.HandleFrame(context.Background(), frame)
+	if err != nil {
+		t.Fatalf("unexpected handle error: %v", err)
+	}
+	if disp != websocket.FrameRejectedKeepConnection {
+		t.Errorf("expected FrameRejectedKeepConnection for method not found notification, got %v", disp)
+	}
+	assertNoQueuedResponse(t, scheduler, "method not found notification")
+
+	// 4. Payload size limit exceeded notification
+	complexScript := strings.Repeat("echo 'Applying system update...'; sleep 1; systemctl restart network; ping -c 3 8.8.8.8; # ", 30000)
+	frame = websocket.InboundFrame{
+		SessionID: "sess-1",
+		Type:      1,
+		Payload:   []byte(`{"jsonrpc":"2.0","method":"script","params":{"script":"` + complexScript + `"}}`),
+	}
+	disp, err = h.HandleFrame(context.Background(), frame)
+	if err != nil {
+		t.Fatalf("unexpected handle error: %v", err)
+	}
+	if disp != websocket.FrameRejectedKeepConnection {
+		t.Errorf("expected FrameRejectedKeepConnection for size-exceeded notification, got %v", disp)
+	}
+	assertNoQueuedResponse(t, scheduler, "size-exceeded notification")
 }

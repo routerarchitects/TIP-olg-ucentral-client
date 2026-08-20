@@ -74,13 +74,16 @@ func (s *systemStateManager) GetSystemState() contracts.ConnectionState {
 
 // frameHandler routes inbound websocket frames to NATS via the RequestManager
 type frameHandler struct {
-	mu             sync.RWMutex
-	reqMgr         *reqmgr.DefaultRequestManager
-	stateMgr       *systemStateManager
-	scheduler      *queues.PriorityScheduler
-	natsClient     *nats.NATSClient
-	serial         string
-	dispatchBuffer chan struct{}
+	mu                    sync.RWMutex
+	reqMgr                *reqmgr.DefaultRequestManager
+	stateMgr              *systemStateManager
+	scheduler             *queues.PriorityScheduler
+	natsClient            *nats.NATSClient
+	serial                string
+	dispatchBuffer        chan struct{}
+	timeoutConfigure      time.Duration
+	timeoutActionDefault  time.Duration
+	timeoutActionExtended time.Duration
 }
 
 func (h *frameHandler) GetNATSClient() *nats.NATSClient {
@@ -140,6 +143,26 @@ func getMethodPayloadLimit(method string) int {
 		return 1 * 1024 * 1024 // 1MB
 	default:
 		return 11 * 1024 * 1024 // 11MB (transport frame limit)
+	}
+}
+
+func (h *frameHandler) getTransactionTimeout(method string, params json.RawMessage) time.Duration {
+	switch method {
+	case "configure":
+		return h.timeoutConfigure
+	case "upgrade", "certupdate", "script":
+		return h.timeoutActionExtended
+	case "trace":
+		// The VyOS agent returns only after packet capture has completed. Keep a
+		// full transport/dispatch buffer beyond the requested capture duration so
+		// a 30-second trace cannot expire at the same instant as its result.
+		var trace contracts.CloudTraceRequest
+		if err := json.Unmarshal(params, &trace); err == nil && trace.Duration != nil && *trace.Duration > 0 {
+			return time.Duration(*trace.Duration)*time.Second + 30*time.Second
+		}
+		return h.timeoutActionExtended
+	default:
+		return h.timeoutActionDefault
 	}
 }
 
@@ -234,13 +257,8 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 		return websocket.FrameRejectedKeepConnection, nil
 	}
 
-	// Determine transaction timeout duration
-	timeout := 30 * time.Second
-	if rpcReq.Method == "configure" {
-		timeout = 120 * time.Second
-	} else if rpcReq.Method == "upgrade" {
-		timeout = 60 * time.Second
-	}
+	// Determine transaction timeout duration.
+	timeout := h.getTransactionTimeout(rpcReq.Method, rpcReq.Params)
 
 	// Create transaction (REQ-007, REQ-008, REQ-009)
 	tx, err := h.reqMgr.CreateTransaction(frame.SessionID, rpcReq.ID, true, rpcReq.Method, timeout, isStateChanging)

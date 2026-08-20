@@ -53,14 +53,41 @@ func setupTestHandler(t *testing.T, dispatchBufCap int) (*frameHandler, *reqmgr.
 	dispatchBuffer := make(chan struct{}, dispatchBufCap)
 
 	h := &frameHandler{
-		reqMgr:         reqMgr,
-		stateMgr:       stateMgr,
-		scheduler:      scheduler,
-		serial:         "001122334455",
-		dispatchBuffer: dispatchBuffer,
+		reqMgr:                reqMgr,
+		stateMgr:              stateMgr,
+		scheduler:             scheduler,
+		serial:                "001122334455",
+		dispatchBuffer:        dispatchBuffer,
+		timeoutConfigure:      120 * time.Second,
+		timeoutActionDefault:  30 * time.Second,
+		timeoutActionExtended: 90 * time.Second,
 	}
 
 	return h, reqMgr, scheduler, stateMgr
+}
+
+func TestGetTransactionTimeoutAllowsTraceToFinish(t *testing.T) {
+	h, _, _, _ := setupTestHandler(t, 10)
+	tests := []struct {
+		name   string
+		method string
+		params json.RawMessage
+		want   time.Duration
+	}{
+		{name: "default action", method: "ping", want: 30 * time.Second},
+		{name: "configure", method: "configure", want: 120 * time.Second},
+		{name: "thirty second trace", method: "trace", params: json.RawMessage(`{"duration":30}`), want: 60 * time.Second},
+		{name: "maximum trace", method: "trace", params: json.RawMessage(`{"duration":300}`), want: 330 * time.Second},
+		{name: "packet limited trace uses capture default", method: "trace", params: json.RawMessage(`{"packets":100}`), want: 90 * time.Second},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := h.getTransactionTimeout(tt.method, tt.params); got != tt.want {
+				t.Fatalf("timeout got=%s want=%s", got, tt.want)
+			}
+		})
+	}
 }
 
 func TestFrameHandler_ParseAndValidationErrors(t *testing.T) {

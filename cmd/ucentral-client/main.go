@@ -66,7 +66,7 @@ func main() {
 	}
 
 	// 4. Initialize all core components
-	scheduler, reqManager, natsClient, wsClient, err := initializeComponents(ctx, cfg, cacheTTLConfig, stateMgr)
+	scheduler, reqManager, natsClient, wsClient, timeoutConfigure, timeoutActionDefault, timeoutActionExtended, err := initializeComponents(ctx, cfg, cacheTTLConfig, stateMgr)
 	if err != nil {
 		log.Fatalf("FATAL: Initialization failed: %v", err)
 	}
@@ -76,12 +76,15 @@ func main() {
 
 	// 5. Launch Reconnection & Reader loops
 	handler := &frameHandler{
-		reqMgr:         reqManager,
-		stateMgr:       stateMgr,
-		scheduler:      scheduler,
-		natsClient:     natsClient,
-		serial:         cfg.Serial,
-		dispatchBuffer: dispatchBuffer,
+		reqMgr:                reqManager,
+		stateMgr:              stateMgr,
+		scheduler:             scheduler,
+		natsClient:            natsClient,
+		serial:                cfg.Serial,
+		dispatchBuffer:        dispatchBuffer,
+		timeoutConfigure:      timeoutConfigure,
+		timeoutActionDefault:  timeoutActionDefault,
+		timeoutActionExtended: timeoutActionExtended,
 	}
 
 	// Start the RequestManager background routines (recovery / sweepers)
@@ -218,24 +221,27 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 	reqManager *reqmgr.DefaultRequestManager,
 	natsClient *nats.NATSClient,
 	wsClient *websocket.WSClient,
+	timeoutConfigure time.Duration,
+	timeoutActionDefault time.Duration,
+	timeoutActionExtended time.Duration,
 	err error,
 ) {
 	// Parse timeout environment variables
 	dispatchTimeout, err := parseTimeoutEnv("OLG_TIMEOUT_DISPATCH", 5*time.Second)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, 0, 0, 0, err
 	}
-	_, err = parseTimeoutEnv("OLG_TIMEOUT_CONFIGURE", 30*time.Second)
+	timeoutConfigure, err = parseTimeoutEnv("OLG_TIMEOUT_CONFIGURE", 30*time.Second)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, 0, 0, 0, err
 	}
-	_, err = parseTimeoutEnv("OLG_TIMEOUT_ACTION_DEFAULT", 60*time.Second)
+	timeoutActionDefault, err = parseTimeoutEnv("OLG_TIMEOUT_ACTION_DEFAULT", 60*time.Second)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, 0, 0, 0, err
 	}
-	_, err = parseTimeoutEnv("OLG_TIMEOUT_ACTION_EXTENDED", 120*time.Second)
+	timeoutActionExtended, err = parseTimeoutEnv("OLG_TIMEOUT_ACTION_EXTENDED", 120*time.Second)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, 0, 0, 0, err
 	}
 
 	// Initialize capability cache
@@ -251,7 +257,7 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 	log.Println("Initializing Operation Store...")
 	store, err := reqmgr.NewDiskOperationStore("./operations")
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("failed to initialize operation store: %w", err)
+		return nil, nil, nil, nil, 0, 0, 0, fmt.Errorf("failed to initialize operation store: %w", err)
 	}
 
 	txCache := reqmgr.NewTransactionCache()
@@ -286,7 +292,7 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 		1000,
 	)
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("failed to initialize RequestManager: %w", err)
+		return nil, nil, nil, nil, 0, 0, 0, fmt.Errorf("failed to initialize RequestManager: %w", err)
 	}
 
 	// Instantiate NATS and WS clients
@@ -313,8 +319,8 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 		if natsClient != nil {
 			_ = natsClient.Close(context.Background())
 		}
-		return nil, nil, nil, nil, fmt.Errorf("failed to initialize WSClient: %w", err)
+		return nil, nil, nil, nil, 0, 0, 0, fmt.Errorf("failed to initialize WSClient: %w", err)
 	}
 
-	return scheduler, reqManager, natsClient, wsClient, nil
+	return scheduler, reqManager, natsClient, wsClient, timeoutConfigure, timeoutActionDefault, timeoutActionExtended, nil
 }

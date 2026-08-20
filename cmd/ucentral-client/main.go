@@ -168,16 +168,20 @@ func main() {
 					res.Payload,
 				)
 
-				// Complete the transaction in RequestManager
-				_ = reqManager.Complete(res.RPCID, formattedResult)
-
+				var respBytes []byte
 				if !isNotification {
 					resp := contracts.JSONRPCResponse{
 						JSONRPC: contracts.JSONRPCVersion,
 						Result:  formattedResult,
 						ID:      rawCloudID,
 					}
-					respBytes, _ := json.Marshal(resp)
+					respBytes, _ = json.Marshal(resp)
+				}
+
+				// Complete the transaction in RequestManager with the full response payload (REQ-009)
+				_ = reqManager.Complete(res.RPCID, respBytes)
+
+				if !isNotification {
 					log.Printf("[NATS RESULT] PUSHING RESPONSE TO CLOUD: %s\n", string(respBytes))
 					_ = scheduler.Push(queues.OutboundMessage{
 						SessionID: sessionID,

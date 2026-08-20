@@ -764,3 +764,40 @@ func TestJSONRPCResponse_Validate(t *testing.T) {
 		})
 	}
 }
+
+func TestJSONRPCResponse_ErrorMarshalUnmarshalValidate(t *testing.T) {
+	errResp := JSONRPCResponse{
+		JSONRPC: "2.0",
+		Error: &JSONRPCError{
+			Code:    ErrParse,
+			Message: "Parse error",
+		},
+		ID: []byte(`1`),
+	}
+
+	// 1. Marshal to JSON
+	data, err := json.Marshal(errResp)
+	if err != nil {
+		t.Fatalf("failed to marshal error response: %v", err)
+	}
+
+	// Verify that "result" is NOT present in the marshaled JSON
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("failed to unmarshal into map: %v", err)
+	}
+	if _, hasResult := raw["result"]; hasResult {
+		t.Errorf("expected 'result' field to be omitted from serialized error response, but it was found: %s", string(data))
+	}
+
+	// 2. Unmarshal back into JSONRPCResponse
+	var roundtripResp JSONRPCResponse
+	if err := json.Unmarshal(data, &roundtripResp); err != nil {
+		t.Fatalf("failed to unmarshal JSON back to JSONRPCResponse: %v", err)
+	}
+
+	// 3. Validate
+	if err := roundtripResp.Validate(); err != nil {
+		t.Errorf("expected roundtripped error response to be valid, got validation error: %v", err)
+	}
+}

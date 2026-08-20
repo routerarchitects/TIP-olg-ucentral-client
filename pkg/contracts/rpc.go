@@ -115,7 +115,7 @@ func (r *JSONRPCRequest) Validate() error {
 
 type JSONRPCResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
-	Result  json.RawMessage `json:"result"`
+	Result  json.RawMessage `json:"result,omitempty"`
 	Error   *JSONRPCError   `json:"error,omitempty"`
 	ID      json.RawMessage `json:"id"`
 }
@@ -127,12 +127,10 @@ func (r JSONRPCResponse) MarshalJSON() ([]byte, error) {
 	}{
 		Alias: Alias(r),
 	}
-	if len(aux.Result) == 0 {
-		if aux.Error == nil {
-			aux.Result = json.RawMessage(`{"status":{"error":0,"text":"Success"}}`)
-		} else {
-			aux.Result = json.RawMessage("null")
-		}
+	if aux.Error != nil {
+		aux.Result = nil
+	} else if len(aux.Result) == 0 {
+		aux.Result = json.RawMessage(`{"status":{"error":0,"text":"Success"}}`)
 	}
 	if len(aux.ID) == 0 {
 		aux.ID = json.RawMessage("null")

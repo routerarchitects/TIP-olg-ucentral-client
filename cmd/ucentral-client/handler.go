@@ -198,13 +198,14 @@ func (h *frameHandler) pushResponse(sessionID string, id json.RawMessage, result
 }
 
 func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundFrame) (websocket.FrameDisposition, error) {
-	log.Printf("[FrameHandler] Received frame: Session=%s, Type=%d, Size=%d, Payload=%s\n", frame.SessionID, frame.Type, len(frame.Payload), string(frame.Payload))
-
-	// 1. Enforce absolute transport/boundary size limit (REQ-020)
+	// 1. Enforce absolute transport/boundary size limit before any parsing/logging (REQ-020)
 	if len(frame.Payload) > h.payloadLimitAbsolute {
-		log.Printf("[FrameHandler] Payload size %d exceeds absolute limit of %d\n", len(frame.Payload), h.payloadLimitAbsolute)
+		log.Printf("[FrameHandler] Received frame exceeds absolute limit (Session=%s, Size=%d, Limit=%d)\n", frame.SessionID, len(frame.Payload), h.payloadLimitAbsolute)
 		return websocket.FrameRejectedKeepConnection, nil
 	}
+
+	// Log frame metadata only. Avoid logging raw payload to prevent leaking configuration, certificates, or script contents.
+	log.Printf("[FrameHandler] Received frame: Session=%s, Type=%d, Size=%d\n", frame.SessionID, frame.Type, len(frame.Payload))
 
 	// 2. Extract method and ID using a lightweight, bounded parse to enforce specific limits before full unmarshalling (REQ-020)
 	var metaExtractor struct {
@@ -212,6 +213,8 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 		ID     json.RawMessage `json:"id"`
 	}
 	_ = json.Unmarshal(frame.Payload, &metaExtractor)
+
+	log.Printf("[FrameHandler] Parsed request metadata: Method=%s, ID=%s\n", metaExtractor.Method, string(metaExtractor.ID))
 
 	isNotificationMeta := len(metaExtractor.ID) == 0 || string(metaExtractor.ID) == "null"
 	limit := h.getMethodPayloadLimit(metaExtractor.Method)

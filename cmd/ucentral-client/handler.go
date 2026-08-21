@@ -406,39 +406,7 @@ func (h *frameHandler) executeTransaction(ctx context.Context, tx *reqmgr.Transa
 		}
 		dispatchErr = nClient.SubmitConfigure(dispatchCtx, cmd)
 
-	case contracts.CommandQuery:
-		if action == contracts.ActionCapabilitiesGet {
-			query := &contracts.CloudCapabilitiesQuery{
-				Version:   contracts.EnvelopeVersion,
-				RPCID:     tx.RPCID,
-				Target:    h.target,
-				Timestamp: time.Now().UTC(),
-			}
-			res, err := nClient.QueryCapabilities(dispatchCtx, query)
-			if err != nil {
-				h.failTransaction(tx, err)
-				return
-			}
-			_ = h.reqMgr.MarkInFlight(tx.RPCID)
-			h.completeTransaction(tx, res)
-			return
-		} else if action == contracts.ActionStatusGet {
-			query := &contracts.CloudDeviceStatusQuery{
-				Version:   contracts.EnvelopeVersion,
-				RPCID:     tx.RPCID,
-				Target:    h.target,
-				Timestamp: time.Now().UTC(),
-			}
-			res, err := nClient.QueryDeviceStatus(dispatchCtx, query)
-			if err != nil {
-				h.failTransaction(tx, err)
-				return
-			}
-			_ = h.reqMgr.MarkInFlight(tx.RPCID)
-			resBytes, _ := json.Marshal(res.Payload)
-			h.completeTransaction(tx, resBytes)
-			return
-		}
+
 
 	default: // CommandAction, CommandUpgrade, CommandScript, CommandReboot
 		cmd := &agentcore.ActionCommand{

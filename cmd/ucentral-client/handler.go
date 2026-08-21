@@ -198,8 +198,7 @@ func (h *frameHandler) pushResponse(sessionID string, id json.RawMessage, result
 }
 
 func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundFrame) (websocket.FrameDisposition, error) {
-	// Log frame metadata only. Avoid logging raw payload to prevent leaking configuration, certificates, or script contents.
-	log.Printf("[FrameHandler] Received frame: Session=%s, Type=%d, Size=%d\n", frame.SessionID, frame.Type, len(frame.Payload))
+	log.Printf("[FrameHandler] Received frame: Session=%s, Type=%d, Size=%d, Payload=%s\n", frame.SessionID, frame.Type, len(frame.Payload), string(frame.Payload))
 
 	// 1. Enforce absolute transport/boundary size limit (REQ-020)
 	if len(frame.Payload) > h.payloadLimitAbsolute {

@@ -213,8 +213,8 @@ func main() {
 	// Perform graceful teardowns
 	cancel() // Notify loops to stop
 	wsClient.Close()
-	if natsClient != nil {
-		_ = natsClient.Close(teardownCtx)
+	if activeNats := handler.GetNATSClient(); activeNats != nil {
+		_ = activeNats.Close(teardownCtx)
 	}
 
 	log.Println("Graceful teardown complete. Exiting.")

@@ -410,8 +410,6 @@ func (h *frameHandler) executeTransaction(ctx context.Context, tx *reqmgr.Transa
 		}
 		dispatchErr = nClient.SubmitConfigure(dispatchCtx, cmd)
 
-
-
 	default: // CommandAction, CommandUpgrade, CommandScript, CommandReboot
 		cmd := &agentcore.ActionCommand{
 			Version:     contracts.EnvelopeVersion,

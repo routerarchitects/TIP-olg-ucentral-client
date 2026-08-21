@@ -90,6 +90,7 @@ func main() {
 		payloadLimitScript:     components.PayloadLimitScript,
 		payloadLimitCertUpdate: components.PayloadLimitCertUpdate,
 		payloadLimitDefault:    components.PayloadLimitDefault,
+		target:                 cfg.NATS.Target,
 	}
 
 	// Start the RequestManager background routines (recovery / sweepers)
@@ -100,7 +101,7 @@ func main() {
 
 	// Helper to subscribe to NATS results
 	subscribeResults := func(nc *nats.NATSClient) error {
-		err := nc.SubscribeResults(ctx, "vyos", func(res agentcore.ResultEnvelope) {
+		err := nc.SubscribeResults(ctx, cfg.NATS.Target, func(res agentcore.ResultEnvelope) {
 			select {
 			case resultQueue <- res:
 			default:
@@ -167,7 +168,7 @@ func main() {
 						log.Printf("[NATS STATE] Changed to: %v\n", state)
 						stateMgr.UpdateNATSLink(state)
 					}
-					nc, err := nats.NewNATSClient("vyos", cfg.NATS, natsStateChange)
+					nc, err := nats.NewNATSClient(cfg.NATS.Target, cfg.NATS, natsStateChange)
 					if err != nil {
 						log.Printf("[NATS] Dynamic NATS initialization failed: %v\n", err)
 						continue
@@ -379,7 +380,7 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 	}
 
 	log.Println("Initializing NATS client...")
-	natsClient, err := nats.NewNATSClient("vyos", cfg.NATS, natsStateChange)
+	natsClient, err := nats.NewNATSClient(cfg.NATS.Target, cfg.NATS, natsStateChange)
 	if err != nil {
 		log.Printf("WARNING: NATS failed to initialize (NATSDegraded mode): %v\n", err)
 	}

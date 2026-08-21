@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nats-io/jwt/v2"
+	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/contracts"
 )
 
 const (
@@ -66,6 +67,7 @@ type NATSConfig struct {
 	ClientCertFile        string   `json:"client_cert_file,omitempty"`
 	ClientKeyFile         string   `json:"client_key_file,omitempty"`
 	AllowInsecureLocalDev bool     `json:"allow_insecure_local_dev,omitempty"`
+	Target                string   `json:"target,omitempty"`
 }
 
 type QueueConfig struct {
@@ -157,6 +159,13 @@ func (c *CloudConfig) Validate() error {
 }
 
 func (n *NATSConfig) Validate() error {
+	if n.Target == "" {
+		n.Target = "vyos"
+	}
+	if err := contracts.ValidateNATSTarget(n.Target); err != nil {
+		return fmt.Errorf("nats target is invalid: %w", err)
+	}
+
 	if len(n.Servers) == 0 {
 		return fmt.Errorf("nats servers are required")
 	}

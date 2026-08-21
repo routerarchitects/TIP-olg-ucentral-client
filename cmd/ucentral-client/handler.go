@@ -89,6 +89,7 @@ type frameHandler struct {
 	payloadLimitScript     int
 	payloadLimitCertUpdate int
 	payloadLimitDefault    int
+	target                 string
 }
 
 func (h *frameHandler) GetNATSClient() *nats.NATSClient {
@@ -277,9 +278,22 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 		return websocket.FrameRejectedKeepConnection, nil
 	}
 
-	// State-changing check for notifications (REQ-029)
-	if isNotification && isStateChanging {
-		log.Printf("[FrameHandler] Rejecting notification: method %s is state-changing (REQ-029)\n", rpcReq.Method)
+	// Validate method-specific parameter payload (Validate incoming API inputs)
+	if err := contracts.ValidateCommandPayload(command, action, rpcReq.Params); err != nil {
+		log.Printf("[FrameHandler] Invalid parameters for method %s: %v\n", rpcReq.Method, err)
+		if !isNotification {
+			errObj := &contracts.JSONRPCError{
+				Code:    contracts.ErrInvalidParams,
+				Message: fmt.Sprintf("Invalid parameters: %v", err),
+			}
+			h.pushResponse(frame.SessionID, rpcReq.ID, nil, errObj)
+		}
+		return websocket.FrameRejectedKeepConnection, nil
+	}
+
+	// State-changing or security-sensitive check for notifications (REQ-029)
+	if isNotification && (isStateChanging || rpcReq.Method == "remote_access") {
+		log.Printf("[FrameHandler] Rejecting notification: method %s is state-changing or security-sensitive (REQ-029)\n", rpcReq.Method)
 		return websocket.FrameRejectedKeepConnection, nil
 	}
 
@@ -385,7 +399,7 @@ func (h *frameHandler) executeTransaction(ctx context.Context, tx *reqmgr.Transa
 		cmd := &agentcore.ConfigureCommand{
 			Version:   contracts.EnvelopeVersion,
 			RPCID:     tx.RPCID,
-			Target:    "vyos",
+			Target:    h.target,
 			UUID:      uuidVal,
 			Payload:   params,
 			Timestamp: time.Now().UTC(),
@@ -397,7 +411,7 @@ func (h *frameHandler) executeTransaction(ctx context.Context, tx *reqmgr.Transa
 			query := &contracts.CloudCapabilitiesQuery{
 				Version:   contracts.EnvelopeVersion,
 				RPCID:     tx.RPCID,
-				Target:    "vyos",
+				Target:    h.target,
 				Timestamp: time.Now().UTC(),
 			}
 			res, err := nClient.QueryCapabilities(dispatchCtx, query)
@@ -412,7 +426,7 @@ func (h *frameHandler) executeTransaction(ctx context.Context, tx *reqmgr.Transa
 			query := &contracts.CloudDeviceStatusQuery{
 				Version:   contracts.EnvelopeVersion,
 				RPCID:     tx.RPCID,
-				Target:    "vyos",
+				Target:    h.target,
 				Timestamp: time.Now().UTC(),
 			}
 			res, err := nClient.QueryDeviceStatus(dispatchCtx, query)
@@ -430,7 +444,7 @@ func (h *frameHandler) executeTransaction(ctx context.Context, tx *reqmgr.Transa
 		cmd := &agentcore.ActionCommand{
 			Version:     contracts.EnvelopeVersion,
 			RPCID:       tx.RPCID,
-			Target:      "vyos",
+			Target:      h.target,
 			CommandType: string(command),
 			Action:      string(action),
 			Payload:     params,

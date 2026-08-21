@@ -769,5 +769,8 @@ func (m *DefaultRequestManager) GetTransaction(rpcID string) (*Transaction, bool
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	tx, exists := m.transactionsByRPCID[rpcID]
-	return tx, exists
+	if !exists {
+		return nil, false
+	}
+	return tx.Clone(), true
 }

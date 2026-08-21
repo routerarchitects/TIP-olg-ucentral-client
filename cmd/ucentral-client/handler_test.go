@@ -66,6 +66,7 @@ func setupTestHandler(t *testing.T, dispatchBufCap int) (*frameHandler, *reqmgr.
 		payloadLimitCertUpdate: 2 * 1024 * 1024,
 		payloadLimitScript:     1 * 1024 * 1024,
 		payloadLimitDefault:    11 * 1024 * 1024,
+		target:                 "vyos",
 	}
 
 	return h, reqMgr, scheduler, stateMgr
@@ -193,7 +194,7 @@ func TestFrameHandler_NATSDegradedRejection(t *testing.T) {
 	frame := websocket.InboundFrame{
 		SessionID: "sess-1",
 		Type:      1,
-		Payload:   []byte(`{"jsonrpc":"2.0","method":"reboot","id":42}`),
+		Payload:   []byte(`{"jsonrpc":"2.0","method":"reboot","id":42,"params":{"serial":"001122334455"}}`),
 	}
 	disp, err := h.HandleFrame(context.Background(), frame)
 	if err != nil {
@@ -231,7 +232,7 @@ func TestFrameHandler_DispatchBufferOverflow(t *testing.T) {
 	frame := websocket.InboundFrame{
 		SessionID: "sess-1",
 		Type:      1,
-		Payload:   []byte(`{"jsonrpc":"2.0","method":"reboot","id":100}`),
+		Payload:   []byte(`{"jsonrpc":"2.0","method":"reboot","id":100,"params":{"serial":"001122334455"}}`),
 	}
 
 	disp, err := h.HandleFrame(context.Background(), frame)
@@ -285,7 +286,7 @@ func TestFrameHandler_DuplicateReplay(t *testing.T) {
 	frame := websocket.InboundFrame{
 		SessionID: "sess-1",
 		Type:      1,
-		Payload:   []byte(`{"jsonrpc":"2.0","method":"reboot","id":"tx-dup"}`),
+		Payload:   []byte(`{"jsonrpc":"2.0","method":"reboot","id":"tx-dup","params":{"serial":"001122334455"}}`),
 	}
 
 	disp, err := h.HandleFrame(context.Background(), frame)
@@ -322,7 +323,7 @@ func TestFrameHandler_Notifications(t *testing.T) {
 	frame := websocket.InboundFrame{
 		SessionID: "sess-1",
 		Type:      1,
-		Payload:   []byte(`{"jsonrpc":"2.0","method":"ping"}`),
+		Payload:   []byte(`{"jsonrpc":"2.0","method":"ping","params":{"serial":"001122334455"}}`),
 	}
 	disp, err := h.HandleFrame(context.Background(), frame)
 	if err != nil {
@@ -339,7 +340,7 @@ func TestFrameHandler_Notifications(t *testing.T) {
 	frame = websocket.InboundFrame{
 		SessionID: "sess-1",
 		Type:      1,
-		Payload:   []byte(`{"jsonrpc":"2.0","method":"reboot"}`),
+		Payload:   []byte(`{"jsonrpc":"2.0","method":"reboot","params":{"serial":"001122334455"}}`),
 	}
 	disp, err = h.HandleFrame(context.Background(), frame)
 	if err != nil {
@@ -380,4 +381,19 @@ func TestFrameHandler_Notifications(t *testing.T) {
 		t.Errorf("expected FrameRejectedKeepConnection for size-exceeded notification, got %v", disp)
 	}
 	assertNoQueuedResponse(t, scheduler, "size-exceeded notification")
+
+	// 5. Remote access notification (remote_access is security-sensitive, must be rejected)
+	frame = websocket.InboundFrame{
+		SessionID: "sess-1",
+		Type:      1,
+		Payload:   []byte(`{"jsonrpc":"2.0","method":"remote_access","params":{"serial":"001122334455","method":"rtty","id":"123","server":"srv","port":123,"token":"tkn"}}`),
+	}
+	disp, err = h.HandleFrame(context.Background(), frame)
+	if err != nil {
+		t.Fatalf("unexpected handle error for remote_access notification: %v", err)
+	}
+	if disp != websocket.FrameRejectedKeepConnection {
+		t.Errorf("expected FrameRejectedKeepConnection for remote_access notification, got %v", disp)
+	}
+	assertNoQueuedResponse(t, scheduler, "remote_access notification")
 }

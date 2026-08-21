@@ -97,6 +97,23 @@ type Transaction struct {
 	Cancel            context.CancelFunc
 }
 
+// Clone returns a shallow copy of the transaction with deep copies of slices/raw messages.
+func (tx *Transaction) Clone() *Transaction {
+	if tx == nil {
+		return nil
+	}
+	cloned := *tx
+	if tx.CloudRPCID != nil {
+		cloned.CloudRPCID = make(json.RawMessage, len(tx.CloudRPCID))
+		copy(cloned.CloudRPCID, tx.CloudRPCID)
+	}
+	if tx.Payload != nil {
+		cloned.Payload = make([]byte, len(tx.Payload))
+		copy(cloned.Payload, tx.Payload)
+	}
+	return &cloned
+}
+
 // DispatchItem represents a payload waiting in the internal dispatch buffer.
 // The consumer MUST verify that time.Now() is before the transaction's DispatchDeadline,
 // the transaction still exists, and the transaction is still in TxPendingPublish state

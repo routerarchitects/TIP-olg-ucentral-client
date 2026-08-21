@@ -192,11 +192,13 @@ func (h *frameHandler) pushResponse(sessionID string, id json.RawMessage, result
 		errCode = errObj.Code
 	}
 	log.Printf("[FrameHandler] Pushing response to cloud (Session=%s, ID=%s, ErrorCode=%d, Size=%d)\n", sessionID, contracts.FormatLogID(id), errCode, len(respBytes))
-	_ = h.scheduler.Push(queues.OutboundMessage{
+	if err := h.scheduler.Push(queues.OutboundMessage{
 		SessionID: sessionID,
 		Priority:  queues.PriorityHighest,
 		Payload:   respBytes,
-	})
+	}); err != nil {
+		log.Printf("[FrameHandler] WARNING: Failed to push response to cloud (Session=%s, ID=%s, Error=%v)\n", sessionID, contracts.FormatLogID(id), err)
+	}
 }
 
 func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundFrame) (websocket.FrameDisposition, error) {
@@ -352,12 +354,13 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 }
 
 func (h *frameHandler) executeTransaction(ctx context.Context, tx *reqmgr.Transaction, command contracts.CommandType, action contracts.ActionType, params json.RawMessage) {
-	// Enforce NATS dispatch buffer limits (REQ-012)
+	// Enforce NATS dispatch buffer limits asynchronously after admission (REQ-012).
+	// Note: This temporarily consumes request capacity before failing if the buffer is full.
 	select {
 	case h.dispatchBuffer <- struct{}{}:
 		defer func() { <-h.dispatchBuffer }()
 	default:
-		log.Println("[FrameHandler] NATS dispatch buffer is full, failing fast")
+		log.Println("[FrameHandler] NATS dispatch buffer is full, failing transaction asynchronously")
 		h.failTransactionWithCode(tx, errors.New("NATS dispatch buffer is full"), contracts.ErrServiceUnavailable, "Local NATS service is unavailable")
 		return
 	}

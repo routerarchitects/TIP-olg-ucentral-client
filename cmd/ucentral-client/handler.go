@@ -129,10 +129,6 @@ func getCommandAction(method string) (contracts.CommandType, contracts.ActionTyp
 		return contracts.CommandAction, contracts.ActionTelemetry, false
 	case "remote_access":
 		return contracts.CommandAction, contracts.ActionRTTY, false
-	case "capabilities.get":
-		return contracts.CommandQuery, contracts.ActionCapabilitiesGet, false
-	case "status.get":
-		return contracts.CommandQuery, contracts.ActionStatusGet, false
 	default:
 		return "", "", false
 	}

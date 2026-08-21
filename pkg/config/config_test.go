@@ -124,8 +124,6 @@ func TestTTLForMethod(t *testing.T) {
 		"ping",
 		"trace",
 		"telemetry",
-		"capabilities.get",
-		"status.get",
 		"unknown_method",
 	} {
 		if ttl := cfg.TTLForMethod(method); ttl != cfg.Default {

@@ -363,15 +363,15 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 	reqmgrTTLConfig := reqmgr.CacheTTLConfig{
 		DefaultTTL: time.Duration(cacheTTLConfig.Default) * time.Second,
 		MethodTTLs: map[string]time.Duration{
-			"configure":     time.Duration(cacheTTLConfig.Configure) * time.Second,
-			"leds":          time.Duration(cacheTTLConfig.LEDs) * time.Second,
-			"reboot":        time.Duration(cacheTTLConfig.Reboot) * time.Second,
-			"rtty":          time.Duration(cacheTTLConfig.RemoteAccess) * time.Second,
-			"factory":       time.Duration(cacheTTLConfig.Factory) * time.Second,
-			"upgrade":       time.Duration(cacheTTLConfig.Upgrade) * time.Second,
-			"certupdate":    time.Duration(cacheTTLConfig.Certupdate) * time.Second,
-			"reenroll":      time.Duration(cacheTTLConfig.Reenroll) * time.Second,
-			"script":        time.Duration(cacheTTLConfig.Script) * time.Second,
+			"configure":  time.Duration(cacheTTLConfig.Configure) * time.Second,
+			"leds":       time.Duration(cacheTTLConfig.LEDs) * time.Second,
+			"reboot":     time.Duration(cacheTTLConfig.Reboot) * time.Second,
+			"rtty":       time.Duration(cacheTTLConfig.RemoteAccess) * time.Second,
+			"factory":    time.Duration(cacheTTLConfig.Factory) * time.Second,
+			"upgrade":    time.Duration(cacheTTLConfig.Upgrade) * time.Second,
+			"certupdate": time.Duration(cacheTTLConfig.Certupdate) * time.Second,
+			"reenroll":   time.Duration(cacheTTLConfig.Reenroll) * time.Second,
+			"script":     time.Duration(cacheTTLConfig.Script) * time.Second,
 		},
 	}
 

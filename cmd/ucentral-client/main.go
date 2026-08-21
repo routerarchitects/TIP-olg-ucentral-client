@@ -226,7 +226,14 @@ func main() {
 				}
 
 				// Complete the transaction in RequestManager with the full response payload (REQ-009)
-				_ = components.ReqManager.Complete(res.RPCID, respBytes)
+				if tx.Method == string(contracts.ActionUpgrade) {
+					_, err := components.ReqManager.RespondAndRetain(ctx, res.RPCID, respBytes)
+					if err != nil {
+						log.Printf("[NATS RESULT] ERROR: RespondAndRetain failed for upgrade RPCID %s: %v\n", res.RPCID, err)
+					}
+				} else {
+					_ = components.ReqManager.Complete(res.RPCID, respBytes)
+				}
 
 				if !isNotification {
 					log.Printf("[NATS RESULT] PUSHING RESPONSE TO CLOUD: %s\n", string(respBytes))

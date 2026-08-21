@@ -236,7 +236,7 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 			ID json.RawMessage `json:"id"`
 		}
 		_ = json.Unmarshal(frame.Payload, &raw)
-		
+
 		id := json.RawMessage("null")
 		if len(raw.ID) > 0 {
 			id = raw.ID

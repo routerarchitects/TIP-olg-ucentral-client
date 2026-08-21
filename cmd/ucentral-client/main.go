@@ -236,7 +236,7 @@ func main() {
 				}
 
 				if !isNotification {
-					log.Printf("[NATS RESULT] PUSHING RESPONSE TO CLOUD: %s\n", string(respBytes))
+					log.Printf("[NATS RESULT] Pushing response to cloud (Session=%s, ID=%s, Size=%d)\n", sessionID, string(rawCloudID), len(respBytes))
 					_ = components.Scheduler.Push(queues.OutboundMessage{
 						SessionID: sessionID,
 						Priority:  queues.PriorityHighest,

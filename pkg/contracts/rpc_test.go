@@ -801,3 +801,60 @@ func TestJSONRPCResponse_ErrorMarshalUnmarshalValidate(t *testing.T) {
 		t.Errorf("expected roundtripped error response to be valid, got validation error: %v", err)
 	}
 }
+
+func TestJSONRPCResponse_SuccessMarshalFallbackAndEnsureStatus(t *testing.T) {
+	// 1. Test JSONRPCResponse marshal with nil/empty result
+	successResp := JSONRPCResponse{
+		JSONRPC: "2.0",
+		ID:      []byte(`1`),
+	}
+	data, err := json.Marshal(successResp)
+	if err != nil {
+		t.Fatalf("failed to marshal success response with nil result: %v", err)
+	}
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("failed to unmarshal success response JSON: %v", err)
+	}
+	resObj, hasResult := raw["result"].(map[string]interface{})
+	if !hasResult {
+		t.Fatalf("expected result field to be present, got: %s", string(data))
+	}
+	status, hasStatus := resObj["status"].(map[string]interface{})
+	if !hasStatus || status["error"].(float64) != 0 || status["text"].(string) != "Success" {
+		t.Errorf("unexpected status in result: %v", resObj)
+	}
+
+	// 2. Test EnsureStatusInResult(nil)
+	resNil := EnsureStatusInResult(nil)
+	if string(resNil) != `{"status":{"error":0,"text":"Success"}}` {
+		t.Errorf("EnsureStatusInResult(nil) = %s, expected default success status", string(resNil))
+	}
+
+	// 3. Test EnsureStatusInResult([]byte("null"))
+	resNull := EnsureStatusInResult([]byte("null"))
+	if string(resNull) != `{"status":{"error":0,"text":"Success"}}` {
+		t.Errorf("EnsureStatusInResult(null) = %s, expected default success status", string(resNull))
+	}
+
+	// 4. Test EnsureStatusInResult with existing status
+	resExisting := EnsureStatusInResult([]byte(`{"status":{"error":1,"text":"Fail"}}`))
+	if string(resExisting) != `{"status":{"error":1,"text":"Fail"}}` {
+		t.Errorf("EnsureStatusInResult(existing) = %s, expected no change", string(resExisting))
+	}
+
+	// 5. Test EnsureStatusInResult with missing status but other fields
+	resMissing := EnsureStatusInResult([]byte(`{"data":"value"}`))
+	var merged map[string]interface{}
+	if err := json.Unmarshal(resMissing, &merged); err != nil {
+		t.Fatalf("EnsureStatusInResult(missing) produced invalid JSON: %v", err)
+	}
+	if merged["data"].(string) != "value" {
+		t.Errorf("EnsureStatusInResult(missing) lost existing data field")
+	}
+	statusMap, ok := merged["status"].(map[string]interface{})
+	if !ok || statusMap["error"].(float64) != 0 || statusMap["text"].(string) != "Success" {
+		t.Errorf("EnsureStatusInResult(missing) failed to inject status: %s", string(resMissing))
+	}
+}

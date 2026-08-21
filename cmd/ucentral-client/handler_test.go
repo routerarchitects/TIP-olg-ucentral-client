@@ -58,6 +58,7 @@ func setupTestHandler(t *testing.T, dispatchBufCap int) (*frameHandler, *reqmgr.
 		scheduler:              scheduler,
 		serial:                 "001122334455",
 		dispatchBuffer:         dispatchBuffer,
+		timeoutDispatch:        5 * time.Second,
 		timeoutConfigure:       120 * time.Second,
 		timeoutActionDefault:   30 * time.Second,
 		timeoutActionExtended:  90 * time.Second,

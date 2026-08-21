@@ -81,6 +81,7 @@ type frameHandler struct {
 	natsClient             *nats.NATSClient
 	serial                 string
 	dispatchBuffer         chan struct{}
+	timeoutDispatch        time.Duration
 	timeoutConfigure       time.Duration
 	timeoutActionDefault   time.Duration
 	timeoutActionExtended  time.Duration
@@ -388,7 +389,7 @@ func (h *frameHandler) executeTransaction(ctx context.Context, tx *reqmgr.Transa
 	}
 
 	// Execute operation against NATS Client
-	dispatchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	dispatchCtx, cancel := context.WithTimeout(ctx, h.timeoutDispatch)
 	defer cancel()
 
 	nClient := h.GetNATSClient()

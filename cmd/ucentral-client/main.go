@@ -82,6 +82,7 @@ func main() {
 		natsClient:             components.NatsClient,
 		serial:                 cfg.Serial,
 		dispatchBuffer:         dispatchBuffer,
+		timeoutDispatch:        components.TimeoutDispatch,
 		timeoutConfigure:       components.TimeoutConfigure,
 		timeoutActionDefault:   components.TimeoutActionDefault,
 		timeoutActionExtended:  components.TimeoutActionExtended,
@@ -287,6 +288,7 @@ type AppComponents struct {
 	ReqManager             *reqmgr.DefaultRequestManager
 	NatsClient             *nats.NATSClient
 	WsClient               *websocket.WSClient
+	TimeoutDispatch        time.Duration
 	TimeoutConfigure       time.Duration
 	TimeoutActionDefault   time.Duration
 	TimeoutActionExtended  time.Duration
@@ -420,6 +422,7 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 		ReqManager:             reqManager,
 		NatsClient:             natsClient,
 		WsClient:               wsClient,
+		TimeoutDispatch:        dispatchTimeout,
 		TimeoutConfigure:       timeoutConfigure,
 		TimeoutActionDefault:   timeoutActionDefault,
 		TimeoutActionExtended:  timeoutActionExtended,

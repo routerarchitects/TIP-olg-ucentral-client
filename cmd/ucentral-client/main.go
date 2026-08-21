@@ -140,6 +140,7 @@ func main() {
 					} else {
 						_ = components.ReqManager.Complete(res.RPCID, respBytes)
 					}
+					log.Printf("[NATS RESULT OVERFLOW] Warning: Completed/cached transaction rpc_id=%s, but omitted outbound WebSocket scheduler enqueue to avoid congestion.\n", res.RPCID)
 				}
 			}
 		})
@@ -243,7 +244,7 @@ func main() {
 				}
 
 				if !isNotification {
-					log.Printf("[NATS RESULT] Pushing response to cloud (Session=%s, ID=%s, Size=%d)\n", sessionID, string(rawCloudID), len(respBytes))
+					log.Printf("[NATS RESULT] Pushing response to cloud (Session=%s, ID=%s, Size=%d)\n", sessionID, contracts.FormatLogID(rawCloudID), len(respBytes))
 					_ = components.Scheduler.Push(queues.OutboundMessage{
 						SessionID: sessionID,
 						Priority:  queues.PriorityHighest,

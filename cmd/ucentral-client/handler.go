@@ -190,7 +190,7 @@ func (h *frameHandler) pushResponse(sessionID string, id json.RawMessage, result
 	if errObj != nil {
 		errCode = errObj.Code
 	}
-	log.Printf("[FrameHandler] Pushing response to cloud (Session=%s, ID=%s, ErrorCode=%d, Size=%d)\n", sessionID, string(id), errCode, len(respBytes))
+	log.Printf("[FrameHandler] Pushing response to cloud (Session=%s, ID=%s, ErrorCode=%d, Size=%d)\n", sessionID, contracts.FormatLogID(id), errCode, len(respBytes))
 	_ = h.scheduler.Push(queues.OutboundMessage{
 		SessionID: sessionID,
 		Priority:  queues.PriorityHighest,
@@ -215,7 +215,7 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 	}
 	_ = json.Unmarshal(frame.Payload, &metaExtractor)
 
-	log.Printf("[FrameHandler] Parsed request metadata: Method=%s, ID=%s\n", metaExtractor.Method, string(metaExtractor.ID))
+	log.Printf("[FrameHandler] Parsed request metadata: Method=%s, ID=%s\n", metaExtractor.Method, contracts.FormatLogID(metaExtractor.ID))
 
 	isNotificationMeta := len(metaExtractor.ID) == 0 || string(metaExtractor.ID) == "null"
 	limit := h.getMethodPayloadLimit(metaExtractor.Method)

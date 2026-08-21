@@ -942,3 +942,16 @@ func BuildDeviceResultObject(serial, configUUID string, natsResult string, errCo
 	marshaled, _ := json.Marshal(resMap)
 	return json.RawMessage(marshaled)
 }
+
+// FormatLogID returns a bounded string representation of a JSON-RPC ID for safe logging.
+// IDs longer than 128 bytes are truncated to prevent log amplification from oversized inputs.
+func FormatLogID(id []byte) string {
+	if len(id) == 0 {
+		return "null"
+	}
+	s := string(id)
+	if len(s) > 128 {
+		return s[:128] + "...(truncated)"
+	}
+	return s
+}

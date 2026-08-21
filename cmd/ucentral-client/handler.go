@@ -84,6 +84,11 @@ type frameHandler struct {
 	timeoutConfigure      time.Duration
 	timeoutActionDefault  time.Duration
 	timeoutActionExtended time.Duration
+	payloadLimitAbsolute  int
+	payloadLimitConfigure int
+	payloadLimitScript    int
+	payloadLimitCertUpdate int
+	payloadLimitDefault   int
 }
 
 func (h *frameHandler) GetNATSClient() *nats.NATSClient {
@@ -133,16 +138,16 @@ func getCommandAction(method string) (contracts.CommandType, contracts.ActionTyp
 	}
 }
 
-func getMethodPayloadLimit(method string) int {
+func (h *frameHandler) getMethodPayloadLimit(method string) int {
 	switch method {
 	case "configure":
-		return 10 * 1024 * 1024 // 10MB
+		return h.payloadLimitConfigure
 	case "certupdate":
-		return 2 * 1024 * 1024 // 2MB
+		return h.payloadLimitCertUpdate
 	case "script":
-		return 1 * 1024 * 1024 // 1MB
+		return h.payloadLimitScript
 	default:
-		return 11 * 1024 * 1024 // 11MB (transport frame limit)
+		return h.payloadLimitDefault
 	}
 }
 
@@ -193,9 +198,35 @@ func (h *frameHandler) pushResponse(sessionID string, id json.RawMessage, result
 }
 
 func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundFrame) (websocket.FrameDisposition, error) {
-	log.Printf("[FrameHandler] Received frame: Session=%s, Type=%d, Size=%d, Payload=%s\n", frame.SessionID, frame.Type, len(frame.Payload), string(frame.Payload))
+	// Log frame metadata only. Avoid logging raw payload to prevent leaking configuration, certificates, or script contents.
+	log.Printf("[FrameHandler] Received frame: Session=%s, Type=%d, Size=%d\n", frame.SessionID, frame.Type, len(frame.Payload))
 
-	// Parse JSON-RPC request structure
+	// 1. Enforce absolute transport/boundary size limit (REQ-020)
+	if len(frame.Payload) > h.payloadLimitAbsolute {
+		log.Printf("[FrameHandler] Payload size %d exceeds absolute limit of %d\n", len(frame.Payload), h.payloadLimitAbsolute)
+		return websocket.FrameRejectedKeepConnection, nil
+	}
+
+	// 2. Extract method and ID using a lightweight, bounded parse to enforce specific limits before full unmarshalling (REQ-020)
+	var metaExtractor struct {
+		Method string          `json:"method"`
+		ID     json.RawMessage `json:"id"`
+	}
+	_ = json.Unmarshal(frame.Payload, &metaExtractor)
+
+	isNotificationMeta := len(metaExtractor.ID) == 0 || string(metaExtractor.ID) == "null"
+	limit := h.getMethodPayloadLimit(metaExtractor.Method)
+	if len(frame.Payload) > limit {
+		log.Printf("[FrameHandler] Payload size %d exceeds limit of %d for method %s\n", len(frame.Payload), limit, metaExtractor.Method)
+		if !isNotificationMeta {
+			errObj, _ := contracts.NewInternalJSONRPCError(contracts.ErrValidationFailed, fmt.Sprintf("Payload size exceeds method limit of %d", limit))
+			errObj.Code = contracts.ErrInvalidParams
+			h.pushResponse(frame.SessionID, metaExtractor.ID, nil, errObj)
+		}
+		return websocket.FrameRejectedKeepConnection, nil
+	}
+
+	// 3. Now perform full parse and allocate memory for JSONRPCRequest
 	var rpcReq contracts.JSONRPCRequest
 	if err := json.Unmarshal(frame.Payload, &rpcReq); err != nil {
 		log.Printf("[FrameHandler] Parse error: %v\n", err)
@@ -246,18 +277,6 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 	// State-changing check for notifications (REQ-029)
 	if isNotification && isStateChanging {
 		log.Printf("[FrameHandler] Rejecting notification: method %s is state-changing (REQ-029)\n", rpcReq.Method)
-		return websocket.FrameRejectedKeepConnection, nil
-	}
-
-	// Enforce payload size limits (REQ-020)
-	limit := getMethodPayloadLimit(rpcReq.Method)
-	if len(frame.Payload) > limit {
-		log.Printf("[FrameHandler] Payload size %d exceeds limit of %d for method %s\n", len(frame.Payload), limit, rpcReq.Method)
-		if !isNotification {
-			errObj, _ := contracts.NewInternalJSONRPCError(contracts.ErrValidationFailed, fmt.Sprintf("Payload size exceeds method limit of %d", limit))
-			errObj.Code = contracts.ErrInvalidParams
-			h.pushResponse(frame.SessionID, rpcReq.ID, nil, errObj)
-		}
 		return websocket.FrameRejectedKeepConnection, nil
 	}
 
@@ -432,7 +451,7 @@ func (h *frameHandler) executeTransaction(ctx context.Context, tx *reqmgr.Transa
 func (h *frameHandler) completeTransaction(tx *reqmgr.Transaction, payload []byte) {
 	resp := contracts.JSONRPCResponse{
 		JSONRPC: contracts.JSONRPCVersion,
-		Result:  payload,
+		Result:  contracts.EnsureStatusInResult(payload),
 		ID:      tx.CloudRPCID,
 	}
 	respBytes, err := json.Marshal(resp)

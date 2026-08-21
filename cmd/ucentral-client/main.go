@@ -66,7 +66,7 @@ func main() {
 	}
 
 	// 4. Initialize all core components
-	scheduler, reqManager, natsClient, wsClient, timeoutConfigure, timeoutActionDefault, timeoutActionExtended, err := initializeComponents(ctx, cfg, cacheTTLConfig, stateMgr)
+	components, err := initializeComponents(ctx, cfg, cacheTTLConfig, stateMgr)
 	if err != nil {
 		log.Fatalf("FATAL: Initialization failed: %v", err)
 	}
@@ -76,19 +76,24 @@ func main() {
 
 	// 5. Launch Reconnection & Reader loops
 	handler := &frameHandler{
-		reqMgr:                reqManager,
+		reqMgr:                components.ReqManager,
 		stateMgr:              stateMgr,
-		scheduler:             scheduler,
-		natsClient:            natsClient,
+		scheduler:             components.Scheduler,
+		natsClient:            components.NatsClient,
 		serial:                cfg.Serial,
 		dispatchBuffer:        dispatchBuffer,
-		timeoutConfigure:      timeoutConfigure,
-		timeoutActionDefault:  timeoutActionDefault,
-		timeoutActionExtended: timeoutActionExtended,
+		timeoutConfigure:      components.TimeoutConfigure,
+		timeoutActionDefault:  components.TimeoutActionDefault,
+		timeoutActionExtended: components.TimeoutActionExtended,
+		payloadLimitAbsolute:         components.PayloadLimitAbsolute,
+		payloadLimitConfigure:        components.PayloadLimitConfigure,
+		payloadLimitScript:           components.PayloadLimitScript,
+		payloadLimitCertUpdate:       components.PayloadLimitCertUpdate,
+		payloadLimitDefault:          components.PayloadLimitDefault,
 	}
 
 	// Start the RequestManager background routines (recovery / sweepers)
-	reqManager.Start(ctx)
+	components.ReqManager.Start(ctx)
 
 	// Initialize the bounded Command Result Queue (REQ-013)
 	resultQueue := make(chan agentcore.ResultEnvelope, cfg.Queues.CommandResultCapacity)
@@ -109,8 +114,8 @@ func main() {
 	}
 
 	// Subscribe if client is ready; otherwise start retry loop in background (resilience against boot outages)
-	if natsClient != nil {
-		subscribeResults(natsClient)
+	if components.NatsClient != nil {
+		subscribeResults(components.NatsClient)
 	} else {
 		go func() {
 			ticker := time.NewTicker(15 * time.Second)
@@ -149,7 +154,7 @@ func main() {
 				log.Printf("[NATS RESULT] Processing result for rpc_id=%s, command=%s, result=%s\n", res.RPCID, res.CommandType, res.Result)
 
 				// Retrieve the transaction from RequestManager using NATS RPCID (UUID)
-				tx, exists := reqManager.GetTransaction(res.RPCID)
+				tx, exists := components.ReqManager.GetTransaction(res.RPCID)
 				if !exists {
 					log.Printf("[NATS RESULT] WARNING: Transaction not found for NATS RPCID: %s\n", res.RPCID)
 					continue
@@ -179,11 +184,11 @@ func main() {
 				}
 
 				// Complete the transaction in RequestManager with the full response payload (REQ-009)
-				_ = reqManager.Complete(res.RPCID, respBytes)
+				_ = components.ReqManager.Complete(res.RPCID, respBytes)
 
 				if !isNotification {
 					log.Printf("[NATS RESULT] PUSHING RESPONSE TO CLOUD: %s\n", string(respBytes))
-					_ = scheduler.Push(queues.OutboundMessage{
+					_ = components.Scheduler.Push(queues.OutboundMessage{
 						SessionID: sessionID,
 						Priority:  queues.PriorityHighest,
 						Payload:   respBytes,
@@ -194,7 +199,7 @@ func main() {
 	}()
 
 	go func() {
-		if err := wsClient.ReconnectLoop(ctx, handler); err != nil {
+		if err := components.WsClient.ReconnectLoop(ctx, handler); err != nil {
 			log.Printf("WS ReconnectLoop exited: %v\n", err)
 		}
 	}()
@@ -212,7 +217,7 @@ func main() {
 
 	// Perform graceful teardowns
 	cancel() // Notify loops to stop
-	wsClient.Close()
+	components.WsClient.Close()
 	if activeNats := handler.GetNATSClient(); activeNats != nil {
 		_ = activeNats.Close(teardownCtx)
 	}
@@ -220,32 +225,60 @@ func main() {
 	log.Println("Graceful teardown complete. Exiting.")
 }
 
-func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfig config.CacheTTLConfig, stateMgr *systemStateManager) (
-	scheduler *queues.PriorityScheduler,
-	reqManager *reqmgr.DefaultRequestManager,
-	natsClient *nats.NATSClient,
-	wsClient *websocket.WSClient,
-	timeoutConfigure time.Duration,
-	timeoutActionDefault time.Duration,
-	timeoutActionExtended time.Duration,
-	err error,
-) {
+type AppComponents struct {
+	Scheduler             *queues.PriorityScheduler
+	ReqManager            *reqmgr.DefaultRequestManager
+	NatsClient            *nats.NATSClient
+	WsClient              *websocket.WSClient
+	TimeoutConfigure      time.Duration
+	TimeoutActionDefault  time.Duration
+	TimeoutActionExtended time.Duration
+	PayloadLimitAbsolute  int
+	PayloadLimitConfigure int
+	PayloadLimitScript    int
+	PayloadLimitCertUpdate int
+	PayloadLimitDefault   int
+}
+
+func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfig config.CacheTTLConfig, stateMgr *systemStateManager) (*AppComponents, error) {
 	// Parse timeout environment variables
 	dispatchTimeout, err := parseTimeoutEnv("OLG_TIMEOUT_DISPATCH", 5*time.Second)
 	if err != nil {
-		return nil, nil, nil, nil, 0, 0, 0, err
+		return nil, err
 	}
-	timeoutConfigure, err = parseTimeoutEnv("OLG_TIMEOUT_CONFIGURE", 30*time.Second)
+	timeoutConfigure, err := parseTimeoutEnv("OLG_TIMEOUT_CONFIGURE", 30*time.Second)
 	if err != nil {
-		return nil, nil, nil, nil, 0, 0, 0, err
+		return nil, err
 	}
-	timeoutActionDefault, err = parseTimeoutEnv("OLG_TIMEOUT_ACTION_DEFAULT", 60*time.Second)
+	timeoutActionDefault, err := parseTimeoutEnv("OLG_TIMEOUT_ACTION_DEFAULT", 60*time.Second)
 	if err != nil {
-		return nil, nil, nil, nil, 0, 0, 0, err
+		return nil, err
 	}
-	timeoutActionExtended, err = parseTimeoutEnv("OLG_TIMEOUT_ACTION_EXTENDED", 120*time.Second)
+	timeoutActionExtended, err := parseTimeoutEnv("OLG_TIMEOUT_ACTION_EXTENDED", 120*time.Second)
 	if err != nil {
-		return nil, nil, nil, nil, 0, 0, 0, err
+		return nil, err
+	}
+
+	// Parse limit environment variables
+	payloadLimitAbsolute, err := parseLimitEnv("OLG_PAYLOAD_LIMIT_ABSOLUTE", 12*1024*1024)
+	if err != nil {
+		return nil, err
+	}
+	payloadLimitConfigure, err := parseLimitEnv("OLG_PAYLOAD_LIMIT_CONFIGURE", 10*1024*1024)
+	if err != nil {
+		return nil, err
+	}
+	payloadLimitScript, err := parseLimitEnv("OLG_PAYLOAD_LIMIT_SCRIPT", 1*1024*1024)
+	if err != nil {
+		return nil, err
+	}
+	payloadLimitCertUpdate, err := parseLimitEnv("OLG_PAYLOAD_LIMIT_CERTUPDATE", 2*1024*1024)
+	if err != nil {
+		return nil, err
+	}
+	payloadLimitDefault, err := parseLimitEnv("OLG_PAYLOAD_LIMIT_DEFAULT", 11*1024*1024)
+	if err != nil {
+		return nil, err
 	}
 
 	// Initialize capability cache
@@ -254,14 +287,14 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 
 	// Initialize Outbound Schedulers and Buffers
 	log.Println("Initializing Outbound Schedulers...")
-	scheduler = queues.NewPriorityScheduler(cfg.Queues.WSWriterCapacity, cfg.Queues.EmergencyCapacity)
+	scheduler := queues.NewPriorityScheduler(cfg.Queues.WSWriterCapacity, cfg.Queues.EmergencyCapacity)
 	_ = queues.NewTelemetryRingBuffer(cfg.Queues.TelemetryCapacity)
 
 	// Initialize Storage and Cache components
 	log.Println("Initializing Operation Store...")
 	store, err := reqmgr.NewDiskOperationStore("./operations")
 	if err != nil {
-		return nil, nil, nil, nil, 0, 0, 0, fmt.Errorf("failed to initialize operation store: %w", err)
+		return nil, fmt.Errorf("failed to initialize operation store: %w", err)
 	}
 
 	txCache := reqmgr.NewTransactionCache()
@@ -284,8 +317,7 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 	}
 
 	// Instantiate RequestManager
-	// Using conservative values for sweeperTTL, activeRecordLimit
-	reqManager, err = reqmgr.NewRequestManager(
+	reqManager, err := reqmgr.NewRequestManager(
 		dispatchTimeout,
 		reqmgrTTLConfig,
 		txCache,
@@ -296,7 +328,7 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 		1000,
 	)
 	if err != nil {
-		return nil, nil, nil, nil, 0, 0, 0, fmt.Errorf("failed to initialize RequestManager: %w", err)
+		return nil, fmt.Errorf("failed to initialize RequestManager: %w", err)
 	}
 
 	// Instantiate NATS and WS clients
@@ -306,7 +338,7 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 	}
 
 	log.Println("Initializing NATS client...")
-	natsClient, err = nats.NewNATSClient("vyos", cfg.NATS, natsStateChange)
+	natsClient, err := nats.NewNATSClient("vyos", cfg.NATS, natsStateChange)
 	if err != nil {
 		log.Printf("WARNING: NATS failed to initialize (NATSDegraded mode): %v\n", err)
 	}
@@ -318,13 +350,39 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 	metaProvider := &connectMetadataProvider{cache: capCache, serial: cfg.Serial}
 
 	log.Printf("Initializing WSClient for %s...\n", cfg.Cloud.URL)
-	wsClient, err = websocket.NewWSClient(cfg.Cloud, scheduler, metaProvider, wsStateChange)
+	wsClient, err := websocket.NewWSClient(cfg.Cloud, scheduler, metaProvider, wsStateChange)
 	if err != nil {
 		if natsClient != nil {
 			_ = natsClient.Close(context.Background())
 		}
-		return nil, nil, nil, nil, 0, 0, 0, fmt.Errorf("failed to initialize WSClient: %w", err)
+		return nil, fmt.Errorf("failed to initialize WSClient: %w", err)
 	}
 
-	return scheduler, reqManager, natsClient, wsClient, timeoutConfigure, timeoutActionDefault, timeoutActionExtended, nil
+	return &AppComponents{
+		Scheduler:             scheduler,
+		ReqManager:            reqManager,
+		NatsClient:            natsClient,
+		WsClient:              wsClient,
+		TimeoutConfigure:      timeoutConfigure,
+		TimeoutActionDefault:  timeoutActionDefault,
+		TimeoutActionExtended: timeoutActionExtended,
+		PayloadLimitAbsolute:  payloadLimitAbsolute,
+		PayloadLimitConfigure: payloadLimitConfigure,
+		PayloadLimitScript:    payloadLimitScript,
+		PayloadLimitCertUpdate: payloadLimitCertUpdate,
+		PayloadLimitDefault:   payloadLimitDefault,
+	}, nil
+}
+
+func parseLimitEnv(envName string, defaultVal int) (int, error) {
+	valStr := os.Getenv(envName)
+	if valStr == "" {
+		return defaultVal, nil
+	}
+	var val int
+	_, err := fmt.Sscan(valStr, &val)
+	if err != nil || val <= 0 {
+		return 0, fmt.Errorf("invalid limit for %s: must be a positive integer", envName)
+	}
+	return val, nil
 }

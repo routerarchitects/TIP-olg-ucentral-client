@@ -58,7 +58,8 @@ The uCentral client is a lightweight, Go-based gateway daemon that bridges a clo
     "emergency_capacity": 100,
     "nats_publish_capacity": 100,
     "command_result_capacity": 50,
-    "telemetry_capacity": 500
+    "telemetry_capacity": 500,
+    "max_concurrent_requests": 100
   }
 }
 ```
@@ -86,6 +87,13 @@ The daemon utilizes container environment variables to configure operational tim
 *   `OLG_CACHE_TTL_REENROLL` (Default: `30m`): TTL for `reenroll`.
 *   `OLG_CACHE_TTL_SCRIPT` (Default: `30m`): TTL for `script`.
 *   `OLG_CACHE_TTL_UPGRADE` (Default: `60m`): TTL for `upgrade` (measured from completion).
+
+**Payload Size Limits (in bytes):**
+*   `OLG_PAYLOAD_LIMIT_ABSOLUTE` (Default: `12582912` / `12MB`): Absolute transport boundary size limit. Incoming frames exceeding this length are rejected immediately before any allocations or parsing.
+*   `OLG_PAYLOAD_LIMIT_CONFIGURE` (Default: `10485760` / `10MB`): Maximum permitted payload size for `configure` methods.
+*   `OLG_PAYLOAD_LIMIT_CERTUPDATE` (Default: `2097152` / `2MB`): Maximum permitted payload size for `certupdate` methods.
+*   `OLG_PAYLOAD_LIMIT_SCRIPT` (Default: `1048576` / `1MB`): Maximum permitted payload size for `script` methods.
+*   `OLG_PAYLOAD_LIMIT_DEFAULT` (Default: `11534336` / `11MB`): Default payload size limit for all other JSON-RPC methods.
 
 ---
 

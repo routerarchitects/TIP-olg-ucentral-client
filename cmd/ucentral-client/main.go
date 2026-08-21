@@ -105,8 +105,8 @@ func main() {
 			select {
 			case resultQueue <- res:
 			default:
-				log.Printf("ERROR: command_result_overflow! Queue capacity %d reached. Dropped result for rpc_id=%s, command=%s. Result=%s, Error=%s, Msg=%s, Payload=%s\n",
-					cfg.Queues.CommandResultCapacity, res.RPCID, res.CommandType, res.Result, res.ErrorCode, res.Message, string(res.Payload))
+				log.Printf("ERROR: command_result_overflow! Queue capacity %d reached. Dropped result for rpc_id=%s, command=%s. Result=%s, Error=%s, Msg=%s, PayloadSize=%d\n",
+					cfg.Queues.CommandResultCapacity, res.RPCID, res.CommandType, res.Result, res.ErrorCode, res.Message, len(res.Payload))
 
 				// Proactively complete and cache the transaction inside RequestManager using the NATS result payload
 				if tx, exists := components.ReqManager.GetTransaction(res.RPCID); exists {

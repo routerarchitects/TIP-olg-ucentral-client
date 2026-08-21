@@ -186,7 +186,11 @@ func (h *frameHandler) pushResponse(sessionID string, id json.RawMessage, result
 		log.Printf("[FrameHandler] ERROR: Failed to marshal JSON-RPC response: %v\n", err)
 		return
 	}
-	log.Printf("[FrameHandler] PUSHING RESPONSE TO CLOUD: %s\n", string(respBytes))
+	var errCode int
+	if errObj != nil {
+		errCode = errObj.Code
+	}
+	log.Printf("[FrameHandler] Pushing response to cloud (Session=%s, ID=%s, ErrorCode=%d, Size=%d)\n", sessionID, string(id), errCode, len(respBytes))
 	_ = h.scheduler.Push(queues.OutboundMessage{
 		SessionID: sessionID,
 		Priority:  queues.PriorityHighest,

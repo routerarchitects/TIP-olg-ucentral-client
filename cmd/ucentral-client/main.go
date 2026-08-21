@@ -99,7 +99,7 @@ func main() {
 	resultQueue := make(chan agentcore.ResultEnvelope, cfg.Queues.CommandResultCapacity)
 
 	// Helper to subscribe to NATS results
-	subscribeResults := func(nc *nats.NATSClient) {
+	subscribeResults := func(nc *nats.NATSClient) error {
 		err := nc.SubscribeResults(ctx, "vyos", func(res agentcore.ResultEnvelope) {
 			select {
 			case resultQueue <- res:
@@ -138,12 +138,22 @@ func main() {
 		if err != nil {
 			log.Printf("ERROR: Failed to subscribe to NATS results: %v\n", err)
 		}
+		return err
 	}
 
 	// Subscribe if client is ready; otherwise start retry loop in background (resilience against boot outages)
+	var subscribed bool
 	if components.NatsClient != nil {
-		subscribeResults(components.NatsClient)
-	} else {
+		if err := subscribeResults(components.NatsClient); err == nil {
+			subscribed = true
+		} else {
+			log.Printf("[NATS] Initial subscription failed, closing client and entering recovery loop: %v\n", err)
+			_ = components.NatsClient.Close(context.Background())
+			handler.SetNATSClient(nil)
+		}
+	}
+
+	if !subscribed {
 		go func() {
 			ticker := time.NewTicker(15 * time.Second)
 			defer ticker.Stop()
@@ -162,9 +172,13 @@ func main() {
 						log.Printf("[NATS] Dynamic NATS initialization failed: %v\n", err)
 						continue
 					}
-					log.Println("[NATS] Dynamic NATS initialization succeeded!")
+					if err := subscribeResults(nc); err != nil {
+						log.Printf("[NATS] Dynamic subscription failed: %v, closing client\n", err)
+						_ = nc.Close(context.Background())
+						continue
+					}
+					log.Println("[NATS] Dynamic NATS initialization and subscription succeeded!")
 					handler.SetNATSClient(nc)
-					subscribeResults(nc)
 					return
 				}
 			}

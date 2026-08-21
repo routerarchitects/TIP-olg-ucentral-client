@@ -132,7 +132,14 @@ func main() {
 
 					// Complete and cache the transaction in RequestManager so it is resolved and cleaned up from memory.
 					// We do not push it to the scheduler to avoid further congestion.
-					_ = components.ReqManager.Complete(res.RPCID, respBytes)
+					if tx.Method == string(contracts.ActionUpgrade) {
+						_, err := components.ReqManager.RespondAndRetain(ctx, res.RPCID, respBytes)
+						if err != nil {
+							log.Printf("[NATS RESULT OVERFLOW] ERROR: RespondAndRetain failed for upgrade RPCID %s: %v\n", res.RPCID, err)
+						}
+					} else {
+						_ = components.ReqManager.Complete(res.RPCID, respBytes)
+					}
 				}
 			}
 		})

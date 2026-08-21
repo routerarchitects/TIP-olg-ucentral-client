@@ -181,11 +181,7 @@ func TestTCUPG004_UpgradeAsynchronousLockHandoff(t *testing.T) {
 	}
 	m.mu.Unlock()
 
-	// Verify illegal jump: calling RespondAndRetain from TxCreated
-	_, err = m.RespondAndRetain(context.Background(), tx.RPCID, []byte(`{"status": {"error": 0}}`))
-	if err != ErrInvalidStateTransition {
-		t.Fatalf("expected ErrInvalidStateTransition for RespondAndRetain from TxCreated, got %v", err)
-	}
+	// (RespondAndRetain is now permitted during pre-flight states like TxCreated to prevent fast-reply races)
 
 	// Advance transaction to TxInFlight
 	if err := m.MarkPreparingDispatch(tx.RPCID); err != nil {
@@ -231,6 +227,50 @@ func TestTCUPG004_UpgradeAsynchronousLockHandoff(t *testing.T) {
 		t.Fatalf("failed to create second tx after unlock: %v", err)
 	}
 	m.Fail(tx2.RPCID, []byte("cleanup"))
+}
+
+func TestTCUPG006_RespondAndRetain_FastReplyBeforeInFlight(t *testing.T) {
+	m := setupTestManager()
+	cloudRPCID := json.RawMessage(`"upg-fast"`)
+
+	// 1. Create upgrade transaction
+	tx, err := m.CreateTransaction("session-fast", cloudRPCID, true, "upgrade", 10*time.Second, true)
+	if err != nil {
+		t.Fatalf("failed to create upgrade tx: %v", err)
+	}
+
+	// 2. Advance to TxPendingPublish (as if NATS dispatch is starting)
+	if err := m.MarkPreparingDispatch(tx.RPCID); err != nil {
+		t.Fatalf("MarkPreparingDispatch failed: %v", err)
+	}
+	if err := m.MarkPendingPublish(tx.RPCID); err != nil {
+		t.Fatalf("MarkPendingPublish failed: %v", err)
+	}
+
+	// 3. Simulate fast NATS reply arriving BEFORE MarkInFlight
+	opID, err := m.RespondAndRetain(context.Background(), tx.RPCID, []byte(`{"status": {"error": 0}}`))
+	if err != nil {
+		t.Fatalf("RespondAndRetain failed during pre-flight: %v", err)
+	}
+
+	// 4. Verify transaction was successfully completed and lock transferred
+	m.mu.Lock()
+	if m.activeStateTx != opID {
+		t.Fatalf("expected state lock to be transferred to OperationID %s, got %s", opID, m.activeStateTx)
+	}
+	if _, ok := m.transactionsByRPCID[tx.RPCID]; ok {
+		t.Fatalf("transaction should be removed from active map after completion")
+	}
+	m.mu.Unlock()
+
+	// 5. The async dispatch finally calls MarkInFlight, which should harmlessly return ErrTransactionNotFound
+	err = m.MarkInFlight(tx.RPCID)
+	if err != ErrTransactionNotFound {
+		t.Fatalf("expected ErrTransactionNotFound from late MarkInFlight, got %v", err)
+	}
+
+	// Clean up
+	m.ReleaseOperationLock(context.Background(), opID)
 }
 
 // errorMockStore for testing persistence failures

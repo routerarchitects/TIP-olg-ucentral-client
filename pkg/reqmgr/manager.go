@@ -387,7 +387,7 @@ func (m *DefaultRequestManager) RespondAndRetain(ctx context.Context, rpcID stri
 		return "", errors.New("only upgrade operations can be retained")
 	}
 
-	if tx.State != TxInFlight {
+	if tx.State != TxInFlight && tx.State != TxPendingPublish {
 		m.mu.Unlock()
 		return "", ErrInvalidStateTransition
 	}

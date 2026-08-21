@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -256,18 +257,27 @@ func main() {
 		}
 	}()
 
+	fatalErr := make(chan error, 1)
 	go func() {
 		if err := components.WsClient.ReconnectLoop(ctx, handler); err != nil {
-			log.Printf("WS ReconnectLoop exited: %v\n", err)
+			if !errors.Is(err, context.Canceled) {
+				fatalErr <- err
+			}
 		}
 	}()
 
-	// 6. Listen for SIGINT / SIGTERM for Graceful Teardown
+	// 6. Listen for SIGINT / SIGTERM or Fatal WebSocket failures
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	sig := <-sigChan
-	log.Printf("Received signal: %v. Initiating graceful teardown...\n", sig)
+	exitCode := 0
+	select {
+	case sig := <-sigChan:
+		log.Printf("Received signal: %v. Initiating graceful teardown...\n", sig)
+	case err := <-fatalErr:
+		log.Printf("Fatal websocket failure: %v. Initiating teardown...\n", err)
+		exitCode = 1
+	}
 
 	// Allow a strict 5-second deadline for teardown
 	teardownCtx, teardownCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -281,6 +291,7 @@ func main() {
 	}
 
 	log.Println("Graceful teardown complete. Exiting.")
+	os.Exit(exitCode)
 }
 
 type AppComponents struct {

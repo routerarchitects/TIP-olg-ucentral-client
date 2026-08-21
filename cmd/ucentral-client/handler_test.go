@@ -53,19 +53,19 @@ func setupTestHandler(t *testing.T, dispatchBufCap int) (*frameHandler, *reqmgr.
 	dispatchBuffer := make(chan struct{}, dispatchBufCap)
 
 	h := &frameHandler{
-		reqMgr:                reqMgr,
-		stateMgr:              stateMgr,
-		scheduler:             scheduler,
-		serial:                "001122334455",
-		dispatchBuffer:        dispatchBuffer,
-		timeoutConfigure:      120 * time.Second,
-		timeoutActionDefault:  30 * time.Second,
-		timeoutActionExtended: 90 * time.Second,
-		payloadLimitAbsolute:         12 * 1024 * 1024,
-		payloadLimitConfigure:        10 * 1024 * 1024,
-		payloadLimitCertUpdate:       2 * 1024 * 1024,
-		payloadLimitScript:           1 * 1024 * 1024,
-		payloadLimitDefault:          11 * 1024 * 1024,
+		reqMgr:                 reqMgr,
+		stateMgr:               stateMgr,
+		scheduler:              scheduler,
+		serial:                 "001122334455",
+		dispatchBuffer:         dispatchBuffer,
+		timeoutConfigure:       120 * time.Second,
+		timeoutActionDefault:   30 * time.Second,
+		timeoutActionExtended:  90 * time.Second,
+		payloadLimitAbsolute:   12 * 1024 * 1024,
+		payloadLimitConfigure:  10 * 1024 * 1024,
+		payloadLimitCertUpdate: 2 * 1024 * 1024,
+		payloadLimitScript:     1 * 1024 * 1024,
+		payloadLimitDefault:    11 * 1024 * 1024,
 	}
 
 	return h, reqMgr, scheduler, stateMgr

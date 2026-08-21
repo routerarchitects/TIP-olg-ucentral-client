@@ -76,20 +76,20 @@ func main() {
 
 	// 5. Launch Reconnection & Reader loops
 	handler := &frameHandler{
-		reqMgr:                components.ReqManager,
-		stateMgr:              stateMgr,
-		scheduler:             components.Scheduler,
-		natsClient:            components.NatsClient,
-		serial:                cfg.Serial,
-		dispatchBuffer:        dispatchBuffer,
-		timeoutConfigure:      components.TimeoutConfigure,
-		timeoutActionDefault:  components.TimeoutActionDefault,
-		timeoutActionExtended: components.TimeoutActionExtended,
-		payloadLimitAbsolute:         components.PayloadLimitAbsolute,
-		payloadLimitConfigure:        components.PayloadLimitConfigure,
-		payloadLimitScript:           components.PayloadLimitScript,
-		payloadLimitCertUpdate:       components.PayloadLimitCertUpdate,
-		payloadLimitDefault:          components.PayloadLimitDefault,
+		reqMgr:                 components.ReqManager,
+		stateMgr:               stateMgr,
+		scheduler:              components.Scheduler,
+		natsClient:             components.NatsClient,
+		serial:                 cfg.Serial,
+		dispatchBuffer:         dispatchBuffer,
+		timeoutConfigure:       components.TimeoutConfigure,
+		timeoutActionDefault:   components.TimeoutActionDefault,
+		timeoutActionExtended:  components.TimeoutActionExtended,
+		payloadLimitAbsolute:   components.PayloadLimitAbsolute,
+		payloadLimitConfigure:  components.PayloadLimitConfigure,
+		payloadLimitScript:     components.PayloadLimitScript,
+		payloadLimitCertUpdate: components.PayloadLimitCertUpdate,
+		payloadLimitDefault:    components.PayloadLimitDefault,
 	}
 
 	// Start the RequestManager background routines (recovery / sweepers)
@@ -226,18 +226,18 @@ func main() {
 }
 
 type AppComponents struct {
-	Scheduler             *queues.PriorityScheduler
-	ReqManager            *reqmgr.DefaultRequestManager
-	NatsClient            *nats.NATSClient
-	WsClient              *websocket.WSClient
-	TimeoutConfigure      time.Duration
-	TimeoutActionDefault  time.Duration
-	TimeoutActionExtended time.Duration
-	PayloadLimitAbsolute  int
-	PayloadLimitConfigure int
-	PayloadLimitScript    int
+	Scheduler              *queues.PriorityScheduler
+	ReqManager             *reqmgr.DefaultRequestManager
+	NatsClient             *nats.NATSClient
+	WsClient               *websocket.WSClient
+	TimeoutConfigure       time.Duration
+	TimeoutActionDefault   time.Duration
+	TimeoutActionExtended  time.Duration
+	PayloadLimitAbsolute   int
+	PayloadLimitConfigure  int
+	PayloadLimitScript     int
 	PayloadLimitCertUpdate int
-	PayloadLimitDefault   int
+	PayloadLimitDefault    int
 }
 
 func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfig config.CacheTTLConfig, stateMgr *systemStateManager) (*AppComponents, error) {
@@ -359,18 +359,18 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 	}
 
 	return &AppComponents{
-		Scheduler:             scheduler,
-		ReqManager:            reqManager,
-		NatsClient:            natsClient,
-		WsClient:              wsClient,
-		TimeoutConfigure:      timeoutConfigure,
-		TimeoutActionDefault:  timeoutActionDefault,
-		TimeoutActionExtended: timeoutActionExtended,
-		PayloadLimitAbsolute:  payloadLimitAbsolute,
-		PayloadLimitConfigure: payloadLimitConfigure,
-		PayloadLimitScript:    payloadLimitScript,
+		Scheduler:              scheduler,
+		ReqManager:             reqManager,
+		NatsClient:             natsClient,
+		WsClient:               wsClient,
+		TimeoutConfigure:       timeoutConfigure,
+		TimeoutActionDefault:   timeoutActionDefault,
+		TimeoutActionExtended:  timeoutActionExtended,
+		PayloadLimitAbsolute:   payloadLimitAbsolute,
+		PayloadLimitConfigure:  payloadLimitConfigure,
+		PayloadLimitScript:     payloadLimitScript,
 		PayloadLimitCertUpdate: payloadLimitCertUpdate,
-		PayloadLimitDefault:   payloadLimitDefault,
+		PayloadLimitDefault:    payloadLimitDefault,
 	}, nil
 }
 

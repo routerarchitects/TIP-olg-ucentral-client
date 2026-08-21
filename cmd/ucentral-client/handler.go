@@ -74,21 +74,21 @@ func (s *systemStateManager) GetSystemState() contracts.ConnectionState {
 
 // frameHandler routes inbound websocket frames to NATS via the RequestManager
 type frameHandler struct {
-	mu                    sync.RWMutex
-	reqMgr                *reqmgr.DefaultRequestManager
-	stateMgr              *systemStateManager
-	scheduler             *queues.PriorityScheduler
-	natsClient            *nats.NATSClient
-	serial                string
-	dispatchBuffer        chan struct{}
-	timeoutConfigure      time.Duration
-	timeoutActionDefault  time.Duration
-	timeoutActionExtended time.Duration
-	payloadLimitAbsolute  int
-	payloadLimitConfigure int
-	payloadLimitScript    int
+	mu                     sync.RWMutex
+	reqMgr                 *reqmgr.DefaultRequestManager
+	stateMgr               *systemStateManager
+	scheduler              *queues.PriorityScheduler
+	natsClient             *nats.NATSClient
+	serial                 string
+	dispatchBuffer         chan struct{}
+	timeoutConfigure       time.Duration
+	timeoutActionDefault   time.Duration
+	timeoutActionExtended  time.Duration
+	payloadLimitAbsolute   int
+	payloadLimitConfigure  int
+	payloadLimitScript     int
 	payloadLimitCertUpdate int
-	payloadLimitDefault   int
+	payloadLimitDefault    int
 }
 
 func (h *frameHandler) GetNATSClient() *nats.NATSClient {

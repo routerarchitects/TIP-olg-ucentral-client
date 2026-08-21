@@ -104,8 +104,35 @@ func main() {
 			select {
 			case resultQueue <- res:
 			default:
-				// Log overflow metric and drop result to protect NATS event loop
-				log.Printf("ERROR: command_result_overflow! Dropped result for rpc_id=%s, command=%s (queue capacity %d reached)\n", res.RPCID, res.CommandType, cfg.Queues.CommandResultCapacity)
+				log.Printf("ERROR: command_result_overflow! Queue capacity %d reached. Dropped result for rpc_id=%s, command=%s. Result=%s, Error=%s, Msg=%s, Payload=%s\n",
+					cfg.Queues.CommandResultCapacity, res.RPCID, res.CommandType, res.Result, res.ErrorCode, res.Message, string(res.Payload))
+
+				// Proactively complete and cache the transaction inside RequestManager using the NATS result payload
+				if tx, exists := components.ReqManager.GetTransaction(res.RPCID); exists {
+					isNotification := !tx.RespondToCloud
+					formattedResult := contracts.BuildDeviceResultObject(
+						cfg.Serial,
+						res.UUID,
+						res.Result,
+						res.ErrorCode,
+						res.Message,
+						res.Payload,
+					)
+
+					var respBytes []byte
+					if !isNotification {
+						resp := contracts.JSONRPCResponse{
+							JSONRPC: contracts.JSONRPCVersion,
+							Result:  formattedResult,
+							ID:      tx.CloudRPCID,
+						}
+						respBytes, _ = json.Marshal(resp)
+					}
+
+					// Complete and cache the transaction in RequestManager so it is resolved and cleaned up from memory.
+					// We do not push it to the scheduler to avoid further congestion.
+					_ = components.ReqManager.Complete(res.RPCID, respBytes)
+				}
 			}
 		})
 		if err != nil {

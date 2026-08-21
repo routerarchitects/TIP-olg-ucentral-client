@@ -141,7 +141,7 @@ func TestFrameHandler_ParseAndValidationErrors(t *testing.T) {
 		t.Errorf("expected FrameRejectedKeepConnection, got %v", disp)
 	}
 
-	// Verify first queued message (invalid request due to malformed JSON-RPC missing version)
+	// Verify first queued message (invalid JSON parse error)
 	msg1, err := scheduler.Next(context.Background())
 	if err != nil {
 		t.Fatalf("failed to pop from scheduler: %v", err)
@@ -150,11 +150,14 @@ func TestFrameHandler_ParseAndValidationErrors(t *testing.T) {
 	if err := json.Unmarshal(msg1.Payload, &resp1); err != nil {
 		t.Fatalf("failed to unmarshal JSON-RPC response: %v", err)
 	}
-	if resp1.Error == nil || resp1.Error.Code != contracts.ErrInvalidRequest {
-		t.Errorf("expected ErrInvalidRequest, got: %+v", resp1.Error)
+	if resp1.Error == nil || resp1.Error.Code != contracts.ErrParse {
+		t.Errorf("expected ErrParse, got: %+v", resp1.Error)
+	}
+	if string(resp1.ID) != "null" {
+		t.Errorf("expected ID null for parse error, got: %s", string(resp1.ID))
 	}
 
-	// Verify second queued message (size limit exceeded)
+	// Verify second queued message (invalid request due to malformed JSON-RPC missing version)
 	msg2, err := scheduler.Next(context.Background())
 	if err != nil {
 		t.Fatalf("failed to pop from scheduler: %v", err)
@@ -163,8 +166,21 @@ func TestFrameHandler_ParseAndValidationErrors(t *testing.T) {
 	if err := json.Unmarshal(msg2.Payload, &resp2); err != nil {
 		t.Fatalf("failed to unmarshal JSON-RPC response: %v", err)
 	}
-	if resp2.Error == nil || resp2.Error.Code != contracts.ErrInvalidParams {
-		t.Errorf("expected ErrInvalidParams, got: %+v", resp2.Error)
+	if resp2.Error == nil || resp2.Error.Code != contracts.ErrInvalidRequest {
+		t.Errorf("expected ErrInvalidRequest, got: %+v", resp2.Error)
+	}
+
+	// Verify third queued message (size limit exceeded)
+	msg3, err := scheduler.Next(context.Background())
+	if err != nil {
+		t.Fatalf("failed to pop from scheduler: %v", err)
+	}
+	var resp3 contracts.JSONRPCResponse
+	if err := json.Unmarshal(msg3.Payload, &resp3); err != nil {
+		t.Fatalf("failed to unmarshal JSON-RPC response: %v", err)
+	}
+	if resp3.Error == nil || resp3.Error.Code != contracts.ErrInvalidParams {
+		t.Errorf("expected ErrInvalidParams, got: %+v", resp3.Error)
 	}
 }
 

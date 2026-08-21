@@ -232,31 +232,36 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 	var rpcReq contracts.JSONRPCRequest
 	if err := json.Unmarshal(frame.Payload, &rpcReq); err != nil {
 		log.Printf("[FrameHandler] Parse error: %v\n", err)
-		// If ID is valid JSON, respond; otherwise drop/close
 		var raw struct {
 			ID json.RawMessage `json:"id"`
 		}
 		_ = json.Unmarshal(frame.Payload, &raw)
-		if len(raw.ID) > 0 && string(raw.ID) != "null" {
-			errObj := &contracts.JSONRPCError{
-				Code:    contracts.ErrParse,
-				Message: "Parse error",
-			}
-			h.pushResponse(frame.SessionID, raw.ID, nil, errObj)
+		
+		id := json.RawMessage("null")
+		if len(raw.ID) > 0 {
+			id = raw.ID
 		}
+
+		errObj := &contracts.JSONRPCError{
+			Code:    contracts.ErrParse,
+			Message: "Parse error",
+		}
+		h.pushResponse(frame.SessionID, id, nil, errObj)
 		return websocket.FrameRejectedKeepConnection, nil
 	}
 
 	// Validate JSON-RPC structure (REQ-027)
 	if err := rpcReq.Validate(); err != nil {
 		log.Printf("[FrameHandler] Invalid request: %v\n", err)
-		if len(rpcReq.ID) > 0 && string(rpcReq.ID) != "null" {
-			errObj := &contracts.JSONRPCError{
-				Code:    contracts.ErrInvalidRequest,
-				Message: fmt.Sprintf("Invalid request: %v", err),
-			}
-			h.pushResponse(frame.SessionID, rpcReq.ID, nil, errObj)
+		id := json.RawMessage("null")
+		if len(rpcReq.ID) > 0 {
+			id = rpcReq.ID
 		}
+		errObj := &contracts.JSONRPCError{
+			Code:    contracts.ErrInvalidRequest,
+			Message: fmt.Sprintf("Invalid request: %v", err),
+		}
+		h.pushResponse(frame.SessionID, id, nil, errObj)
 		return websocket.FrameRejectedKeepConnection, nil
 	}
 

@@ -129,7 +129,7 @@ func getCommandAction(method string) (contracts.CommandType, contracts.ActionTyp
 		return contracts.CommandAction, contracts.ActionTrace, false
 	case "telemetry":
 		return contracts.CommandAction, contracts.ActionTelemetry, false
-	case "remote_access":
+	case "rtty":
 		return contracts.CommandAction, contracts.ActionRTTY, false
 	default:
 		return "", "", false
@@ -299,7 +299,7 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 	}
 
 	// State-changing or security-sensitive check for notifications (REQ-029)
-	if isNotification && (isStateChanging || rpcReq.Method == "remote_access") {
+	if isNotification && (isStateChanging || rpcReq.Method == string(contracts.ActionRTTY)) {
 		log.Printf("[FrameHandler] Rejecting notification: method %s is state-changing or security-sensitive (REQ-029)\n", rpcReq.Method)
 		return websocket.FrameRejectedKeepConnection, nil
 	}

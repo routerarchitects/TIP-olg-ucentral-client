@@ -366,7 +366,7 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 			"configure":     time.Duration(cacheTTLConfig.Configure) * time.Second,
 			"leds":          time.Duration(cacheTTLConfig.LEDs) * time.Second,
 			"reboot":        time.Duration(cacheTTLConfig.Reboot) * time.Second,
-			"remote_access": time.Duration(cacheTTLConfig.RemoteAccess) * time.Second,
+			"rtty":          time.Duration(cacheTTLConfig.RemoteAccess) * time.Second,
 			"factory":       time.Duration(cacheTTLConfig.Factory) * time.Second,
 			"upgrade":       time.Duration(cacheTTLConfig.Upgrade) * time.Second,
 			"certupdate":    time.Duration(cacheTTLConfig.Certupdate) * time.Second,

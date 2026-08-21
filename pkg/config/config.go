@@ -380,7 +380,7 @@ func (c CacheTTLConfig) TTLForMethod(method string) int {
 		return c.LEDs
 	case "reboot":
 		return c.Reboot
-	case "remoteaccess", "remote_access":
+	case "remoteaccess", "remote_access", "rtty":
 		return c.RemoteAccess
 	case "factory":
 		return c.Factory

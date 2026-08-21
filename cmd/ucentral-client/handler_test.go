@@ -387,7 +387,7 @@ func TestFrameHandler_Notifications(t *testing.T) {
 	frame = websocket.InboundFrame{
 		SessionID: "sess-1",
 		Type:      1,
-		Payload:   []byte(`{"jsonrpc":"2.0","method":"remote_access","params":{"serial":"001122334455","method":"rtty","id":"123","server":"srv","port":123,"token":"tkn"}}`),
+		Payload:   []byte(`{"jsonrpc":"2.0","method":"rtty","params":{"serial":"001122334455","method":"rtty","id":"123","server":"srv","port":123,"token":"tkn"}}`),
 	}
 	disp, err = h.HandleFrame(context.Background(), frame)
 	if err != nil {

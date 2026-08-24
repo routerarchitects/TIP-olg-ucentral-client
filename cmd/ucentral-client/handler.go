@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -90,6 +91,7 @@ type frameHandler struct {
 	payloadLimitScript     int
 	payloadLimitCertUpdate int
 	payloadLimitDefault    int
+	traceUploadAllowedURL  *url.URL
 	target                 string
 }
 
@@ -208,8 +210,8 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 		return websocket.FrameRejectedKeepConnection, nil
 	}
 
-	// Log frame metadata only. Avoid logging raw payload to prevent leaking configuration, certificates, or script contents.
-	log.Printf("[FrameHandler] Received frame: Session=%s, Type=%d, Size=%d\n", frame.SessionID, frame.Type, len(frame.Payload))
+	// Log raw payload for testing
+	log.Printf("[FrameHandler] Received frame: Session=%s, Type=%d, Size=%d, Payload=%s\n", frame.SessionID, frame.Type, len(frame.Payload), string(frame.Payload))
 
 	// 2. Extract method and ID using a lightweight, bounded parse to enforce specific limits before full unmarshalling (REQ-020)
 	var metaExtractor struct {

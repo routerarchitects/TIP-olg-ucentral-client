@@ -466,6 +466,9 @@ type CloudTraceRequest struct {
 	URI       string `json:"uri,omitempty"`
 }
 
+// AllowedTraceUploadURL must be set at startup by the host application to restrict trace URIs
+var AllowedTraceUploadURL *url.URL
+
 func (r *CloudTraceRequest) Validate() error {
 	if r.Serial == "" {
 		return errors.New("serial is required")
@@ -481,12 +484,24 @@ func (r *CloudTraceRequest) Validate() error {
 	}
 
 	if r.URI != "" {
+		if AllowedTraceUploadURL == nil {
+			return errors.New("trace upload is disabled (OLG_TRACE_UPLOAD_ALLOWED_URL is not configured)")
+		}
 		u, err := url.ParseRequestURI(r.URI)
 		if err != nil || u.Host == "" {
 			return errors.New("invalid trace URI")
 		}
 		if !strings.EqualFold(u.Scheme, "https") {
 			return fmt.Errorf("trace URI scheme must be https, got %q", u.Scheme)
+		}
+		if !strings.EqualFold(u.Hostname(), AllowedTraceUploadURL.Hostname()) {
+			return fmt.Errorf("trace URI hostname %q is not allowed", u.Hostname())
+		}
+		if AllowedTraceUploadURL.Port() != "" && u.Port() != AllowedTraceUploadURL.Port() {
+			return fmt.Errorf("trace URI port %q is not allowed", u.Port())
+		}
+		if u.User != nil {
+			return errors.New("trace URI must not contain credentials")
 		}
 	}
 	return nil

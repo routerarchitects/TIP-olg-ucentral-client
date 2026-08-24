@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -92,6 +93,7 @@ func main() {
 		payloadLimitScript:     components.PayloadLimitScript,
 		payloadLimitCertUpdate: components.PayloadLimitCertUpdate,
 		payloadLimitDefault:    components.PayloadLimitDefault,
+		traceUploadAllowedURL:  components.TraceUploadAllowedURL,
 		target:                 cfg.NATS.Target,
 	}
 
@@ -219,6 +221,7 @@ type AppComponents struct {
 	PayloadLimitScript     int
 	PayloadLimitCertUpdate int
 	PayloadLimitDefault    int
+	TraceUploadAllowedURL  *url.URL
 }
 
 func processNATSResult(ctx context.Context, res agentcore.ResultEnvelope, components *AppComponents, serial string) {
@@ -380,6 +383,23 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 		return nil, err
 	}
 
+	var traceUploadAllowedURL *url.URL
+	traceUploadAllowedURLStr := os.Getenv("OLG_TRACE_UPLOAD_ALLOWED_URL")
+	if traceUploadAllowedURLStr != "" {
+		u, err := url.Parse(traceUploadAllowedURLStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid OLG_TRACE_UPLOAD_ALLOWED_URL: %w", err)
+		}
+		if u.Scheme != "https" {
+			return nil, fmt.Errorf("OLG_TRACE_UPLOAD_ALLOWED_URL must have https scheme, got: %s", u.Scheme)
+		}
+		if u.User != nil {
+			return nil, fmt.Errorf("OLG_TRACE_UPLOAD_ALLOWED_URL must not contain credentials")
+		}
+		traceUploadAllowedURL = u
+	}
+	contracts.AllowedTraceUploadURL = traceUploadAllowedURL
+
 	// Initialize capability cache
 	log.Println("Initializing CapabilityCache...")
 	capCache := nats.NewCapabilityCache("./capabilities.json")
@@ -471,6 +491,7 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 		PayloadLimitScript:     payloadLimitScript,
 		PayloadLimitCertUpdate: payloadLimitCertUpdate,
 		PayloadLimitDefault:    payloadLimitDefault,
+		TraceUploadAllowedURL:  traceUploadAllowedURL,
 	}, nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"compress/zlib"
 	"encoding/base64"
 	"encoding/json"
+	"net/url"
 
 	"testing"
 )
@@ -346,6 +347,10 @@ func TestTC_ACT_009_RemoteAccessRequest(t *testing.T) {
 }
 
 func TestValidation_EdgeCases(t *testing.T) {
+	u, _ := url.Parse("https://openwifi.wlan.local:16003")
+	AllowedTraceUploadURL = u
+	defer func() { AllowedTraceUploadURL = nil }()
+
 	// Configure
 	cfgReq := CloudConfigureRequest{Serial: "123", UUID: 1, Config: []byte(`{}`), When: 1}
 	if err := cfgReq.Validate(); err == nil {
@@ -527,6 +532,18 @@ func TestValidation_EdgeCases(t *testing.T) {
 	if err := traceFileScheme.Validate(); err == nil {
 		t.Error("Expected error for file URI in Trace")
 	}
+	traceInvalidHost := CloudTraceRequest{Serial: "1", URI: "https://evil.com/trace.pcap"}
+	if err := traceInvalidHost.Validate(); err == nil {
+		t.Error("Expected error for invalid hostname in Trace URI")
+	}
+	traceInvalidPort := CloudTraceRequest{Serial: "1", URI: "https://openwifi.wlan.local:8080/trace.pcap"}
+	if err := traceInvalidPort.Validate(); err == nil {
+		t.Error("Expected error for invalid port in Trace URI")
+	}
+	traceWithCreds := CloudTraceRequest{Serial: "1", URI: "https://user:pass@openwifi.wlan.local:16003/trace.pcap"}
+	if err := traceWithCreds.Validate(); err == nil {
+		t.Error("Expected error for credentials in Trace URI")
+	}
 
 	tooHighDur := 301
 	ledsTooHighDur := CloudLedsRequest{Serial: "1", Pattern: "blink", Duration: &tooHighDur}
@@ -591,6 +608,10 @@ func TestValidation_EdgeCases(t *testing.T) {
 }
 
 func TestValidation_PositiveCases(t *testing.T) {
+	u, _ := url.Parse("https://openwifi.wlan.local:16003")
+	AllowedTraceUploadURL = u
+	defer func() { AllowedTraceUploadURL = nil }()
+
 	// Configure
 	cfgReq := CloudConfigureRequest{Serial: "123", UUID: 1, Config: []byte(`{"foo":"bar"}`)}
 	if err := cfgReq.Validate(); err != nil {

@@ -497,7 +497,7 @@ func (r *CloudTraceRequest) Validate() error {
 		if !strings.EqualFold(u.Hostname(), AllowedTraceUploadURL.Hostname()) {
 			return fmt.Errorf("trace URI hostname %q is not allowed", u.Hostname())
 		}
-		if AllowedTraceUploadURL.Port() != "" && u.Port() != AllowedTraceUploadURL.Port() {
+		if u.Port() != AllowedTraceUploadURL.Port() {
 			return fmt.Errorf("trace URI port %q is not allowed", u.Port())
 		}
 		if u.User != nil {

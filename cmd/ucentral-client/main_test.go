@@ -91,7 +91,7 @@ func TestHandleNATSResultOverflow_UpgradePersistenceFailure(t *testing.T) {
 	cacheTTL := reqmgr.CacheTTLConfig{}
 	scheduler := queues.NewPriorityScheduler(10, 10)
 	store := &errorMockStore{}
-	
+
 	m, _ := reqmgr.NewRequestManager(10*time.Second, cacheTTL, cache, scheduler, store, 1000, 15*time.Minute, 100)
 
 	components := &AppComponents{

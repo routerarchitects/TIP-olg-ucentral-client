@@ -222,7 +222,7 @@ type AppComponents struct {
 }
 
 func processNATSResult(ctx context.Context, res agentcore.ResultEnvelope, components *AppComponents, serial string) {
-	log.Printf("[NATS RESULT] Processing result for rpc_id=%s, command=%s, result=%s\n", res.RPCID, res.CommandType, res.Result)
+	log.Printf("[NATS RESULT] Processing result for rpc_id=%s, command=%s, error_code=%s, result_size=%d, payload_size=%d\n", res.RPCID, res.CommandType, res.ErrorCode, len(res.Result), len(res.Payload))
 
 	// Retrieve the transaction from RequestManager using NATS RPCID (UUID)
 	tx, exists := components.ReqManager.GetTransaction(res.RPCID)
@@ -294,8 +294,8 @@ func handleNATSResult(ctx context.Context, res agentcore.ResultEnvelope, resultQ
 	select {
 	case resultQueue <- res:
 	default:
-		log.Printf("ERROR: command_result_overflow! Queue capacity reached. Dropped result for rpc_id=%s, command=%s. Result=%s, Error=%s, Msg=%s, PayloadSize=%d\n",
-			res.RPCID, res.CommandType, res.Result, res.ErrorCode, res.Message, len(res.Payload))
+		log.Printf("ERROR: command_result_overflow! Queue capacity reached. Dropped result for rpc_id=%s, command=%s, error_code=%s, result_size=%d, payload_size=%d\n",
+			res.RPCID, res.CommandType, res.ErrorCode, len(res.Result), len(res.Payload))
 
 		// Proactively complete and cache the transaction inside RequestManager using the NATS result payload
 		if tx, exists := components.ReqManager.GetTransaction(res.RPCID); exists {

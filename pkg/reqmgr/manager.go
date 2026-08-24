@@ -26,6 +26,7 @@ var (
 	ErrOperationReleaseInProgress = errors.New("operation release already in progress")
 	ErrOperationOwnershipChanged  = errors.New("operation ownership changed during release")
 	ErrCapacityExceeded           = errors.New("request manager capacity exceeded")
+	ErrHandoffInProgress          = errors.New("handoff to persistent storage already in progress")
 )
 
 type PendingReply struct {
@@ -395,6 +396,11 @@ func (m *DefaultRequestManager) RespondAndRetain(ctx context.Context, rpcID stri
 	if m.activeStateTx != rpcID {
 		m.mu.Unlock()
 		return "", errors.New("transaction does not own the state lock")
+	}
+
+	if tx.HandoffInProgress {
+		m.mu.Unlock()
+		return "", ErrHandoffInProgress
 	}
 
 	// 1. Pause response timer to prevent timeouts during disk I/O

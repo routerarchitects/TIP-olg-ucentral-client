@@ -1344,3 +1344,65 @@ func TestTCRM025_RespondToCloudFalsePreventsCache(t *testing.T) {
 		t.Fatalf("expected response to NOT be cached when respondToCloud is false")
 	}
 }
+
+
+// customDelayStore is used to simulate a slow disk write for concurrency testing
+type customDelayStore struct {
+	saveDelay time.Duration
+}
+func (s *customDelayStore) Save(ctx context.Context, op *PersistentOperation) error {
+	time.Sleep(s.saveDelay)
+	return nil
+}
+func (s *customDelayStore) Get(ctx context.Context, opID string) (*PersistentOperation, error) { return nil, nil }
+func (s *customDelayStore) GetActive(ctx context.Context, limit int) ([]*PersistentOperation, error) { return nil, nil }
+func (s *customDelayStore) Delete(ctx context.Context, opID string) error { return nil }
+
+func TestTCUPG_RespondAndRetain_ConcurrentHandoff(t *testing.T) {
+	cache := NewTransactionCache()
+	config := CacheTTLConfig{}
+	scheduler := queues.NewPriorityScheduler(10, 10)
+	store := &customDelayStore{saveDelay: 100 * time.Millisecond}
+	
+	m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store, 1000, 15*time.Minute, 100)
+
+	tx, err := m.CreateTransaction("sess1", json.RawMessage(`"upgrade-concurrent"`), true, "upgrade", 5*time.Second, true)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	err = m.MarkPreparingDispatch(tx.RPCID)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	err = m.MarkPendingPublish(tx.RPCID)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	var err1, err2 error
+
+	go func() {
+		defer wg.Done()
+		_, err1 = m.RespondAndRetain(context.Background(), tx.RPCID, []byte("reply1"))
+	}()
+
+	go func() {
+		defer wg.Done()
+		time.Sleep(10 * time.Millisecond) // ensure goroutine 1 acquires lock first
+		_, err2 = m.RespondAndRetain(context.Background(), tx.RPCID, []byte("reply2"))
+	}()
+
+	wg.Wait()
+
+	if err1 != nil {
+		t.Errorf("expected first RespondAndRetain to succeed, got %v", err1)
+	}
+	if err2 != ErrHandoffInProgress {
+		t.Errorf("expected second RespondAndRetain to fail with ErrHandoffInProgress, got %v", err2)
+	}
+}

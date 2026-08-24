@@ -441,7 +441,6 @@ func (h *frameHandler) executeTransaction(ctx context.Context, tx *reqmgr.Transa
 	}
 }
 
-
 func (h *frameHandler) failTransaction(tx *reqmgr.Transaction, err error) {
 	h.failTransactionWithCode(tx, err, contracts.ErrAppFailure, err.Error())
 }

@@ -1345,17 +1345,21 @@ func TestTCRM025_RespondToCloudFalsePreventsCache(t *testing.T) {
 	}
 }
 
-
 // customDelayStore is used to simulate a slow disk write for concurrency testing
 type customDelayStore struct {
 	saveDelay time.Duration
 }
+
 func (s *customDelayStore) Save(ctx context.Context, op *PersistentOperation) error {
 	time.Sleep(s.saveDelay)
 	return nil
 }
-func (s *customDelayStore) Get(ctx context.Context, opID string) (*PersistentOperation, error) { return nil, nil }
-func (s *customDelayStore) GetActive(ctx context.Context, limit int) ([]*PersistentOperation, error) { return nil, nil }
+func (s *customDelayStore) Get(ctx context.Context, opID string) (*PersistentOperation, error) {
+	return nil, nil
+}
+func (s *customDelayStore) GetActive(ctx context.Context, limit int) ([]*PersistentOperation, error) {
+	return nil, nil
+}
 func (s *customDelayStore) Delete(ctx context.Context, opID string) error { return nil }
 
 func TestTCUPG_RespondAndRetain_ConcurrentHandoff(t *testing.T) {
@@ -1363,7 +1367,7 @@ func TestTCUPG_RespondAndRetain_ConcurrentHandoff(t *testing.T) {
 	config := CacheTTLConfig{}
 	scheduler := queues.NewPriorityScheduler(10, 10)
 	store := &customDelayStore{saveDelay: 100 * time.Millisecond}
-	
+
 	m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store, 1000, 15*time.Minute, 100)
 
 	tx, err := m.CreateTransaction("sess1", json.RawMessage(`"upgrade-concurrent"`), true, "upgrade", 5*time.Second, true)

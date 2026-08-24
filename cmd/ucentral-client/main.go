@@ -274,7 +274,10 @@ func processNATSResult(ctx context.Context, res agentcore.ResultEnvelope, compon
 			_ = components.ReqManager.Fail(res.RPCID, respBytes)
 		}
 	} else {
-		_ = components.ReqManager.Complete(res.RPCID, respBytes)
+		if err := components.ReqManager.Complete(res.RPCID, respBytes); err!=nil{
+			log.Printf("[NATS RESULT OVERFLOW] WARNING: Transaction Complete failed for NATS RPCID %s: %v\n", res.RPCID, err)
+			return
+		}
 	}
 
 	if !isNotification {
@@ -326,7 +329,10 @@ func handleNATSResult(ctx context.Context, res agentcore.ResultEnvelope, resultQ
 					return
 				}
 			} else {
-				_ = components.ReqManager.Complete(res.RPCID, respBytes)
+				if err := components.ReqManager.Complete(res.RPCID, respBytes); err != nil {
+					log.Printf("[NATS RESULT OVERFLOW] WARNING: Transaction Complete failed for NATS RPCID %s: %v\n", res.RPCID, err)
+					return
+				}
 			}
 			log.Printf("[NATS RESULT OVERFLOW] Warning: Completed/cached transaction rpc_id=%s, but omitted outbound WebSocket scheduler enqueue to avoid congestion.\n", res.RPCID)
 		}

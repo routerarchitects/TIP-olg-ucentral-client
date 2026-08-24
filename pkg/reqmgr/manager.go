@@ -745,7 +745,6 @@ func (m *DefaultRequestManager) sweepOrphanedOperations(ctx context.Context) {
 		// 2. If it's NOT active in memory (meaning it successfully unlocked earlier but the DB delete failed),
 		// the sweeper directly cleans up the orphaned DB record.
 		if !isActive {
-			m.mu.Unlock()
 			if err := m.store.Delete(ctx, op.OperationID); err != nil {
 				log.Printf("reqmgr: sweeper failed to delete orphaned operation %s: %v", op.OperationID, err)
 			}
@@ -753,7 +752,6 @@ func (m *DefaultRequestManager) sweepOrphanedOperations(ctx context.Context) {
 		}
 
 		// 3. Otherwise, it is active and not expired. Leave it safely alone.
-		m.mu.Unlock()
 	}
 }
 

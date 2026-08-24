@@ -181,7 +181,7 @@ func TestTCUPG004_UpgradeAsynchronousLockHandoff(t *testing.T) {
 	}
 	m.mu.Unlock()
 
-	// (RespondAndRetain is now permitted during pre-flight states like TxCreated to prevent fast-reply races)
+	// (RespondAndRetain is now permitted during pre-flight states like TxPendingPublish to prevent fast-reply races)
 
 	// Advance transaction to TxInFlight
 	if err := m.MarkPreparingDispatch(tx.RPCID); err != nil {

@@ -261,7 +261,10 @@ func processNATSResult(ctx context.Context, res agentcore.ResultEnvelope, compon
 	if tx.Method == string(contracts.ActionUpgrade) {
 		if res.ErrorCode != "" && res.ErrorCode != "0" {
 			log.Printf("[NATS RESULT] WARNING: Upgrade request rejected by device. Aborting persistent operation for RPCID %s\n", res.RPCID)
-			_ = components.ReqManager.Fail(res.RPCID, respBytes)
+			if err := components.ReqManager.Fail(res.RPCID, respBytes); err != nil {
+				log.Printf("[NATS RESULT] WARNING: Fail() rejected for RPCID %s: %v\n", res.RPCID, err)
+				return
+			}
 		} else {
 			_, err := components.ReqManager.RespondAndRetain(ctx, res.RPCID, respBytes)
 			if err != nil {
@@ -278,7 +281,10 @@ func processNATSResult(ctx context.Context, res agentcore.ResultEnvelope, compon
 					}
 					respBytes, _ = json.Marshal(errResp)
 				}
-				_ = components.ReqManager.Fail(res.RPCID, respBytes)
+				if failErr := components.ReqManager.Fail(res.RPCID, respBytes); failErr != nil {
+					log.Printf("[NATS RESULT] WARNING: Fail() rejected after RespondAndRetain failure for RPCID %s: %v\n", res.RPCID, failErr)
+					return
+				}
 			}
 		}
 	} else {
@@ -332,13 +338,13 @@ func handleNATSResult(ctx context.Context, res agentcore.ResultEnvelope, resultQ
 			if tx.Method == string(contracts.ActionUpgrade) {
 				if res.ErrorCode != "" && res.ErrorCode != "0" {
 					log.Printf("[NATS RESULT OVERFLOW] WARNING: Upgrade request rejected by device. Aborting persistent operation for RPCID %s\n", res.RPCID)
-					_ = components.ReqManager.Fail(res.RPCID, respBytes)
+					_ = components.ReqManager.Fail(res.RPCID, respBytes) // Ignore error since we don't push overflow failures anyway
 					return
 				}
 				_, err := components.ReqManager.RespondAndRetain(ctx, res.RPCID, respBytes)
 				if err != nil {
 					log.Printf("[NATS RESULT OVERFLOW] ERROR: RespondAndRetain failed for upgrade RPCID %s: %v\n", res.RPCID, err)
-					_ = components.ReqManager.Fail(res.RPCID, nil)
+					_ = components.ReqManager.Fail(res.RPCID, nil) // Ignore error since we don't push overflow failures anyway
 					return
 				}
 			} else {

@@ -453,13 +453,29 @@ func (h *frameHandler) failTransactionWithCode(tx *reqmgr.Transaction, err error
 		ID:      tx.CloudRPCID,
 	}
 	respBytes, _ := json.Marshal(resp)
-	_ = h.reqMgr.Fail(tx.RPCID, respBytes)
+	
+	failErr := h.reqMgr.Fail(tx.RPCID, respBytes)
 
-	if tx.RespondToCloud {
-		_ = h.scheduler.Push(queues.OutboundMessage{
-			SessionID: tx.CloudSessionID,
-			Priority:  queues.PriorityHighest,
-			Payload:   respBytes,
-		})
+	switch {
+	case failErr == nil:
+		// failure won; send failure response
+		if tx.RespondToCloud {
+			_ = h.scheduler.Push(queues.OutboundMessage{
+				SessionID: tx.CloudSessionID,
+				Priority:  queues.PriorityHighest,
+				Payload:   respBytes,
+			})
+		}
+	case errors.Is(failErr, reqmgr.ErrAlreadyTerminal):
+		// another terminal event (like a fast success reply) won
+		// DO NOT send this failure response, as the success response was already sent!
+		log.Printf("[FrameHandler] Transaction %s already completed natively, discarding local failure message\n", tx.RPCID)
+	case errors.Is(failErr, reqmgr.ErrTransactionNotFound):
+		// transaction already completed/removed
+		// DO NOT send another response
+		log.Printf("[FrameHandler] Transaction %s not found (already completed), discarding local failure message\n", tx.RPCID)
+	default:
+		// internal lifecycle error
+		log.Printf("[FrameHandler] Unexpected error from Fail() for tx %s: %v\n", tx.RPCID, failErr)
 	}
 }

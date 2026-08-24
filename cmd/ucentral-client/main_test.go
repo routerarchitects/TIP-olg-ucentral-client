@@ -85,3 +85,52 @@ func TestProcessNATSResult_UpgradePersistenceFailure(t *testing.T) {
 		t.Fatalf("expected error code -32603, got %d", jsonResp.Error.Code)
 	}
 }
+
+func TestHandleNATSResultOverflow_UpgradePersistenceFailure(t *testing.T) {
+	cache := reqmgr.NewTransactionCache()
+	cacheTTL := reqmgr.CacheTTLConfig{}
+	scheduler := queues.NewPriorityScheduler(10, 10)
+	store := &errorMockStore{}
+	
+	m, _ := reqmgr.NewRequestManager(10*time.Second, cacheTTL, cache, scheduler, store, 1000, 15*time.Minute, 100)
+
+	components := &AppComponents{
+		ReqManager: m,
+		Scheduler:  scheduler,
+	}
+
+	cloudRPCID := json.RawMessage(`"upg-overflow-test-1"`)
+	tx, err := m.CreateTransaction("session-1", cloudRPCID, true, "upgrade", 10*time.Second, true)
+	if err != nil {
+		t.Fatalf("failed to create tx: %v", err)
+	}
+
+	// Advance state to TxPendingPublish to simulate normal flow before result arrives
+	_ = m.MarkPreparingDispatch(tx.RPCID)
+	_ = m.MarkPendingPublish(tx.RPCID)
+
+	res := agentcore.ResultEnvelope{
+		RPCID:       tx.RPCID,
+		CommandType: "upgrade",
+		Result:      `{"status":{"error":0}}`, // Success from agent
+		ErrorCode:   "0",
+	}
+
+	// Create a full queue so the default overflow branch is taken
+	resultQueue := make(chan agentcore.ResultEnvelope, 0) // capacity 0 means it blocks immediately
+
+	// Process the result via the overflow handler
+	handleNATSResult(context.Background(), res, resultQueue, components, "serial-123")
+
+	// 1. Transaction should be failed and removed from the active map
+	_, exists := m.GetTransaction(tx.RPCID)
+	if exists {
+		t.Fatalf("expected transaction to be deleted upon failure in overflow path, but it exists")
+	}
+
+	// 2. The state-changing lock should be released, allowing a new upgrade transaction
+	_, err = m.CreateTransaction("session-1", cloudRPCID, true, "upgrade", 10*time.Second, true)
+	if err != nil {
+		t.Fatalf("expected state-changing lock to be released, but got error: %v", err)
+	}
+}

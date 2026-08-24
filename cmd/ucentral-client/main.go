@@ -104,47 +104,7 @@ func main() {
 	// Helper to subscribe to NATS results
 	subscribeResults := func(nc *nats.NATSClient) error {
 		err := nc.SubscribeResults(ctx, cfg.NATS.Target, func(res agentcore.ResultEnvelope) {
-			select {
-			case resultQueue <- res:
-			default:
-				log.Printf("ERROR: command_result_overflow! Queue capacity %d reached. Dropped result for rpc_id=%s, command=%s. Result=%s, Error=%s, Msg=%s, PayloadSize=%d\n",
-					cfg.Queues.CommandResultCapacity, res.RPCID, res.CommandType, res.Result, res.ErrorCode, res.Message, len(res.Payload))
-
-				// Proactively complete and cache the transaction inside RequestManager using the NATS result payload
-				if tx, exists := components.ReqManager.GetTransaction(res.RPCID); exists {
-					isNotification := !tx.RespondToCloud
-					formattedResult := contracts.BuildDeviceResultObject(
-						cfg.Serial,
-						res.UUID,
-						res.Result,
-						res.ErrorCode,
-						res.Message,
-						res.Payload,
-					)
-
-					var respBytes []byte
-					if !isNotification {
-						resp := contracts.JSONRPCResponse{
-							JSONRPC: contracts.JSONRPCVersion,
-							Result:  formattedResult,
-							ID:      tx.CloudRPCID,
-						}
-						respBytes, _ = json.Marshal(resp)
-					}
-
-					// Complete and cache the transaction in RequestManager so it is resolved and cleaned up from memory.
-					// We do not push it to the scheduler to avoid further congestion.
-					if tx.Method == string(contracts.ActionUpgrade) {
-						_, err := components.ReqManager.RespondAndRetain(ctx, res.RPCID, respBytes)
-						if err != nil {
-							log.Printf("[NATS RESULT OVERFLOW] ERROR: RespondAndRetain failed for upgrade RPCID %s: %v\n", res.RPCID, err)
-						}
-					} else {
-						_ = components.ReqManager.Complete(res.RPCID, respBytes)
-					}
-					log.Printf("[NATS RESULT OVERFLOW] Warning: Completed/cached transaction rpc_id=%s, but omitted outbound WebSocket scheduler enqueue to avoid congestion.\n", res.RPCID)
-				}
-			}
+			handleNATSResult(ctx, res, resultQueue, components, cfg.Serial)
 		})
 		if err != nil {
 			log.Printf("ERROR: Failed to subscribe to NATS results: %v\n", err)
@@ -324,6 +284,52 @@ func processNATSResult(ctx context.Context, res agentcore.ResultEnvelope, compon
 			Priority:  queues.PriorityHighest,
 			Payload:   respBytes,
 		})
+	}
+}
+
+func handleNATSResult(ctx context.Context, res agentcore.ResultEnvelope, resultQueue chan<- agentcore.ResultEnvelope, components *AppComponents, serial string) {
+	select {
+	case resultQueue <- res:
+	default:
+		log.Printf("ERROR: command_result_overflow! Queue capacity reached. Dropped result for rpc_id=%s, command=%s. Result=%s, Error=%s, Msg=%s, PayloadSize=%d\n",
+			res.RPCID, res.CommandType, res.Result, res.ErrorCode, res.Message, len(res.Payload))
+
+		// Proactively complete and cache the transaction inside RequestManager using the NATS result payload
+		if tx, exists := components.ReqManager.GetTransaction(res.RPCID); exists {
+			isNotification := !tx.RespondToCloud
+			formattedResult := contracts.BuildDeviceResultObject(
+				serial,
+				res.UUID,
+				res.Result,
+				res.ErrorCode,
+				res.Message,
+				res.Payload,
+			)
+
+			var respBytes []byte
+			if !isNotification {
+				resp := contracts.JSONRPCResponse{
+					JSONRPC: contracts.JSONRPCVersion,
+					Result:  formattedResult,
+					ID:      tx.CloudRPCID,
+				}
+				respBytes, _ = json.Marshal(resp)
+			}
+
+			// Complete and cache the transaction in RequestManager so it is resolved and cleaned up from memory.
+			// We do not push it to the scheduler to avoid further congestion.
+			if tx.Method == string(contracts.ActionUpgrade) {
+				_, err := components.ReqManager.RespondAndRetain(ctx, res.RPCID, respBytes)
+				if err != nil {
+					log.Printf("[NATS RESULT OVERFLOW] ERROR: RespondAndRetain failed for upgrade RPCID %s: %v\n", res.RPCID, err)
+					_ = components.ReqManager.Fail(res.RPCID, nil)
+					return
+				}
+			} else {
+				_ = components.ReqManager.Complete(res.RPCID, respBytes)
+			}
+			log.Printf("[NATS RESULT OVERFLOW] Warning: Completed/cached transaction rpc_id=%s, but omitted outbound WebSocket scheduler enqueue to avoid congestion.\n", res.RPCID)
+		}
 	}
 }
 

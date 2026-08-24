@@ -9,12 +9,18 @@ import (
 // TransactionState represents the lifecycle phase of a request.
 // The Request Manager API must strictly enforce the following valid transitions:
 //
-// | Current State         | Allowed Next States                |
-// |-----------------------|------------------------------------|
-// | TxCreated             | TxPreparingDispatch, TxFailed      |
-// | TxPreparingDispatch   | TxPendingPublish, TxFailed         |
-// | TxPendingPublish      | TxInFlight, TxFailed               |
-// | TxInFlight            | TxCompleted, TxFailed, TxTimedOut  |
+// | Current State         | Allowed Next States                          |
+// |-----------------------|----------------------------------------------|
+// | TxCreated             | TxPreparingDispatch, TxFailed                |
+// | TxPreparingDispatch   | TxPendingPublish, TxFailed                   |
+// | TxPendingPublish      | TxInFlight, TxFailed, TxCompleted            |
+// | TxInFlight            | TxCompleted, TxFailed, TxTimedOut            |
+//
+// Normal Path:
+// TxCreated -> TxPreparingDispatch -> TxPendingPublish -> TxInFlight -> Terminal
+//
+// Recovery Paths:
+// TxPendingPublish -> TxCompleted (Fast downstream response before publisher marks in-flight)
 //
 // Any attempt to transition an unknown/missing transaction, or to perform an
 // illegal transition (e.g., TxCreated directly to TxCompleted, or calling
@@ -39,7 +45,7 @@ func validateTransition(from, to TransactionState) error {
 			return nil
 		}
 	case TxPreparingDispatch:
-		if to == TxPendingPublish || to == TxFailed || to == TxCompleted {
+		if to == TxPendingPublish || to == TxFailed {
 			return nil
 		}
 	case TxPendingPublish:

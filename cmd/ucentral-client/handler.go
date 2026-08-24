@@ -453,7 +453,7 @@ func (h *frameHandler) failTransactionWithCode(tx *reqmgr.Transaction, err error
 		ID:      tx.CloudRPCID,
 	}
 	respBytes, _ := json.Marshal(resp)
-	
+
 	failErr := h.reqMgr.Fail(tx.RPCID, respBytes)
 
 	switch {

@@ -400,10 +400,18 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 	}
 
 	// Validate and clamp method limits against the absolute limit
-	if payloadLimitConfigure > payloadLimitAbsolute { payloadLimitConfigure = payloadLimitAbsolute }
-	if payloadLimitScript > payloadLimitAbsolute { payloadLimitScript = payloadLimitAbsolute }
-	if payloadLimitCertUpdate > payloadLimitAbsolute { payloadLimitCertUpdate = payloadLimitAbsolute }
-	if payloadLimitDefault > payloadLimitAbsolute { payloadLimitDefault = payloadLimitAbsolute }
+	if payloadLimitConfigure > payloadLimitAbsolute {
+		payloadLimitConfigure = payloadLimitAbsolute
+	}
+	if payloadLimitScript > payloadLimitAbsolute {
+		payloadLimitScript = payloadLimitAbsolute
+	}
+	if payloadLimitCertUpdate > payloadLimitAbsolute {
+		payloadLimitCertUpdate = payloadLimitAbsolute
+	}
+	if payloadLimitDefault > payloadLimitAbsolute {
+		payloadLimitDefault = payloadLimitAbsolute
+	}
 
 	// Validate absolute limit against WebSocket transport maximum frame size
 	wsMaxFrame := cfg.Cloud.MaxFrameSizeBytes
@@ -411,10 +419,18 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 		log.Printf("WARNING: OLG_PAYLOAD_LIMIT_ABSOLUTE (%d) exceeds WebSocket MaxFrameSizeBytes (%d). Clamping absolute limit.", payloadLimitAbsolute, wsMaxFrame)
 		payloadLimitAbsolute = wsMaxFrame
 		// Re-clamp method limits to the new absolute limit
-		if payloadLimitConfigure > payloadLimitAbsolute { payloadLimitConfigure = payloadLimitAbsolute }
-		if payloadLimitScript > payloadLimitAbsolute { payloadLimitScript = payloadLimitAbsolute }
-		if payloadLimitCertUpdate > payloadLimitAbsolute { payloadLimitCertUpdate = payloadLimitAbsolute }
-		if payloadLimitDefault > payloadLimitAbsolute { payloadLimitDefault = payloadLimitAbsolute }
+		if payloadLimitConfigure > payloadLimitAbsolute {
+			payloadLimitConfigure = payloadLimitAbsolute
+		}
+		if payloadLimitScript > payloadLimitAbsolute {
+			payloadLimitScript = payloadLimitAbsolute
+		}
+		if payloadLimitCertUpdate > payloadLimitAbsolute {
+			payloadLimitCertUpdate = payloadLimitAbsolute
+		}
+		if payloadLimitDefault > payloadLimitAbsolute {
+			payloadLimitDefault = payloadLimitAbsolute
+		}
 	}
 
 	var traceUploadAllowedURL *url.URL

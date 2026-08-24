@@ -203,56 +203,7 @@ func main() {
 			case <-ctx.Done():
 				return
 			case res := <-resultQueue:
-				log.Printf("[NATS RESULT] Processing result for rpc_id=%s, command=%s, result=%s\n", res.RPCID, res.CommandType, res.Result)
-
-				// Retrieve the transaction from RequestManager using NATS RPCID (UUID)
-				tx, exists := components.ReqManager.GetTransaction(res.RPCID)
-				if !exists {
-					log.Printf("[NATS RESULT] WARNING: Transaction not found for NATS RPCID: %s\n", res.RPCID)
-					continue
-				}
-				sessionID := tx.CloudSessionID
-				rawCloudID := tx.CloudRPCID
-				isNotification := !tx.RespondToCloud
-
-				// Build standard device result object containing "status", "serial", and "uuid"
-				formattedResult := contracts.BuildDeviceResultObject(
-					cfg.Serial,
-					res.UUID,
-					res.Result,
-					res.ErrorCode,
-					res.Message,
-					res.Payload,
-				)
-
-				var respBytes []byte
-				if !isNotification {
-					resp := contracts.JSONRPCResponse{
-						JSONRPC: contracts.JSONRPCVersion,
-						Result:  formattedResult,
-						ID:      rawCloudID,
-					}
-					respBytes, _ = json.Marshal(resp)
-				}
-
-				// Complete the transaction in RequestManager with the full response payload (REQ-009)
-				if tx.Method == string(contracts.ActionUpgrade) {
-					_, err := components.ReqManager.RespondAndRetain(ctx, res.RPCID, respBytes)
-					if err != nil {
-						log.Printf("[NATS RESULT] ERROR: RespondAndRetain failed for upgrade RPCID %s: %v\n", res.RPCID, err)
-					}
-				} else {
-					_ = components.ReqManager.Complete(res.RPCID, respBytes)
-				}
-
-				if !isNotification {
-					log.Printf("[NATS RESULT] Pushing response to cloud (Session=%s, ID=%s, Size=%d)\n", sessionID, contracts.FormatLogID(rawCloudID), len(respBytes))
-					_ = components.Scheduler.Push(queues.OutboundMessage{
-						SessionID: sessionID,
-						Priority:  queues.PriorityHighest,
-						Payload:   respBytes,
-					})
-				}
+				processNATSResult(ctx, res, components, cfg.Serial)
 			}
 		}
 	}()
@@ -308,6 +259,72 @@ type AppComponents struct {
 	PayloadLimitScript     int
 	PayloadLimitCertUpdate int
 	PayloadLimitDefault    int
+}
+
+func processNATSResult(ctx context.Context, res agentcore.ResultEnvelope, components *AppComponents, serial string) {
+	log.Printf("[NATS RESULT] Processing result for rpc_id=%s, command=%s, result=%s\n", res.RPCID, res.CommandType, res.Result)
+
+	// Retrieve the transaction from RequestManager using NATS RPCID (UUID)
+	tx, exists := components.ReqManager.GetTransaction(res.RPCID)
+	if !exists {
+		log.Printf("[NATS RESULT] WARNING: Transaction not found for NATS RPCID: %s\n", res.RPCID)
+		return
+	}
+	sessionID := tx.CloudSessionID
+	rawCloudID := tx.CloudRPCID
+	isNotification := !tx.RespondToCloud
+
+	// Build standard device result object containing "status", "serial", and "uuid"
+	formattedResult := contracts.BuildDeviceResultObject(
+		serial,
+		res.UUID,
+		res.Result,
+		res.ErrorCode,
+		res.Message,
+		res.Payload,
+	)
+
+	var respBytes []byte
+	if !isNotification {
+		resp := contracts.JSONRPCResponse{
+			JSONRPC: contracts.JSONRPCVersion,
+			Result:  formattedResult,
+			ID:      rawCloudID,
+		}
+		respBytes, _ = json.Marshal(resp)
+	}
+
+	// Complete the transaction in RequestManager with the full response payload (REQ-009)
+	if tx.Method == string(contracts.ActionUpgrade) {
+		_, err := components.ReqManager.RespondAndRetain(ctx, res.RPCID, respBytes)
+		if err != nil {
+			log.Printf("[NATS RESULT] ERROR: RespondAndRetain failed for upgrade RPCID %s: %v\n", res.RPCID, err)
+			if !isNotification {
+				errResp := contracts.JSONRPCResponse{
+					JSONRPC: contracts.JSONRPCVersion,
+					Error: &contracts.JSONRPCError{
+						Code:    -32603,
+						Message: "Internal Error",
+						Data:    json.RawMessage(`"Failed to establish persistent upgrade operation"`),
+					},
+					ID: rawCloudID,
+				}
+				respBytes, _ = json.Marshal(errResp)
+			}
+			_ = components.ReqManager.Fail(res.RPCID, respBytes)
+		}
+	} else {
+		_ = components.ReqManager.Complete(res.RPCID, respBytes)
+	}
+
+	if !isNotification {
+		log.Printf("[NATS RESULT] Pushing response to cloud (Session=%s, ID=%s, Size=%d)\n", sessionID, contracts.FormatLogID(rawCloudID), len(respBytes))
+		_ = components.Scheduler.Push(queues.OutboundMessage{
+			SessionID: sessionID,
+			Priority:  queues.PriorityHighest,
+			Payload:   respBytes,
+		})
+	}
 }
 
 func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfig config.CacheTTLConfig, stateMgr *systemStateManager) (*AppComponents, error) {

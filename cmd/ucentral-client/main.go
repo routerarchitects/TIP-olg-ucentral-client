@@ -259,22 +259,27 @@ func processNATSResult(ctx context.Context, res agentcore.ResultEnvelope, compon
 
 	// Complete the transaction in RequestManager with the full response payload (REQ-009)
 	if tx.Method == string(contracts.ActionUpgrade) {
-		_, err := components.ReqManager.RespondAndRetain(ctx, res.RPCID, respBytes)
-		if err != nil {
-			log.Printf("[NATS RESULT] ERROR: RespondAndRetain failed for upgrade RPCID %s: %v\n", res.RPCID, err)
-			if !isNotification {
-				errResp := contracts.JSONRPCResponse{
-					JSONRPC: contracts.JSONRPCVersion,
-					Error: &contracts.JSONRPCError{
-						Code:    -32603,
-						Message: "Internal Error",
-						Data:    json.RawMessage(`"Failed to establish persistent upgrade operation"`),
-					},
-					ID: rawCloudID,
-				}
-				respBytes, _ = json.Marshal(errResp)
-			}
+		if res.ErrorCode != "" && res.ErrorCode != "0" {
+			log.Printf("[NATS RESULT] WARNING: Upgrade request rejected by device. Aborting persistent operation for RPCID %s\n", res.RPCID)
 			_ = components.ReqManager.Fail(res.RPCID, respBytes)
+		} else {
+			_, err := components.ReqManager.RespondAndRetain(ctx, res.RPCID, respBytes)
+			if err != nil {
+				log.Printf("[NATS RESULT] ERROR: RespondAndRetain failed for upgrade RPCID %s: %v\n", res.RPCID, err)
+				if !isNotification {
+					errResp := contracts.JSONRPCResponse{
+						JSONRPC: contracts.JSONRPCVersion,
+						Error: &contracts.JSONRPCError{
+							Code:    -32603,
+							Message: "Internal Error",
+							Data:    json.RawMessage(`"Failed to establish persistent upgrade operation"`),
+						},
+						ID: rawCloudID,
+					}
+					respBytes, _ = json.Marshal(errResp)
+				}
+				_ = components.ReqManager.Fail(res.RPCID, respBytes)
+			}
 		}
 	} else {
 		if err := components.ReqManager.Complete(res.RPCID, respBytes); err != nil {
@@ -325,6 +330,11 @@ func handleNATSResult(ctx context.Context, res agentcore.ResultEnvelope, resultQ
 			// Complete and cache the transaction in RequestManager so it is resolved and cleaned up from memory.
 			// We do not push it to the scheduler to avoid further congestion.
 			if tx.Method == string(contracts.ActionUpgrade) {
+				if res.ErrorCode != "" && res.ErrorCode != "0" {
+					log.Printf("[NATS RESULT OVERFLOW] WARNING: Upgrade request rejected by device. Aborting persistent operation for RPCID %s\n", res.RPCID)
+					_ = components.ReqManager.Fail(res.RPCID, respBytes)
+					return
+				}
 				_, err := components.ReqManager.RespondAndRetain(ctx, res.RPCID, respBytes)
 				if err != nil {
 					log.Printf("[NATS RESULT OVERFLOW] ERROR: RespondAndRetain failed for upgrade RPCID %s: %v\n", res.RPCID, err)

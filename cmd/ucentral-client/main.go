@@ -274,7 +274,7 @@ func processNATSResult(ctx context.Context, res agentcore.ResultEnvelope, compon
 			_ = components.ReqManager.Fail(res.RPCID, respBytes)
 		}
 	} else {
-		if err := components.ReqManager.Complete(res.RPCID, respBytes); err!=nil{
+		if err := components.ReqManager.Complete(res.RPCID, respBytes); err != nil {
 			log.Printf("[NATS RESULT OVERFLOW] WARNING: Transaction Complete failed for NATS RPCID %s: %v\n", res.RPCID, err)
 			return
 		}

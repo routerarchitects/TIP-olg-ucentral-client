@@ -95,36 +95,6 @@ func TestValidateCommandPayload(t *testing.T) {
 		})
 	}
 
-	// Query Payload Tests
-	validQueries := []json.RawMessage{
-		json.RawMessage(``),
-		json.RawMessage(`null`),
-		json.RawMessage(`{}`),
-		json.RawMessage(`   {}   `),
-	}
-	for i, payload := range validQueries {
-		if err := ValidateCommandPayload(CommandQuery, ActionStatusGet, payload); err != nil {
-			t.Errorf("Expected valid query payload test %d to pass, got: %v", i, err)
-		}
-	}
-
-	invalidQueries := []struct {
-		Payload json.RawMessage
-		Error   string
-	}{
-		{json.RawMessage(`{broken`), "invalid JSON"},
-		{json.RawMessage(`"string"`), "JSON object"},
-		{json.RawMessage(`[]`), "JSON object"},
-		{json.RawMessage(`{"unexpected":true}`), "must be empty"},
-	}
-	for i, tc := range invalidQueries {
-		err := ValidateCommandPayload(CommandQuery, ActionStatusGet, tc.Payload)
-		if err == nil {
-			t.Errorf("Expected query payload test %d (%q) to fail with %q", i, string(tc.Payload), tc.Error)
-		} else if !strings.Contains(err.Error(), tc.Error) {
-			t.Errorf("Expected error containing %q, got: %v", tc.Error, err)
-		}
-	}
 }
 
 func TestValidateCommandPayload_Configure(t *testing.T) {

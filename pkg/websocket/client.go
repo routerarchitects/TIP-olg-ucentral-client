@@ -75,7 +75,7 @@ const (
 	defaultWriteTimeout                  = 10 * time.Second
 	defaultPongTimeout                   = 60 * time.Second
 	defaultPingInterval                  = 30 * time.Second
-	defaultStableSessionThresholdSeconds = 60 * time.Second
+	defaultStableSessionThreshold = 60 * time.Second
 )
 
 var (
@@ -312,7 +312,7 @@ func (c *WSClient) ReconnectLoop(ctx context.Context, handler FrameHandler) erro
 		// Only reset backoff if the session was stable
 		threshold := time.Duration(c.config.StableSessionThresholdSeconds) * time.Second
 		if threshold <= 0 {
-			threshold = defaultStableSessionThresholdSeconds
+			threshold = defaultStableSessionThreshold
 		}
 		if time.Since(sessionStartTime) > threshold {
 			backoff = initialBackoff

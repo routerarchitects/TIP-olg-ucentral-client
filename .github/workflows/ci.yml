@@ -36,6 +36,23 @@ jobs:
             exit 1
           fi
 
+      - name: Static Analysis
+        run: |
+          echo "Running go vet..."
+          go vet ./...
+          
+          echo "Running staticcheck..."
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+          $(go env GOPATH)/bin/staticcheck ./...
+          
+          echo "Running govulncheck..."
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          $(go env GOPATH)/bin/govulncheck ./...
+          
+          echo "Running gosec (Advisory only)..."
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          $(go env GOPATH)/bin/gosec ./... || echo "gosec found potential issues, but treating as advisory."
+
       - name: Run Unit Tests
         run: go test -v -race -p=1 ./...
 

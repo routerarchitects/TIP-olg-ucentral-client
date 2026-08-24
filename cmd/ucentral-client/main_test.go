@@ -117,7 +117,7 @@ func TestHandleNATSResultOverflow_UpgradePersistenceFailure(t *testing.T) {
 	}
 
 	// Create a full queue so the default overflow branch is taken
-	resultQueue := make(chan agentcore.ResultEnvelope, 0) // capacity 0 means it blocks immediately
+	resultQueue := make(chan agentcore.ResultEnvelope) // capacity 0 means it blocks immediately
 
 	// Process the result via the overflow handler
 	handleNATSResult(context.Background(), res, resultQueue, components, "serial-123")

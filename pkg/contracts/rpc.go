@@ -166,7 +166,7 @@ func (r *JSONRPCResponse) Validate() error {
 	if !hasResult && !hasError {
 		return errors.New("response must contain either result or error")
 	}
-	if r.ID == nil || len(r.ID) == 0 {
+	if len(r.ID) == 0 {
 		return errors.New("id must be included in the response")
 	}
 	return nil

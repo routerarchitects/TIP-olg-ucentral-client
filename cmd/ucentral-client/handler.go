@@ -210,8 +210,8 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 		return websocket.FrameRejectedKeepConnection, nil
 	}
 
-	// Log raw payload for testing
-	log.Printf("[FrameHandler] Received frame: Session=%s, Type=%d, Size=%d, Payload=%s\n", frame.SessionID, frame.Type, len(frame.Payload), string(frame.Payload))
+	// Log frame metadata only. Avoid logging raw payload to prevent leaking configuration, certificates, or script contents.
+	log.Printf("[FrameHandler] Received frame: Session=%s, Type=%d, Size=%d\n", frame.SessionID, frame.Type, len(frame.Payload))
 
 	// 2. Extract method and ID using a lightweight, bounded parse to enforce specific limits before full unmarshalling (REQ-020)
 	var metaExtractor struct {
@@ -441,31 +441,6 @@ func (h *frameHandler) executeTransaction(ctx context.Context, tx *reqmgr.Transa
 	}
 }
 
-func (h *frameHandler) completeTransaction(tx *reqmgr.Transaction, payload []byte) {
-	resp := contracts.JSONRPCResponse{
-		JSONRPC: contracts.JSONRPCVersion,
-		Result:  contracts.EnsureStatusInResult(payload),
-		ID:      tx.CloudRPCID,
-	}
-	respBytes, err := json.Marshal(resp)
-	if err != nil {
-		log.Printf("[FrameHandler] ERROR: Failed to marshal response: %v\n", err)
-		return
-	}
-
-	if err := h.reqMgr.Complete(tx.RPCID, respBytes); err != nil {
-		log.Printf("[FrameHandler] Complete transaction failed: %v\n", err)
-		return
-	}
-
-	if tx.RespondToCloud {
-		_ = h.scheduler.Push(queues.OutboundMessage{
-			SessionID: tx.CloudSessionID,
-			Priority:  queues.PriorityHighest,
-			Payload:   respBytes,
-		})
-	}
-}
 
 func (h *frameHandler) failTransaction(tx *reqmgr.Transaction, err error) {
 	h.failTransactionWithCode(tx, err, contracts.ErrAppFailure, err.Error())

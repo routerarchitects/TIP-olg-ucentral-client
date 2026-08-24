@@ -725,22 +725,19 @@ func (m *DefaultRequestManager) sweepOrphanedOperations(ctx context.Context) {
 
 		m.mu.Lock()
 		isActive := (m.activeStateTx == op.OperationID)
+		m.mu.Unlock()
 
 		// 1. If the operation has exceeded the maximum 15-minute TTL, force kill it
 		if isExpired {
 			if isActive {
-				m.activeStateTx = ""
-				m.activeStateOwner = LockNone
-				if m.releasingOperationID == op.OperationID {
-					m.releasingOperationID = ""
+				if err := m.ReleaseOperationLock(ctx, op.OperationID); err != nil {
+					log.Printf("reqmgr: sweeper failed to release operation lock for %s: %v", op.OperationID, err)
 				}
-				m.stateLock.Unlock()
-			}
-			m.mu.Unlock()
-
-			// Delete the stale record from the database
-			if err := m.store.Delete(ctx, op.OperationID); err != nil {
-				log.Printf("reqmgr: sweeper failed to durably delete expired operation %s: %v", op.OperationID, err)
+			} else {
+				// Delete the stale record from the database if it wasn't holding the memory lock
+				if err := m.store.Delete(ctx, op.OperationID); err != nil {
+					log.Printf("reqmgr: sweeper failed to durably delete expired operation %s: %v", op.OperationID, err)
+				}
 			}
 			continue
 		}

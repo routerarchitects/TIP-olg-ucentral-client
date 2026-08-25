@@ -895,12 +895,12 @@ func EnsureStatusInResult(payload []byte) json.RawMessage {
 	if _, hasStatus := obj["status"]; hasStatus {
 		return payload
 	}
-	
+
 	obj["status"] = map[string]interface{}{
 		"error": 0,
 		"text":  "Success",
 	}
-	
+
 	merged, err := json.Marshal(obj)
 	if err != nil {
 		return json.RawMessage(`{"status":{"error":1,"text":"Failed to inject status"}}`)

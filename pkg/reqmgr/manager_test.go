@@ -1348,10 +1348,15 @@ func TestTCRM025_RespondToCloudFalsePreventsCache(t *testing.T) {
 // customDelayStore is used to simulate a slow disk write for concurrency testing
 type customDelayStore struct {
 	saveDelay time.Duration
+	mu        sync.Mutex
+	saves     int
 }
 
 func (s *customDelayStore) Save(ctx context.Context, op *PersistentOperation) error {
 	time.Sleep(s.saveDelay)
+	s.mu.Lock()
+	s.saves++
+	s.mu.Unlock()
 	return nil
 }
 func (s *customDelayStore) Get(ctx context.Context, opID string) (*PersistentOperation, error) {
@@ -1388,17 +1393,29 @@ func TestTCUPG_RespondAndRetain_ConcurrentHandoff(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
+	var opID string
 	var err1, err2 error
 
 	go func() {
 		defer wg.Done()
-		_, err1 = m.RespondAndRetain(context.Background(), tx.RPCID, []byte("reply1"))
+		opID, err1 = m.RespondAndRetain(context.Background(), tx.RPCID, []byte("reply1"))
 	}()
 
 	go func() {
 		defer wg.Done()
 		time.Sleep(10 * time.Millisecond) // ensure goroutine 1 acquires lock first
+		
+		// Simulate the overflow handler receiving the duplicate and calling RespondAndRetain again
 		_, err2 = m.RespondAndRetain(context.Background(), tx.RPCID, []byte("reply2"))
+		
+		// If the overflow handler got ErrHandoffInProgress, it ignores it. 
+		// If it got some other error, it would call Fail() which would interfere!
+		if errors.Is(err2, ErrHandoffInProgress) {
+			// Do nothing, correctly bypassed
+		} else {
+			// This represents the bug where it would erroneously call Fail!
+			_ = m.Fail(tx.RPCID, nil)
+		}
 	}()
 
 	wg.Wait()
@@ -1406,7 +1423,26 @@ func TestTCUPG_RespondAndRetain_ConcurrentHandoff(t *testing.T) {
 	if err1 != nil {
 		t.Errorf("expected first RespondAndRetain to succeed, got %v", err1)
 	}
-	if err2 != ErrHandoffInProgress {
+	if !errors.Is(err2, ErrHandoffInProgress) {
 		t.Errorf("expected second RespondAndRetain to fail with ErrHandoffInProgress, got %v", err2)
+	}
+
+	// Verify exactly ONE persistent operation was written to disk
+	if store.saves != 1 {
+		t.Errorf("expected exactly 1 store.Save call, got %d", store.saves)
+	}
+
+	// Verify the operation owns the state lock
+	m.mu.Lock()
+	if m.activeStateTx != opID || m.activeStateOwner != LockOwnedByOperation {
+		t.Errorf("expected state lock to be owned by operation %s, got tx=%s owner=%v", opID, m.activeStateTx, m.activeStateOwner)
+	}
+	
+	// Verify transaction is completely cleaned up from memory maps
+	_, exists := m.transactionsByRPCID[tx.RPCID]
+	m.mu.Unlock()
+	
+	if exists {
+		t.Errorf("expected transaction to be deleted from memory, but it still exists")
 	}
 }

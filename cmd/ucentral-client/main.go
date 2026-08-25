@@ -265,7 +265,13 @@ func processNATSResult(ctx context.Context, res agentcore.ResultEnvelope, compon
 			}
 		} else {
 			_, err := components.ReqManager.RespondAndRetain(ctx, res.RPCID, respBytes)
-			if err != nil {
+			switch {
+			case err == nil:
+				// success
+			case errors.Is(err, reqmgr.ErrHandoffInProgress):
+				log.Printf("[NATS RESULT] Upgrade handoff already in progress for RPCID %s (ignoring duplicate)\n", res.RPCID)
+				return
+			default:
 				log.Printf("[NATS RESULT] ERROR: RespondAndRetain failed for upgrade RPCID %s: %v\n", res.RPCID, err)
 				if !isNotification {
 					errResp := contracts.JSONRPCResponse{
@@ -340,7 +346,13 @@ func handleNATSResult(ctx context.Context, res agentcore.ResultEnvelope, resultQ
 					return
 				}
 				_, err := components.ReqManager.RespondAndRetain(ctx, res.RPCID, respBytes)
-				if err != nil {
+				switch {
+				case err == nil:
+					// success
+				case errors.Is(err, reqmgr.ErrHandoffInProgress):
+					log.Printf("[NATS RESULT OVERFLOW] Upgrade handoff already in progress for RPCID %s (ignoring duplicate)\n", res.RPCID)
+					return
+				default:
 					log.Printf("[NATS RESULT OVERFLOW] ERROR: RespondAndRetain failed for upgrade RPCID %s: %v\n", res.RPCID, err)
 					_ = components.ReqManager.Fail(res.RPCID, nil) // Ignore error since we don't push overflow failures anyway
 					return

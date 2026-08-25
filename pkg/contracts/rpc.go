@@ -283,7 +283,7 @@ func (r *CloudConfigureRequest) Validate() error {
 			return fmt.Errorf("decompression error: %w", err)
 		}
 
-		if uint32(len(bytesRead)) != r.CompressSz {
+		if len(bytesRead) != int(r.CompressSz) {
 			return errors.New("decompressed size does not match compress_sz")
 		}
 

@@ -902,20 +902,16 @@ func BuildDeviceResultObject(serial, configUUID string, natsResult string, errCo
 		_ = json.Unmarshal(payload, &resMap)
 	}
 
-	// 1. Ensure serial is present
-	if _, hasSerial := resMap["serial"]; !hasSerial {
-		resMap["serial"] = serial
-	}
+	// 1. Force authoritative serial
+	resMap["serial"] = serial
 
-	// 2. Ensure uuid is present (try to parse configUUID as int first, uCentral uses int for config UUIDs)
-	if _, hasUUID := resMap["uuid"]; !hasUUID {
-		if configUUID != "" {
-			var uuidInt int64
-			if _, err := fmt.Sscan(configUUID, &uuidInt); err == nil {
-				resMap["uuid"] = uuidInt
-			} else {
-				resMap["uuid"] = configUUID
-			}
+	// 2. Force authoritative uuid (if available)
+	if configUUID != "" {
+		var uuidInt int64
+		if _, err := fmt.Sscan(configUUID, &uuidInt); err == nil {
+			resMap["uuid"] = uuidInt
+		} else {
+			resMap["uuid"] = configUUID
 		}
 	}
 
@@ -931,27 +927,23 @@ func BuildDeviceResultObject(serial, configUUID string, natsResult string, errCo
 		resMap["status"] = statusObj
 	}
 
-	// 4. Populate status fields if missing
-	if _, hasError := statusObj["error"]; !hasError {
-		var errCodeVal int
-		if natsResult == "success" {
-			errCodeVal = 0
-		} else {
-			if _, err := fmt.Sscan(errCode, &errCodeVal); err != nil {
-				errCodeVal = 1 // Default to 1 (ErrAppFailure)
-			}
+	// 4. Force authoritative status fields
+	var errCodeVal int
+	if natsResult == "success" {
+		errCodeVal = 0
+	} else {
+		if _, err := fmt.Sscan(errCode, &errCodeVal); err != nil {
+			errCodeVal = 1 // Default to 1 (ErrAppFailure)
 		}
-		statusObj["error"] = errCodeVal
 	}
+	statusObj["error"] = errCodeVal
 
-	if _, hasText := statusObj["text"]; !hasText {
-		if msg != "" {
-			statusObj["text"] = msg
-		} else if natsResult == "success" {
-			statusObj["text"] = "Success"
-		} else {
-			statusObj["text"] = "Failed"
-		}
+	if msg != "" {
+		statusObj["text"] = msg
+	} else if natsResult == "success" {
+		statusObj["text"] = "Success"
+	} else {
+		statusObj["text"] = "Failed"
 	}
 
 	marshaled, _ := json.Marshal(resMap)

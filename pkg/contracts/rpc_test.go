@@ -879,3 +879,52 @@ func TestJSONRPCResponse_SuccessMarshalFallbackAndEnsureStatus(t *testing.T) {
 		t.Errorf("EnsureStatusInResult(missing) failed to inject status: %s", string(resMissing))
 	}
 }
+
+func TestBuildDeviceResultObject_AuthoritativeOverwrite(t *testing.T) {
+	serial := "AUTH-SERIAL"
+	configUUID := "42"
+	natsResult := "failure"
+	errCode := "5"
+	msg := "Firmware verification failed"
+
+	// Payload attempting to spoof success and overwrite serial/uuid
+	payload := []byte(`{
+		"serial": "WRONG-SERIAL",
+		"uuid": 999,
+		"status": {
+			"error": 0,
+			"text": "Success"
+		},
+		"extra_field": "preserved"
+	}`)
+
+	res := BuildDeviceResultObject(serial, configUUID, natsResult, errCode, msg, payload)
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(res, &raw); err != nil {
+		t.Fatalf("failed to unmarshal output: %v", err)
+	}
+
+	if raw["serial"] != "AUTH-SERIAL" {
+		t.Errorf("expected serial 'AUTH-SERIAL', got %v", raw["serial"])
+	}
+	// json.Unmarshal parses numbers as float64
+	if raw["uuid"].(float64) != 42 {
+		t.Errorf("expected uuid 42, got %v", raw["uuid"])
+	}
+	if raw["extra_field"] != "preserved" {
+		t.Errorf("expected extra_field to be preserved, got %v", raw["extra_field"])
+	}
+
+	statusObj, ok := raw["status"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected status object")
+	}
+
+	if statusObj["error"].(float64) != 5 {
+		t.Errorf("expected status.error to be overwritten to 5, got %v", statusObj["error"])
+	}
+	if statusObj["text"] != "Firmware verification failed" {
+		t.Errorf("expected status.text to be overwritten, got %v", statusObj["text"])
+	}
+}

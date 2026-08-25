@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -559,8 +561,7 @@ func parseLimitEnv(envName string, defaultVal int) (int, error) {
 	if valStr == "" {
 		return defaultVal, nil
 	}
-	var val int
-	_, err := fmt.Sscan(valStr, &val)
+	val, err := strconv.Atoi(strings.TrimSpace(valStr))
 	if err != nil || val <= 0 {
 		return 0, fmt.Errorf("invalid limit for %s: must be a positive integer", envName)
 	}

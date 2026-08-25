@@ -1404,11 +1404,11 @@ func TestTCUPG_RespondAndRetain_ConcurrentHandoff(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		time.Sleep(10 * time.Millisecond) // ensure goroutine 1 acquires lock first
-		
+
 		// Simulate the overflow handler receiving the duplicate and calling RespondAndRetain again
 		_, err2 = m.RespondAndRetain(context.Background(), tx.RPCID, []byte("reply2"))
-		
-		// If the overflow handler got ErrHandoffInProgress, it ignores it. 
+
+		// If the overflow handler got ErrHandoffInProgress, it ignores it.
 		// If it got some other error, it would call Fail() which would interfere!
 		if errors.Is(err2, ErrHandoffInProgress) {
 			// Do nothing, correctly bypassed
@@ -1437,11 +1437,11 @@ func TestTCUPG_RespondAndRetain_ConcurrentHandoff(t *testing.T) {
 	if m.activeStateTx != opID || m.activeStateOwner != LockOwnedByOperation {
 		t.Errorf("expected state lock to be owned by operation %s, got tx=%s owner=%v", opID, m.activeStateTx, m.activeStateOwner)
 	}
-	
+
 	// Verify transaction is completely cleaned up from memory maps
 	_, exists := m.transactionsByRPCID[tx.RPCID]
 	m.mu.Unlock()
-	
+
 	if exists {
 		t.Errorf("expected transaction to be deleted from memory, but it still exists")
 	}

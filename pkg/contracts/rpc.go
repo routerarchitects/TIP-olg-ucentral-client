@@ -43,6 +43,16 @@ type JSONRPCRequest struct {
 	ID      json.RawMessage `json:"id,omitempty"`
 }
 
+// ValidResponseID returns the request ID if it is a valid JSON-RPC 2.0 identifier
+// (String, Number, or Null). If the ID is invalid (e.g. an Object or Array),
+// it returns json.RawMessage("null") to ensure the error response is compliant.
+func ValidResponseID(id json.RawMessage) json.RawMessage {
+	if len(id) > 0 && validateJSONRPCID(id, true) == nil {
+		return id
+	}
+	return json.RawMessage("null")
+}
+
 func validateJSONRPCID(id json.RawMessage, allowNull bool) error {
 	trimmed := bytes.TrimSpace(id)
 	if len(trimmed) == 0 {
@@ -878,20 +888,24 @@ func EnsureStatusInResult(payload []byte) json.RawMessage {
 	}
 
 	var obj map[string]interface{}
-	if err := json.Unmarshal(payload, &obj); err == nil {
-		if _, hasStatus := obj["status"]; hasStatus {
-			return payload
-		}
-		obj["status"] = map[string]interface{}{
-			"error": 0,
-			"text":  "Success",
-		}
-		if merged, err := json.Marshal(obj); err == nil {
-			return merged
-		}
+	if err := json.Unmarshal(payload, &obj); err != nil {
+		return json.RawMessage(`{"status":{"error":1,"text":"Invalid downstream response"}}`)
 	}
 
-	return json.RawMessage(`{"status":{"error":0,"text":"Success"}}`)
+	if _, hasStatus := obj["status"]; hasStatus {
+		return payload
+	}
+	
+	obj["status"] = map[string]interface{}{
+		"error": 0,
+		"text":  "Success",
+	}
+	
+	merged, err := json.Marshal(obj)
+	if err != nil {
+		return json.RawMessage(`{"status":{"error":1,"text":"Failed to inject status"}}`)
+	}
+	return merged
 }
 
 // BuildDeviceResultObject constructs the standard uCentral device result payload,

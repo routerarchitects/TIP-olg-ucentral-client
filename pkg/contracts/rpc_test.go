@@ -878,6 +878,12 @@ func TestJSONRPCResponse_SuccessMarshalFallbackAndEnsureStatus(t *testing.T) {
 	if !ok || statusMap["error"].(float64) != 0 || statusMap["text"].(string) != "Success" {
 		t.Errorf("EnsureStatusInResult(missing) failed to inject status: %s", string(resMissing))
 	}
+	
+	// 6. Test EnsureStatusInResult with invalid JSON Array
+	resArray := EnsureStatusInResult([]byte(`["invalid", "array"]`))
+	if string(resArray) != `{"status":{"error":1,"text":"Invalid downstream response"}}` {
+		t.Errorf("EnsureStatusInResult(array) = %s, expected error status", string(resArray))
+	}
 }
 
 func TestBuildDeviceResultObject_AuthoritativeOverwrite(t *testing.T) {

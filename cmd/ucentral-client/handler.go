@@ -241,10 +241,7 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 		}
 		_ = json.Unmarshal(frame.Payload, &raw)
 
-		id := json.RawMessage("null")
-		if len(raw.ID) > 0 {
-			id = raw.ID
-		}
+		id := contracts.ValidResponseID(raw.ID)
 
 		errObj := &contracts.JSONRPCError{
 			Code:    contracts.ErrParse,
@@ -257,10 +254,7 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 	// Validate JSON-RPC structure (REQ-027)
 	if err := rpcReq.Validate(); err != nil {
 		log.Printf("[FrameHandler] Invalid request: %v\n", err)
-		id := json.RawMessage("null")
-		if len(rpcReq.ID) > 0 {
-			id = rpcReq.ID
-		}
+		id := contracts.ValidResponseID(rpcReq.ID)
 		errObj := &contracts.JSONRPCError{
 			Code:    contracts.ErrInvalidRequest,
 			Message: fmt.Sprintf("Invalid request: %v", err),

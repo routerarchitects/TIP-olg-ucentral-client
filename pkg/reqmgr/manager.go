@@ -26,6 +26,7 @@ var (
 	ErrOperationReleaseInProgress = errors.New("operation release already in progress")
 	ErrOperationOwnershipChanged  = errors.New("operation ownership changed during release")
 	ErrCapacityExceeded           = errors.New("request manager capacity exceeded")
+	ErrHandoffInProgress          = errors.New("handoff to persistent storage already in progress")
 )
 
 type PendingReply struct {
@@ -387,7 +388,7 @@ func (m *DefaultRequestManager) RespondAndRetain(ctx context.Context, rpcID stri
 		return "", errors.New("only upgrade operations can be retained")
 	}
 
-	if tx.State != TxInFlight {
+	if tx.State != TxInFlight && tx.State != TxPendingPublish {
 		m.mu.Unlock()
 		return "", ErrInvalidStateTransition
 	}
@@ -395,6 +396,11 @@ func (m *DefaultRequestManager) RespondAndRetain(ctx context.Context, rpcID stri
 	if m.activeStateTx != rpcID {
 		m.mu.Unlock()
 		return "", errors.New("transaction does not own the state lock")
+	}
+
+	if tx.HandoffInProgress {
+		m.mu.Unlock()
+		return "", ErrHandoffInProgress
 	}
 
 	// 1. Pause response timer to prevent timeouts during disk I/O
@@ -719,22 +725,19 @@ func (m *DefaultRequestManager) sweepOrphanedOperations(ctx context.Context) {
 
 		m.mu.Lock()
 		isActive := (m.activeStateTx == op.OperationID)
+		m.mu.Unlock()
 
 		// 1. If the operation has exceeded the maximum 15-minute TTL, force kill it
 		if isExpired {
 			if isActive {
-				m.activeStateTx = ""
-				m.activeStateOwner = LockNone
-				if m.releasingOperationID == op.OperationID {
-					m.releasingOperationID = ""
+				if err := m.ReleaseOperationLock(ctx, op.OperationID); err != nil {
+					log.Printf("reqmgr: sweeper failed to release operation lock for %s: %v", op.OperationID, err)
 				}
-				m.stateLock.Unlock()
-			}
-			m.mu.Unlock()
-
-			// Delete the stale record from the database
-			if err := m.store.Delete(ctx, op.OperationID); err != nil {
-				log.Printf("reqmgr: sweeper failed to durably delete expired operation %s: %v", op.OperationID, err)
+			} else {
+				// Delete the stale record from the database if it wasn't holding the memory lock
+				if err := m.store.Delete(ctx, op.OperationID); err != nil {
+					log.Printf("reqmgr: sweeper failed to durably delete expired operation %s: %v", op.OperationID, err)
+				}
 			}
 			continue
 		}
@@ -742,7 +745,6 @@ func (m *DefaultRequestManager) sweepOrphanedOperations(ctx context.Context) {
 		// 2. If it's NOT active in memory (meaning it successfully unlocked earlier but the DB delete failed),
 		// the sweeper directly cleans up the orphaned DB record.
 		if !isActive {
-			m.mu.Unlock()
 			if err := m.store.Delete(ctx, op.OperationID); err != nil {
 				log.Printf("reqmgr: sweeper failed to delete orphaned operation %s: %v", op.OperationID, err)
 			}
@@ -750,7 +752,6 @@ func (m *DefaultRequestManager) sweepOrphanedOperations(ctx context.Context) {
 		}
 
 		// 3. Otherwise, it is active and not expired. Leave it safely alone.
-		m.mu.Unlock()
 	}
 }
 
@@ -763,4 +764,14 @@ func (m *DefaultRequestManager) recoverToInFlight(tx *Transaction) error {
 	}
 	tx.State = TxInFlight
 	return nil
+}
+
+func (m *DefaultRequestManager) GetTransaction(rpcID string) (*Transaction, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	tx, exists := m.transactionsByRPCID[rpcID]
+	if !exists {
+		return nil, false
+	}
+	return tx.Clone(), true
 }

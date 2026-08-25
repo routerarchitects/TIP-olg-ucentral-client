@@ -9,12 +9,18 @@ import (
 // TransactionState represents the lifecycle phase of a request.
 // The Request Manager API must strictly enforce the following valid transitions:
 //
-// | Current State         | Allowed Next States                |
-// |-----------------------|------------------------------------|
-// | TxCreated             | TxPreparingDispatch, TxFailed      |
-// | TxPreparingDispatch   | TxPendingPublish, TxFailed         |
-// | TxPendingPublish      | TxInFlight, TxFailed               |
-// | TxInFlight            | TxCompleted, TxFailed, TxTimedOut  |
+// | Current State         | Allowed Next States                          |
+// |-----------------------|----------------------------------------------|
+// | TxCreated             | TxPreparingDispatch, TxFailed                |
+// | TxPreparingDispatch   | TxPendingPublish, TxFailed                   |
+// | TxPendingPublish      | TxInFlight, TxFailed, TxCompleted            |
+// | TxInFlight            | TxCompleted, TxFailed, TxTimedOut            |
+//
+// Normal Path:
+// TxCreated -> TxPreparingDispatch -> TxPendingPublish -> TxInFlight -> Terminal
+//
+// Recovery Paths:
+// TxPendingPublish -> TxCompleted (Fast downstream response before publisher marks in-flight)
 //
 // Any attempt to transition an unknown/missing transaction, or to perform an
 // illegal transition (e.g., TxCreated directly to TxCompleted, or calling
@@ -43,7 +49,7 @@ func validateTransition(from, to TransactionState) error {
 			return nil
 		}
 	case TxPendingPublish:
-		if to == TxInFlight || to == TxFailed {
+		if to == TxInFlight || to == TxFailed || to == TxCompleted {
 			return nil
 		}
 	case TxInFlight:
@@ -95,6 +101,23 @@ type Transaction struct {
 	DispatchTimer     *time.Timer
 	ResponseTimer     *time.Timer
 	Cancel            context.CancelFunc
+}
+
+// Clone returns a shallow copy of the transaction with deep copies of slices/raw messages.
+func (tx *Transaction) Clone() *Transaction {
+	if tx == nil {
+		return nil
+	}
+	cloned := *tx
+	if tx.CloudRPCID != nil {
+		cloned.CloudRPCID = make(json.RawMessage, len(tx.CloudRPCID))
+		copy(cloned.CloudRPCID, tx.CloudRPCID)
+	}
+	if tx.Payload != nil {
+		cloned.Payload = make([]byte, len(tx.Payload))
+		copy(cloned.Payload, tx.Payload)
+	}
+	return &cloned
 }
 
 // DispatchItem represents a payload waiting in the internal dispatch buffer.

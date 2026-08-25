@@ -181,11 +181,7 @@ func TestTCUPG004_UpgradeAsynchronousLockHandoff(t *testing.T) {
 	}
 	m.mu.Unlock()
 
-	// Verify illegal jump: calling RespondAndRetain from TxCreated
-	_, err = m.RespondAndRetain(context.Background(), tx.RPCID, []byte(`{"status": {"error": 0}}`))
-	if err != ErrInvalidStateTransition {
-		t.Fatalf("expected ErrInvalidStateTransition for RespondAndRetain from TxCreated, got %v", err)
-	}
+	// (RespondAndRetain is now permitted during pre-flight states like TxPendingPublish to prevent fast-reply races)
 
 	// Advance transaction to TxInFlight
 	if err := m.MarkPreparingDispatch(tx.RPCID); err != nil {
@@ -231,6 +227,50 @@ func TestTCUPG004_UpgradeAsynchronousLockHandoff(t *testing.T) {
 		t.Fatalf("failed to create second tx after unlock: %v", err)
 	}
 	m.Fail(tx2.RPCID, []byte("cleanup"))
+}
+
+func TestTCUPG006_RespondAndRetain_FastReplyBeforeInFlight(t *testing.T) {
+	m := setupTestManager()
+	cloudRPCID := json.RawMessage(`"upg-fast"`)
+
+	// 1. Create upgrade transaction
+	tx, err := m.CreateTransaction("session-fast", cloudRPCID, true, "upgrade", 10*time.Second, true)
+	if err != nil {
+		t.Fatalf("failed to create upgrade tx: %v", err)
+	}
+
+	// 2. Advance to TxPendingPublish (as if NATS dispatch is starting)
+	if err := m.MarkPreparingDispatch(tx.RPCID); err != nil {
+		t.Fatalf("MarkPreparingDispatch failed: %v", err)
+	}
+	if err := m.MarkPendingPublish(tx.RPCID); err != nil {
+		t.Fatalf("MarkPendingPublish failed: %v", err)
+	}
+
+	// 3. Simulate fast NATS reply arriving BEFORE MarkInFlight
+	opID, err := m.RespondAndRetain(context.Background(), tx.RPCID, []byte(`{"status": {"error": 0}}`))
+	if err != nil {
+		t.Fatalf("RespondAndRetain failed during pre-flight: %v", err)
+	}
+
+	// 4. Verify transaction was successfully completed and lock transferred
+	m.mu.Lock()
+	if m.activeStateTx != opID {
+		t.Fatalf("expected state lock to be transferred to OperationID %s, got %s", opID, m.activeStateTx)
+	}
+	if _, ok := m.transactionsByRPCID[tx.RPCID]; ok {
+		t.Fatalf("transaction should be removed from active map after completion")
+	}
+	m.mu.Unlock()
+
+	// 5. The async dispatch finally calls MarkInFlight, which should harmlessly return ErrTransactionNotFound
+	err = m.MarkInFlight(tx.RPCID)
+	if err != ErrTransactionNotFound {
+		t.Fatalf("expected ErrTransactionNotFound from late MarkInFlight, got %v", err)
+	}
+
+	// Clean up
+	m.ReleaseOperationLock(context.Background(), opID)
 }
 
 // errorMockStore for testing persistence failures
@@ -1302,5 +1342,107 @@ func TestTCRM025_RespondToCloudFalsePreventsCache(t *testing.T) {
 	_, found := cache.Get(reqKey)
 	if found {
 		t.Fatalf("expected response to NOT be cached when respondToCloud is false")
+	}
+}
+
+// customDelayStore is used to simulate a slow disk write for concurrency testing
+type customDelayStore struct {
+	saveDelay time.Duration
+	mu        sync.Mutex
+	saves     int
+}
+
+func (s *customDelayStore) Save(ctx context.Context, op *PersistentOperation) error {
+	time.Sleep(s.saveDelay)
+	s.mu.Lock()
+	s.saves++
+	s.mu.Unlock()
+	return nil
+}
+func (s *customDelayStore) Get(ctx context.Context, opID string) (*PersistentOperation, error) {
+	return nil, nil
+}
+func (s *customDelayStore) GetActive(ctx context.Context, limit int) ([]*PersistentOperation, error) {
+	return nil, nil
+}
+func (s *customDelayStore) Delete(ctx context.Context, opID string) error { return nil }
+
+func TestTCUPG_RespondAndRetain_ConcurrentHandoff(t *testing.T) {
+	cache := NewTransactionCache()
+	config := CacheTTLConfig{}
+	scheduler := queues.NewPriorityScheduler(10, 10)
+	store := &customDelayStore{saveDelay: 100 * time.Millisecond}
+
+	m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store, 1000, 15*time.Minute, 100)
+
+	tx, err := m.CreateTransaction("sess1", json.RawMessage(`"upgrade-concurrent"`), true, "upgrade", 5*time.Second, true)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	err = m.MarkPreparingDispatch(tx.RPCID)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	err = m.MarkPendingPublish(tx.RPCID)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	var opID string
+	var err1, err2 error
+
+	go func() {
+		defer wg.Done()
+		opID, err1 = m.RespondAndRetain(context.Background(), tx.RPCID, []byte("reply1"))
+	}()
+
+	go func() {
+		defer wg.Done()
+		time.Sleep(10 * time.Millisecond) // ensure goroutine 1 acquires lock first
+
+		// Simulate the overflow handler receiving the duplicate and calling RespondAndRetain again
+		_, err2 = m.RespondAndRetain(context.Background(), tx.RPCID, []byte("reply2"))
+
+		// If the overflow handler got ErrHandoffInProgress, it ignores it.
+		// If it got some other error, it would call Fail() which would interfere!
+		if errors.Is(err2, ErrHandoffInProgress) {
+			// Do nothing, correctly bypassed
+		} else {
+			// This represents the bug where it would erroneously call Fail!
+			_ = m.Fail(tx.RPCID, nil)
+		}
+	}()
+
+	wg.Wait()
+
+	if err1 != nil {
+		t.Errorf("expected first RespondAndRetain to succeed, got %v", err1)
+	}
+	if !errors.Is(err2, ErrHandoffInProgress) {
+		t.Errorf("expected second RespondAndRetain to fail with ErrHandoffInProgress, got %v", err2)
+	}
+
+	// Verify exactly ONE persistent operation was written to disk
+	if store.saves != 1 {
+		t.Errorf("expected exactly 1 store.Save call, got %d", store.saves)
+	}
+
+	// Verify the operation owns the state lock
+	m.mu.Lock()
+	if m.activeStateTx != opID || m.activeStateOwner != LockOwnedByOperation {
+		t.Errorf("expected state lock to be owned by operation %s, got tx=%s owner=%v", opID, m.activeStateTx, m.activeStateOwner)
+	}
+
+	// Verify transaction is completely cleaned up from memory maps
+	_, exists := m.transactionsByRPCID[tx.RPCID]
+	m.mu.Unlock()
+
+	if exists {
+		t.Errorf("expected transaction to be deleted from memory, but it still exists")
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"compress/zlib"
 	"encoding/base64"
 	"encoding/json"
+	"net/url"
 
 	"testing"
 )
@@ -346,6 +347,10 @@ func TestTC_ACT_009_RemoteAccessRequest(t *testing.T) {
 }
 
 func TestValidation_EdgeCases(t *testing.T) {
+	u, _ := url.Parse("https://openwifi.wlan.local:16003")
+	AllowedTraceUploadURL = u
+	defer func() { AllowedTraceUploadURL = nil }()
+
 	// Configure
 	cfgReq := CloudConfigureRequest{Serial: "123", UUID: 1, Config: []byte(`{}`), When: 1}
 	if err := cfgReq.Validate(); err == nil {
@@ -527,6 +532,18 @@ func TestValidation_EdgeCases(t *testing.T) {
 	if err := traceFileScheme.Validate(); err == nil {
 		t.Error("Expected error for file URI in Trace")
 	}
+	traceInvalidHost := CloudTraceRequest{Serial: "1", URI: "https://evil.com/trace.pcap"}
+	if err := traceInvalidHost.Validate(); err == nil {
+		t.Error("Expected error for invalid hostname in Trace URI")
+	}
+	traceInvalidPort := CloudTraceRequest{Serial: "1", URI: "https://openwifi.wlan.local:8080/trace.pcap"}
+	if err := traceInvalidPort.Validate(); err == nil {
+		t.Error("Expected error for invalid port in Trace URI")
+	}
+	traceWithCreds := CloudTraceRequest{Serial: "1", URI: "https://user:pass@openwifi.wlan.local:16003/trace.pcap"}
+	if err := traceWithCreds.Validate(); err == nil {
+		t.Error("Expected error for credentials in Trace URI")
+	}
 
 	tooHighDur := 301
 	ledsTooHighDur := CloudLedsRequest{Serial: "1", Pattern: "blink", Duration: &tooHighDur}
@@ -591,6 +608,10 @@ func TestValidation_EdgeCases(t *testing.T) {
 }
 
 func TestValidation_PositiveCases(t *testing.T) {
+	u, _ := url.Parse("https://openwifi.wlan.local:16003")
+	AllowedTraceUploadURL = u
+	defer func() { AllowedTraceUploadURL = nil }()
+
 	// Configure
 	cfgReq := CloudConfigureRequest{Serial: "123", UUID: 1, Config: []byte(`{"foo":"bar"}`)}
 	if err := cfgReq.Validate(); err != nil {
@@ -762,5 +783,154 @@ func TestJSONRPCResponse_Validate(t *testing.T) {
 				t.Errorf("JSONRPCResponse.Validate() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestJSONRPCResponse_ErrorMarshalUnmarshalValidate(t *testing.T) {
+	errResp := JSONRPCResponse{
+		JSONRPC: "2.0",
+		Error: &JSONRPCError{
+			Code:    ErrParse,
+			Message: "Parse error",
+		},
+		ID: []byte(`1`),
+	}
+
+	// 1. Marshal to JSON
+	data, err := json.Marshal(errResp)
+	if err != nil {
+		t.Fatalf("failed to marshal error response: %v", err)
+	}
+
+	// Verify that "result" is NOT present in the marshaled JSON
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("failed to unmarshal into map: %v", err)
+	}
+	if _, hasResult := raw["result"]; hasResult {
+		t.Errorf("expected 'result' field to be omitted from serialized error response, but it was found: %s", string(data))
+	}
+
+	// 2. Unmarshal back into JSONRPCResponse
+	var roundtripResp JSONRPCResponse
+	if err := json.Unmarshal(data, &roundtripResp); err != nil {
+		t.Fatalf("failed to unmarshal JSON back to JSONRPCResponse: %v", err)
+	}
+
+	// 3. Validate
+	if err := roundtripResp.Validate(); err != nil {
+		t.Errorf("expected roundtripped error response to be valid, got validation error: %v", err)
+	}
+}
+
+func TestJSONRPCResponse_SuccessMarshalFallbackAndEnsureStatus(t *testing.T) {
+	// 1. Test JSONRPCResponse marshal with nil/empty result
+	successResp := JSONRPCResponse{
+		JSONRPC: "2.0",
+		ID:      []byte(`1`),
+	}
+	data, err := json.Marshal(successResp)
+	if err != nil {
+		t.Fatalf("failed to marshal success response with nil result: %v", err)
+	}
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("failed to unmarshal success response JSON: %v", err)
+	}
+	resObj, hasResult := raw["result"].(map[string]interface{})
+	if !hasResult {
+		t.Fatalf("expected result field to be present, got: %s", string(data))
+	}
+	status, hasStatus := resObj["status"].(map[string]interface{})
+	if !hasStatus || status["error"].(float64) != 0 || status["text"].(string) != "Success" {
+		t.Errorf("unexpected status in result: %v", resObj)
+	}
+
+	// 2. Test EnsureStatusInResult(nil)
+	resNil := EnsureStatusInResult(nil)
+	if string(resNil) != `{"status":{"error":0,"text":"Success"}}` {
+		t.Errorf("EnsureStatusInResult(nil) = %s, expected default success status", string(resNil))
+	}
+
+	// 3. Test EnsureStatusInResult([]byte("null"))
+	resNull := EnsureStatusInResult([]byte("null"))
+	if string(resNull) != `{"status":{"error":0,"text":"Success"}}` {
+		t.Errorf("EnsureStatusInResult(null) = %s, expected default success status", string(resNull))
+	}
+
+	// 4. Test EnsureStatusInResult with existing status
+	resExisting := EnsureStatusInResult([]byte(`{"status":{"error":1,"text":"Fail"}}`))
+	if string(resExisting) != `{"status":{"error":1,"text":"Fail"}}` {
+		t.Errorf("EnsureStatusInResult(existing) = %s, expected no change", string(resExisting))
+	}
+
+	// 5. Test EnsureStatusInResult with missing status but other fields
+	resMissing := EnsureStatusInResult([]byte(`{"data":"value"}`))
+	var merged map[string]interface{}
+	if err := json.Unmarshal(resMissing, &merged); err != nil {
+		t.Fatalf("EnsureStatusInResult(missing) produced invalid JSON: %v", err)
+	}
+	if merged["data"].(string) != "value" {
+		t.Errorf("EnsureStatusInResult(missing) lost existing data field")
+	}
+	statusMap, ok := merged["status"].(map[string]interface{})
+	if !ok || statusMap["error"].(float64) != 0 || statusMap["text"].(string) != "Success" {
+		t.Errorf("EnsureStatusInResult(missing) failed to inject status: %s", string(resMissing))
+	}
+
+	// 6. Test EnsureStatusInResult with invalid JSON Array
+	resArray := EnsureStatusInResult([]byte(`["invalid", "array"]`))
+	if string(resArray) != `{"status":{"error":1,"text":"Invalid downstream response"}}` {
+		t.Errorf("EnsureStatusInResult(array) = %s, expected error status", string(resArray))
+	}
+}
+
+func TestBuildDeviceResultObject_AuthoritativeOverwrite(t *testing.T) {
+	serial := "AUTH-SERIAL"
+	configUUID := "42"
+	natsResult := "failure"
+	errCode := "5"
+	msg := "Firmware verification failed"
+
+	// Payload attempting to spoof success and overwrite serial/uuid
+	payload := []byte(`{
+		"serial": "WRONG-SERIAL",
+		"uuid": 999,
+		"status": {
+			"error": 0,
+			"text": "Success"
+		},
+		"extra_field": "preserved"
+	}`)
+
+	res := BuildDeviceResultObject(serial, configUUID, natsResult, errCode, msg, payload)
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(res, &raw); err != nil {
+		t.Fatalf("failed to unmarshal output: %v", err)
+	}
+
+	if raw["serial"] != "AUTH-SERIAL" {
+		t.Errorf("expected serial 'AUTH-SERIAL', got %v", raw["serial"])
+	}
+	// json.Unmarshal parses numbers as float64
+	if raw["uuid"].(float64) != 42 {
+		t.Errorf("expected uuid 42, got %v", raw["uuid"])
+	}
+	if raw["extra_field"] != "preserved" {
+		t.Errorf("expected extra_field to be preserved, got %v", raw["extra_field"])
+	}
+
+	statusObj, ok := raw["status"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected status object")
+	}
+
+	if statusObj["error"].(float64) != 5 {
+		t.Errorf("expected status.error to be overwritten to 5, got %v", statusObj["error"])
+	}
+	if statusObj["text"] != "Firmware verification failed" {
+		t.Errorf("expected status.text to be overwritten, got %v", statusObj["text"])
 	}
 }

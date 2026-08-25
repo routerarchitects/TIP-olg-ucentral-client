@@ -47,21 +47,18 @@ const (
 	CommandUpgrade   CommandType = "upgrade"
 	CommandScript    CommandType = "script"
 	CommandReboot    CommandType = "reboot"
-	CommandQuery     CommandType = "query"
 
-	ActionUpgrade         ActionType = "upgrade"
-	ActionReboot          ActionType = "reboot"
-	ActionExecute         ActionType = "execute"
-	ActionFactory         ActionType = "factory"
-	ActionCertupdate      ActionType = "certupdate"
-	ActionReenroll        ActionType = "reenroll"
-	ActionRTTY            ActionType = "rtty"
-	ActionLeds            ActionType = "leds"
-	ActionTrace           ActionType = "trace"
-	ActionPing            ActionType = "ping"
-	ActionTelemetry       ActionType = "telemetry"
-	ActionCapabilitiesGet ActionType = "capabilities.get"
-	ActionStatusGet       ActionType = "status.get"
+	ActionUpgrade    ActionType = "upgrade"
+	ActionReboot     ActionType = "reboot"
+	ActionExecute    ActionType = "execute"
+	ActionFactory    ActionType = "factory"
+	ActionCertupdate ActionType = "certupdate"
+	ActionReenroll   ActionType = "reenroll"
+	ActionRTTY       ActionType = "rtty"
+	ActionLeds       ActionType = "leds"
+	ActionTrace      ActionType = "trace"
+	ActionPing       ActionType = "ping"
+	ActionTelemetry  ActionType = "telemetry"
 
 	ScriptTypeShell  ScriptType = "shell"
 	ScriptTypeUcode  ScriptType = "ucode"
@@ -72,7 +69,7 @@ const (
 
 func (c CommandType) Valid() bool {
 	switch c {
-	case CommandAction, CommandConfigure, CommandExecute, CommandUpgrade, CommandScript, CommandReboot, CommandQuery:
+	case CommandAction, CommandConfigure, CommandExecute, CommandUpgrade, CommandScript, CommandReboot:
 		return true
 	default:
 		return false
@@ -81,7 +78,7 @@ func (c CommandType) Valid() bool {
 
 func (a ActionType) Valid() bool {
 	switch a {
-	case ActionUpgrade, ActionReboot, ActionExecute, ActionFactory, ActionCertupdate, ActionReenroll, ActionRTTY, ActionLeds, ActionTrace, ActionPing, ActionTelemetry, ActionCapabilitiesGet, ActionStatusGet:
+	case ActionUpgrade, ActionReboot, ActionExecute, ActionFactory, ActionCertupdate, ActionReenroll, ActionRTTY, ActionLeds, ActionTrace, ActionPing, ActionTelemetry:
 		return true
 	default:
 		return false
@@ -101,7 +98,7 @@ func ValidCommandAction(command CommandType, action ActionType) bool {
 	switch command {
 	case CommandAction:
 		// Generic transport commands can carry any valid operational action except queries
-		return action.Valid() && action != ActionCapabilitiesGet && action != ActionStatusGet
+		return action.Valid()
 	case CommandExecute, CommandScript:
 		return action == ActionExecute
 	case CommandUpgrade:
@@ -110,8 +107,6 @@ func ValidCommandAction(command CommandType, action ActionType) bool {
 		return action == ActionReboot
 	case CommandConfigure:
 		return action == ""
-	case CommandQuery:
-		return action == ActionCapabilitiesGet || action == ActionStatusGet
 	default:
 		return false
 	}

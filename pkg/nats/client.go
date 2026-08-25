@@ -51,6 +51,10 @@ func NewNATSClient(agentName string, cfg config.NATSConfig, onStateChange func(c
 			StatusPattern:    "status.%s",
 			HealthPattern:    "health.%s",
 		},
+		KV: agentcore.KVConfig{
+			Bucket:           "cfg_desired",
+			AutoCreateBucket: true,
+		},
 	}
 
 	clientOpts := []agentcore.Option{

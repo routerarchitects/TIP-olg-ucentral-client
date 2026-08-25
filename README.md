@@ -50,14 +50,16 @@ The uCentral client is a lightweight, Go-based gateway daemon that bridges a clo
   "nats": {
     "servers": ["tls://127.0.0.1:4222"],
     "credentials_file": "/etc/ucentral/nats.creds",
-    "ca_file": "/etc/ucentral/ca.pem"
+    "ca_file": "/etc/ucentral/ca.pem",
+    "target": "vyos"
   },
   "queues": {
     "ws_writer_capacity": 500,
     "emergency_capacity": 100,
     "nats_publish_capacity": 100,
     "command_result_capacity": 50,
-    "telemetry_capacity": 500
+    "telemetry_capacity": 500,
+    "max_concurrent_requests": 100
   }
 }
 ```
@@ -75,16 +77,27 @@ The daemon utilizes container environment variables to configure operational tim
 *   `OLG_TIMEOUT_ACTION_DEFAULT` (Default: `60s`): Maximum downstream response wait time for all other standard actions (e.g., `ping`, `reboot`, `factory`).
 
 **Cache TTLs:**
-*   `OLG_CACHE_TTL_DEFAULT` (Default: `2m`): TTL for read-only diagnostics (`ping`, `trace`, `telemetry`, `capabilities.get`, `status.get`).
+*   `OLG_CACHE_TTL_DEFAULT` (Default: `2m`): TTL for read-only diagnostics (`ping`, `trace`, `telemetry`).
 *   `OLG_CACHE_TTL_CONFIGURE` (Default: `5m`): TTL for `configure`.
 *   `OLG_CACHE_TTL_LEDS` (Default: `5m`): TTL for `leds`.
 *   `OLG_CACHE_TTL_REBOOT` (Default: `10m`): TTL for `reboot`.
-*   `OLG_CACHE_TTL_REMOTE_ACCESS` (Default: `10m`): TTL for `remote_access`.
+*   `OLG_CACHE_TTL_REMOTE_ACCESS` (Default: `10m`): TTL for `rtty`.
 *   `OLG_CACHE_TTL_FACTORY` (Default: `30m`): TTL for `factory`.
 *   `OLG_CACHE_TTL_CERTUPDATE` (Default: `30m`): TTL for `certupdate`.
 *   `OLG_CACHE_TTL_REENROLL` (Default: `30m`): TTL for `reenroll`.
 *   `OLG_CACHE_TTL_SCRIPT` (Default: `30m`): TTL for `script`.
 *   `OLG_CACHE_TTL_UPGRADE` (Default: `60m`): TTL for `upgrade` (measured from completion).
+
+**Payload Size Limits (in bytes):**
+*   `OLG_PAYLOAD_LIMIT_ABSOLUTE` (Default: `12582912` / `12MB`): Absolute transport boundary size limit. Incoming frames exceeding this length are rejected immediately before any allocations or parsing.
+*   `OLG_PAYLOAD_LIMIT_CONFIGURE` (Default: `10485760` / `10MB`): Maximum permitted payload size for `configure` methods.
+*   `OLG_PAYLOAD_LIMIT_CERTUPDATE` (Default: `2097152` / `2MB`): Maximum permitted payload size for `certupdate` methods.
+*   `OLG_PAYLOAD_LIMIT_SCRIPT` (Default: `1048576` / `1MB`): Maximum permitted payload size for `script` methods.
+*   `OLG_PAYLOAD_LIMIT_DEFAULT` (Default: `11534336` / `11MB`): Default payload size limit for all other JSON-RPC methods.
+
+**Security:**
+*   `OLG_TRACE_UPLOAD_ALLOWED_URL` (Default: `unset`): Sets the explicitly allowed destination base URL for `trace` uploads. Must be an HTTPS URI (e.g. `https://openwifi.wlan.local:16003`). Incoming trace requests with a `uri` that does not match this scheme, hostname, and port are rejected. If omitted, all trace uploads are strictly disabled for security.
+
 
 ---
 

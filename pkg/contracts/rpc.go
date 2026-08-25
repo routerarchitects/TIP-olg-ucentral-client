@@ -16,8 +16,9 @@ type Validatable interface {
 	Validate() error
 }
 
-// Standard JSON-RPC 2.0 Error Codes
+// Standard JSON-RPC 2.0 Error Codes and Version
 const (
+	JSONRPCVersion    = "2.0"
 	ErrParse          = -32700
 	ErrInvalidRequest = -32600
 	ErrMethodNotFound = -32601
@@ -40,6 +41,16 @@ type JSONRPCRequest struct {
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params"`
 	ID      json.RawMessage `json:"id,omitempty"`
+}
+
+// ValidResponseID returns the request ID if it is a valid JSON-RPC 2.0 identifier
+// (String, Number, or Null). If the ID is invalid (e.g. an Object or Array),
+// it returns json.RawMessage("null") to ensure the error response is compliant.
+func ValidResponseID(id json.RawMessage) json.RawMessage {
+	if len(id) > 0 && validateJSONRPCID(id, true) == nil {
+		return id
+	}
+	return json.RawMessage("null")
 }
 
 func validateJSONRPCID(id json.RawMessage, allowNull bool) error {
@@ -81,8 +92,8 @@ func validateJSONRPCID(id json.RawMessage, allowNull bool) error {
 
 // Validate ensures the JSONRPCRequest strictly follows JSON-RPC 2.0 invariants.
 func (r *JSONRPCRequest) Validate() error {
-	if r.JSONRPC != "2.0" {
-		return errors.New("invalid jsonrpc version, must be '2.0'")
+	if r.JSONRPC != JSONRPCVersion {
+		return fmt.Errorf("invalid jsonrpc version, must be %q", JSONRPCVersion)
 	}
 	if r.Method == "" {
 		return errors.New("method must be specified")
@@ -119,10 +130,28 @@ type JSONRPCResponse struct {
 	ID      json.RawMessage `json:"id"`
 }
 
+func (r JSONRPCResponse) MarshalJSON() ([]byte, error) {
+	type Alias JSONRPCResponse
+	aux := &struct {
+		Alias
+	}{
+		Alias: Alias(r),
+	}
+	if aux.Error != nil {
+		aux.Result = nil
+	} else if len(aux.Result) == 0 {
+		aux.Result = json.RawMessage(`{"status":{"error":0,"text":"Success"}}`)
+	}
+	if len(aux.ID) == 0 {
+		aux.ID = json.RawMessage("null")
+	}
+	return json.Marshal(aux)
+}
+
 // Validate ensures the JSONRPCResponse strictly follows JSON-RPC 2.0 invariants.
 func (r *JSONRPCResponse) Validate() error {
-	if r.JSONRPC != "2.0" {
-		return errors.New("invalid jsonrpc version, must be '2.0'")
+	if r.JSONRPC != JSONRPCVersion {
+		return fmt.Errorf("invalid jsonrpc version, must be %q", JSONRPCVersion)
 	}
 	if len(r.ID) == 0 {
 		return errors.New("id is required in JSON-RPC responses")
@@ -147,7 +176,7 @@ func (r *JSONRPCResponse) Validate() error {
 	if !hasResult && !hasError {
 		return errors.New("response must contain either result or error")
 	}
-	if r.ID == nil || len(r.ID) == 0 {
+	if len(r.ID) == 0 {
 		return errors.New("id must be included in the response")
 	}
 	return nil
@@ -254,7 +283,7 @@ func (r *CloudConfigureRequest) Validate() error {
 			return fmt.Errorf("decompression error: %w", err)
 		}
 
-		if uint32(len(bytesRead)) != r.CompressSz {
+		if len(bytesRead) != int(r.CompressSz) {
 			return errors.New("decompressed size does not match compress_sz")
 		}
 
@@ -447,6 +476,9 @@ type CloudTraceRequest struct {
 	URI       string `json:"uri,omitempty"`
 }
 
+// AllowedTraceUploadURL must be set at startup by the host application to restrict trace URIs
+var AllowedTraceUploadURL *url.URL
+
 func (r *CloudTraceRequest) Validate() error {
 	if r.Serial == "" {
 		return errors.New("serial is required")
@@ -462,12 +494,24 @@ func (r *CloudTraceRequest) Validate() error {
 	}
 
 	if r.URI != "" {
+		if AllowedTraceUploadURL == nil {
+			return errors.New("trace upload is disabled (OLG_TRACE_UPLOAD_ALLOWED_URL is not configured)")
+		}
 		u, err := url.ParseRequestURI(r.URI)
 		if err != nil || u.Host == "" {
 			return errors.New("invalid trace URI")
 		}
 		if !strings.EqualFold(u.Scheme, "https") {
 			return fmt.Errorf("trace URI scheme must be https, got %q", u.Scheme)
+		}
+		if !strings.EqualFold(u.Hostname(), AllowedTraceUploadURL.Hostname()) {
+			return fmt.Errorf("trace URI hostname %q is not allowed", u.Hostname())
+		}
+		if u.Port() != AllowedTraceUploadURL.Port() {
+			return fmt.Errorf("trace URI port %q is not allowed", u.Port())
+		}
+		if u.User != nil {
+			return errors.New("trace URI must not contain credentials")
 		}
 	}
 	return nil
@@ -480,9 +524,6 @@ type CloudTraceStatus struct {
 }
 
 func (r *CloudTraceStatus) Validate() error {
-	if r.Text == "" {
-		return errors.New("text is required")
-	}
 	return nil
 }
 
@@ -837,4 +878,101 @@ func (r *CloudConfigureRequest) EffectiveUUID() (int64, error) {
 		return 0, errors.New("decompressed payload must be a JSON configuration object")
 	}
 	return innerReq.UUID, nil
+}
+
+// EnsureStatusInResult wraps or injects "status":{"error":0,"text":"Success"}
+// into the response payload if it is missing, to satisfy the uCentral gateway.
+func EnsureStatusInResult(payload []byte) json.RawMessage {
+	if len(payload) == 0 || string(payload) == "null" {
+		return json.RawMessage(`{"status":{"error":0,"text":"Success"}}`)
+	}
+
+	var obj map[string]interface{}
+	if err := json.Unmarshal(payload, &obj); err != nil {
+		return json.RawMessage(`{"status":{"error":1,"text":"Invalid downstream response"}}`)
+	}
+
+	if _, hasStatus := obj["status"]; hasStatus {
+		return payload
+	}
+
+	obj["status"] = map[string]interface{}{
+		"error": 0,
+		"text":  "Success",
+	}
+
+	merged, err := json.Marshal(obj)
+	if err != nil {
+		return json.RawMessage(`{"status":{"error":1,"text":"Failed to inject status"}}`)
+	}
+	return merged
+}
+
+// BuildDeviceResultObject constructs the standard uCentral device result payload,
+// combining the serial, configuration UUID, status object, and any extra payload.
+func BuildDeviceResultObject(serial, configUUID string, natsResult string, errCode string, msg string, payload []byte) json.RawMessage {
+	resMap := make(map[string]interface{})
+	if len(payload) > 0 && string(payload) != "null" {
+		_ = json.Unmarshal(payload, &resMap)
+	}
+
+	// 1. Force authoritative serial
+	resMap["serial"] = serial
+
+	// 2. Force authoritative uuid (if available)
+	if configUUID != "" {
+		var uuidInt int64
+		if _, err := fmt.Sscan(configUUID, &uuidInt); err == nil {
+			resMap["uuid"] = uuidInt
+		} else {
+			resMap["uuid"] = configUUID
+		}
+	}
+
+	// 3. Ensure status object is present
+	var statusObj map[string]interface{}
+	if existingStatus, hasStatus := resMap["status"]; hasStatus {
+		if sMap, ok := existingStatus.(map[string]interface{}); ok {
+			statusObj = sMap
+		}
+	}
+	if statusObj == nil {
+		statusObj = make(map[string]interface{})
+		resMap["status"] = statusObj
+	}
+
+	// 4. Force authoritative status fields
+	var errCodeVal int
+	if natsResult == "success" {
+		errCodeVal = 0
+	} else {
+		if _, err := fmt.Sscan(errCode, &errCodeVal); err != nil {
+			errCodeVal = 1 // Default to 1 (ErrAppFailure)
+		}
+	}
+	statusObj["error"] = errCodeVal
+
+	if msg != "" {
+		statusObj["text"] = msg
+	} else if natsResult == "success" {
+		statusObj["text"] = "Success"
+	} else {
+		statusObj["text"] = "Failed"
+	}
+
+	marshaled, _ := json.Marshal(resMap)
+	return json.RawMessage(marshaled)
+}
+
+// FormatLogID returns a bounded string representation of a JSON-RPC ID for safe logging.
+// IDs longer than 128 bytes are truncated to prevent log amplification from oversized inputs.
+func FormatLogID(id []byte) string {
+	if len(id) == 0 {
+		return "null"
+	}
+	s := string(id)
+	if len(s) > 128 {
+		return s[:128] + "...(truncated)"
+	}
+	return s
 }

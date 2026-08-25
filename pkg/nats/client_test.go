@@ -31,7 +31,7 @@ func TestSubmitConfigure_Validation(t *testing.T) {
 	client := &NATSClient{target: "target-123"}
 
 	// Test nil context
-	err := client.SubmitConfigure(nil, &agentcore.ConfigureCommand{Target: "target-123", Version: contracts.EnvelopeVersion, RPCID: "123", Payload: []byte("{}"), Timestamp: time.Now()})
+	err := client.SubmitConfigure(context.TODO(), &agentcore.ConfigureCommand{Target: "target-123", Version: contracts.EnvelopeVersion, RPCID: "123", Payload: []byte("{}"), Timestamp: time.Now()})
 	if err == nil {
 		t.Fatal("expected error for nil context")
 	}
@@ -411,8 +411,8 @@ func TestValidateResultEnvelope_Negative(t *testing.T) {
 				Version:     contracts.EnvelopeVersion,
 				Target:      "target-123",
 				Result:      string(contracts.ResultSuccess),
-				CommandType: string(contracts.CommandQuery),
-				Action:      string(contracts.ActionReboot),
+				CommandType: string(contracts.CommandReboot),
+				Action:      string(contracts.ActionExecute),
 				RPCID:       "rpc-123",
 				Timestamp:   time.Now(),
 			},

@@ -3,6 +3,7 @@ package config
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -10,12 +11,14 @@ import (
 	"time"
 
 	"github.com/nats-io/jwt/v2"
+	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/contracts"
 )
 
 const (
 	DefaultCompressionThresholdBytes = 2048
 	DefaultMaxFrameSizeBytes         = 11 * 1024 * 1024
 	DefaultMaxConsecutiveFrameErrors = 20
+	DefaultMaxConcurrentRequests     = 100
 )
 
 func checkFile(path, name string) error {
@@ -64,6 +67,7 @@ type NATSConfig struct {
 	ClientCertFile        string   `json:"client_cert_file,omitempty"`
 	ClientKeyFile         string   `json:"client_key_file,omitempty"`
 	AllowInsecureLocalDev bool     `json:"allow_insecure_local_dev,omitempty"`
+	Target                string   `json:"target,omitempty"`
 }
 
 type QueueConfig struct {
@@ -72,6 +76,7 @@ type QueueConfig struct {
 	NATSPublishCapacity   int `json:"nats_publish_capacity"`
 	CommandResultCapacity int `json:"command_result_capacity"`
 	TelemetryCapacity     int `json:"telemetry_capacity"`
+	MaxConcurrentRequests int `json:"max_concurrent_requests"`
 }
 
 type Config struct {
@@ -154,6 +159,13 @@ func (c *CloudConfig) Validate() error {
 }
 
 func (n *NATSConfig) Validate() error {
+	if n.Target == "" {
+		n.Target = "vyos"
+	}
+	if err := contracts.ValidateNATSTarget(n.Target); err != nil {
+		return fmt.Errorf("nats target is invalid: %w", err)
+	}
+
 	if len(n.Servers) == 0 {
 		return fmt.Errorf("nats servers are required")
 	}
@@ -266,6 +278,11 @@ func (q *QueueConfig) Validate() error {
 	if q.TelemetryCapacity <= 0 {
 		return fmt.Errorf("telemetry_capacity must be positive")
 	}
+	if q.MaxConcurrentRequests == 0 {
+		q.MaxConcurrentRequests = DefaultMaxConcurrentRequests
+	} else if q.MaxConcurrentRequests < 0 {
+		return fmt.Errorf("max_concurrent_requests must be positive")
+	}
 	return nil
 }
 
@@ -363,7 +380,7 @@ func (c CacheTTLConfig) TTLForMethod(method string) int {
 		return c.LEDs
 	case "reboot":
 		return c.Reboot
-	case "remoteaccess", "remote_access":
+	case "remoteaccess", "remote_access", "rtty":
 		return c.RemoteAccess
 	case "factory":
 		return c.Factory
@@ -378,4 +395,19 @@ func (c CacheTTLConfig) TTLForMethod(method string) int {
 	default:
 		return c.Default
 	}
+}
+
+// LoadConfig reads the configuration file from the specified path and unmarshals it.
+func LoadConfig(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read configuration file: %w", err)
+	}
+
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("failed to parse configuration JSON: %w", err)
+	}
+
+	return &cfg, nil
 }

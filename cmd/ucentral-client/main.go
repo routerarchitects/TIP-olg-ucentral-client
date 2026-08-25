@@ -93,7 +93,6 @@ func main() {
 		payloadLimitScript:     components.PayloadLimitScript,
 		payloadLimitCertUpdate: components.PayloadLimitCertUpdate,
 		payloadLimitDefault:    components.PayloadLimitDefault,
-		traceUploadAllowedURL:  components.TraceUploadAllowedURL,
 		target:                 cfg.NATS.Target,
 	}
 
@@ -221,7 +220,6 @@ type AppComponents struct {
 	PayloadLimitScript     int
 	PayloadLimitCertUpdate int
 	PayloadLimitDefault    int
-	TraceUploadAllowedURL  *url.URL
 }
 
 func processNATSResult(ctx context.Context, res agentcore.ResultEnvelope, components *AppComponents, serial string) {
@@ -541,7 +539,6 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 		PayloadLimitScript:     payloadLimitScript,
 		PayloadLimitCertUpdate: payloadLimitCertUpdate,
 		PayloadLimitDefault:    payloadLimitDefault,
-		TraceUploadAllowedURL:  traceUploadAllowedURL,
 	}, nil
 }
 

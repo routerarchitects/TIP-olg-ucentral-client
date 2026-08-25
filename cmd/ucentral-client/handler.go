@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -91,7 +90,6 @@ type frameHandler struct {
 	payloadLimitScript     int
 	payloadLimitCertUpdate int
 	payloadLimitDefault    int
-	traceUploadAllowedURL  *url.URL
 	target                 string
 }
 

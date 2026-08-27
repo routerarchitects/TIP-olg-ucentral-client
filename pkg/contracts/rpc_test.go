@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -1005,5 +1006,44 @@ func TestBuildDeviceResultObject_AuthoritativeOverwrite(t *testing.T) {
 	}
 	if statusObj["text"] != "Firmware verification failed" {
 		t.Errorf("expected status.text to be overwritten, got %v", statusObj["text"])
+	}
+}
+
+func TestValidation_DynamicLimits(t *testing.T) {
+	// Configure small custom limits
+	SetLimits(1024, 512, 256)
+	defer SetLimits(10*1024*1024, 2*1024*1024, 1024*1024)
+
+	// 1. Configure Limit Test (1025 bytes exceeds 1024 bytes limit)
+	cfgReq := CloudConfigureRequest{
+		Compress64: "eJz...",
+		CompressSz: 1025,
+	}
+	err := cfgReq.Validate()
+	if err == nil || !strings.Contains(err.Error(), "compress_sz exceeds configured limit of 1024 bytes") {
+		t.Errorf("expected validation failure for oversized configure payload, got %v", err)
+	}
+
+	// 2. CertUpdate Limit Test (513 bytes exceeds 512 bytes limit)
+	certPayload := base64.StdEncoding.EncodeToString(make([]byte, 513))
+	certReq := CloudCertupdateRequest{
+		Serial:       "12345",
+		Certificates: certPayload,
+	}
+	err = certReq.Validate()
+	if err == nil || !strings.Contains(err.Error(), "certificates exceed configured limit of 512 bytes") {
+		t.Errorf("expected validation failure for oversized certupdate, got %v", err)
+	}
+
+	// 3. Script Limit Test (257 bytes exceeds 256 bytes limit)
+	scriptPayload := base64.StdEncoding.EncodeToString(make([]byte, 257))
+	scriptReq := CloudScriptRequest{
+		Serial: "12345",
+		Type:   ScriptTypeShell,
+		Script: scriptPayload,
+	}
+	err = scriptReq.Validate()
+	if err == nil || !strings.Contains(err.Error(), "script exceeds configured limit of 256 bytes") {
+		t.Errorf("expected validation failure for oversized script, got %v", err)
 	}
 }

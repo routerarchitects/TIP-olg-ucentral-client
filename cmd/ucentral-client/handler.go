@@ -372,7 +372,10 @@ func (h *frameHandler) executeTransaction(ctx context.Context, tx *reqmgr.Transa
 		// Extract configuration UUID from params (supports both compressed and uncompressed)
 		var cfgReq contracts.CloudConfigureRequest
 		if err := json.Unmarshal(params, &cfgReq); err == nil {
-			if effUUID, err := cfgReq.EffectiveUUID(); err == nil && effUUID > 0 {
+			effUUID, err := cfgReq.EffectiveUUID()
+			if err != nil {
+				log.Printf("[FrameHandler] EffectiveUUID failed: %v", err)
+			} else if effUUID > 0 {
 				uuidVal = strconv.FormatInt(effUUID, 10)
 			}
 		}

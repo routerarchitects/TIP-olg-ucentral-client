@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/routerarchitects/TIP-olg-ucentral-schema/validator/go"
 )
@@ -256,6 +257,40 @@ type CloudConfigureRequest struct {
 	Config     json.RawMessage `json:"config,omitempty"`
 	Compress64 string          `json:"compress_64,omitempty"`
 	CompressSz uint32          `json:"compress_sz,omitempty"`
+
+	decompressedOnce sync.Once
+	decompressedData []byte
+	decompressedErr  error
+}
+
+func (r *CloudConfigureRequest) decompress() ([]byte, error) {
+	r.decompressedOnce.Do(func() {
+		if r.Compress64 == "" {
+			r.decompressedErr = errors.New("compress_64 is required")
+			return
+		}
+		decoder := base64.NewDecoder(base64.StdEncoding, strings.NewReader(r.Compress64))
+		zlibReader, err := zlib.NewReader(decoder)
+		if err != nil {
+			r.decompressedErr = fmt.Errorf("invalid zlib data: %w", err)
+			return
+		}
+		defer zlibReader.Close()
+
+		limitReader := io.LimitReader(zlibReader, int64(r.CompressSz)+1)
+		bytesRead, err := io.ReadAll(limitReader)
+		if err != nil {
+			r.decompressedErr = fmt.Errorf("decompression error: %w", err)
+			return
+		}
+
+		if len(bytesRead) != int(r.CompressSz) {
+			r.decompressedErr = errors.New("decompressed size does not match compress_sz")
+			return
+		}
+		r.decompressedData = bytesRead
+	})
+	return r.decompressedData, r.decompressedErr
 }
 
 func (r *CloudConfigureRequest) Validate() error {
@@ -302,25 +337,12 @@ func (r *CloudConfigureRequest) Validate() error {
 		}
 		limit := getConfigureLimit()
 		if int(r.CompressSz) > limit {
-			return fmt.Errorf("compress_sz exceeds %d MB limit", limit/(1024*1024))
+			return fmt.Errorf("compress_sz exceeds configured limit of %d bytes", limit)
 		}
 
-		// Perform deep validation of the compressed payload
-		decoder := base64.NewDecoder(base64.StdEncoding, strings.NewReader(r.Compress64))
-		zlibReader, err := zlib.NewReader(decoder)
+		bytesRead, err := r.decompress()
 		if err != nil {
-			return fmt.Errorf("invalid zlib data: %w", err)
-		}
-		defer zlibReader.Close()
-
-		limitReader := io.LimitReader(zlibReader, int64(r.CompressSz)+1)
-		bytesRead, err := io.ReadAll(limitReader)
-		if err != nil {
-			return fmt.Errorf("decompression error: %w", err)
-		}
-
-		if len(bytesRead) != int(r.CompressSz) {
-			return errors.New("decompressed size does not match compress_sz")
+			return err
 		}
 
 		trimmed := bytes.TrimSpace(bytesRead)
@@ -750,7 +772,7 @@ func (r *CloudCertupdateRequest) Validate() error {
 		return errors.New("certificates payload must not be empty")
 	}
 	if len(bytesRead) > limit {
-		return fmt.Errorf("certificates exceed %d MB decoded limit", limit/(1024*1024))
+		return fmt.Errorf("certificates exceed configured limit of %d bytes", limit)
 	}
 	return nil
 }
@@ -849,7 +871,7 @@ func (r *CloudScriptRequest) Validate() error {
 			return errors.New("decoded script must not be empty")
 		}
 		if len(bytesRead) > limit {
-			return fmt.Errorf("script exceeds %d MB decoded limit", limit/(1024*1024))
+			return fmt.Errorf("script exceeds configured limit of %d bytes", limit)
 		}
 	}
 
@@ -897,17 +919,9 @@ func (r *CloudConfigureRequest) EffectiveUUID() (int64, error) {
 		return 0, errors.New("neither config nor compress_64 is provided")
 	}
 
-	decoder := base64.NewDecoder(base64.StdEncoding, strings.NewReader(r.Compress64))
-	zlibReader, err := zlib.NewReader(decoder)
+	bytesRead, err := r.decompress()
 	if err != nil {
-		return 0, fmt.Errorf("invalid zlib data: %w", err)
-	}
-	defer zlibReader.Close()
-
-	limitReader := io.LimitReader(zlibReader, int64(r.CompressSz)+1)
-	bytesRead, err := io.ReadAll(limitReader)
-	if err != nil {
-		return 0, fmt.Errorf("decompression error: %w", err)
+		return 0, err
 	}
 
 	trimmed := bytes.TrimSpace(bytesRead)

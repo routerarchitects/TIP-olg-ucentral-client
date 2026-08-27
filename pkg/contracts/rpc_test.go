@@ -1087,3 +1087,23 @@ func TestCloudConfigureRequest_EffectiveUUID(t *testing.T) {
 		t.Errorf("expected UUID 1724773800, got %d", uuid)
 	}
 }
+
+func TestCloudConfigureRequest_DifferingUUID(t *testing.T) {
+	// Verify that if the request-level UUID and inner config.uuid differ,
+	// the configuration version UUID (config.uuid) is returned as authoritative.
+	req := CloudConfigureRequest{
+		Serial: "123",
+		UUID:   100,
+		Config: []byte(`{"uuid":200}`),
+	}
+	if err := req.Validate(); err != nil {
+		t.Fatalf("expected validation to pass, got: %v", err)
+	}
+	uuid, err := req.ValidateAndGetUUID()
+	if err != nil {
+		t.Fatalf("ValidateAndGetUUID failed: %v", err)
+	}
+	if uuid != 200 {
+		t.Errorf("expected extracted UUID to be config-level 200, got: %d", uuid)
+	}
+}

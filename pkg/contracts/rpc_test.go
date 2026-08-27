@@ -1132,3 +1132,38 @@ func TestCloudConfigureRequest_DifferingUUID(t *testing.T) {
 		t.Errorf("expected extracted compressed UUID to be config-level 200, got: %d", uuid)
 	}
 }
+
+func TestValidation_FallbackLimitsAndSetLimits(t *testing.T) {
+	// Save original limits
+	origConf := getConfigureLimit()
+	origCert := getCertUpdateLimit()
+	origScript := getScriptLimit()
+
+	// 1. Reset limits to 0 to test fallback defaults (testing requirement 3 fallback behavior)
+	SetLimits(0, 0, 0)
+
+	if getConfigureLimit() != 10*1024*1024 {
+		t.Errorf("expected fallback configure limit of 10MB, got %d", getConfigureLimit())
+	}
+	if getCertUpdateLimit() != 2*1024*1024 {
+		t.Errorf("expected fallback certupdate limit of 2MB, got %d", getCertUpdateLimit())
+	}
+	if getScriptLimit() != 1024*1024 {
+		t.Errorf("expected fallback script limit of 1MB, got %d", getScriptLimit())
+	}
+
+	// 2. Test SetLimits with custom non-default values (testing requirement 2 limits setting)
+	SetLimits(1024, 512, 256)
+	if getConfigureLimit() != 1024 {
+		t.Errorf("expected custom configure limit of 1024, got %d", getConfigureLimit())
+	}
+	if getCertUpdateLimit() != 512 {
+		t.Errorf("expected custom certupdate limit of 512, got %d", getCertUpdateLimit())
+	}
+	if getScriptLimit() != 256 {
+		t.Errorf("expected custom script limit of 256, got %d", getScriptLimit())
+	}
+
+	// Restore original limits for subsequent tests
+	SetLimits(origConf, origCert, origScript)
+}

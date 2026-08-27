@@ -285,10 +285,10 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 	if command == contracts.CommandConfigure {
 		var cfgReq contracts.CloudConfigureRequest
 		if valErr = json.Unmarshal(rpcReq.Params, &cfgReq); valErr == nil {
-			if valErr = cfgReq.Validate(); valErr == nil {
-				if effUUID, err := cfgReq.EffectiveUUID(); err == nil && effUUID > 0 {
-					uuidVal = strconv.FormatInt(effUUID, 10)
-				}
+			var effUUID int64
+			effUUID, valErr = cfgReq.ValidateAndGetUUID()
+			if valErr == nil && effUUID > 0 {
+				uuidVal = strconv.FormatInt(effUUID, 10)
 			}
 		}
 	} else {

@@ -105,11 +105,7 @@ func (n *NATSClient) SubmitConfigure(ctx context.Context, cmd *agentcore.Configu
 	if err := json.Unmarshal(cmd.Payload, &cfgReq); err != nil {
 		return fmt.Errorf("invalid configure payload: %w", err)
 	}
-	if err := cfgReq.Validate(); err != nil {
-		return fmt.Errorf("invalid configure payload: %w", err)
-	}
-
-	payloadUUID, err := cfgReq.EffectiveUUID()
+	payloadUUID, err := cfgReq.ValidateAndGetUUID()
 	if err != nil {
 		return fmt.Errorf("invalid configure payload: %w", err)
 	}

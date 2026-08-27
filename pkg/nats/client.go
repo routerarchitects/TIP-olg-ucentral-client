@@ -96,23 +96,21 @@ func (n *NATSClient) SubmitConfigure(ctx context.Context, cmd *agentcore.Configu
 	if len(cmd.Payload) == 0 {
 		return errors.New("command payload cannot be empty")
 	}
-	// uCentral Payload Validation
-	if err := contracts.ValidateCommandPayload(contracts.CommandConfigure, "", cmd.Payload); err != nil {
-		return fmt.Errorf("invalid configure payload: %w", err)
-	}
-
 	uuid, err := strconv.ParseInt(cmd.UUID, 10, 64)
 	if err != nil || uuid <= 0 {
 		return errors.New("uuid must be a positive int64")
 	}
 
 	var cfgReq contracts.CloudConfigureRequest
-	if err := json.Unmarshal(cmd.Payload, &cfgReq); err == nil {
-		if payloadUUID, err := cfgReq.EffectiveUUID(); err == nil {
-			if payloadUUID != uuid {
-				return fmt.Errorf("envelope UUID %q does not match payload UUID %d", cmd.UUID, payloadUUID)
-			}
-		}
+	if err := json.Unmarshal(cmd.Payload, &cfgReq); err != nil {
+		return fmt.Errorf("invalid configure payload: %w", err)
+	}
+	payloadUUID, err := cfgReq.ValidateAndGetUUID()
+	if err != nil {
+		return fmt.Errorf("invalid configure payload: %w", err)
+	}
+	if payloadUUID != uuid {
+		return fmt.Errorf("envelope UUID %q does not match payload UUID %d", cmd.UUID, payloadUUID)
 	}
 	// Note: We intentionally do NOT restrict cmd.Target == n.target here.
 	// uCentral acts as a 1-to-N gateway for local services.

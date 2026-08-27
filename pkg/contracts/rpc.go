@@ -10,7 +10,53 @@ import (
 	"io"
 	"net/url"
 	"strings"
+	"sync"
+
+	"github.com/routerarchitects/TIP-olg-ucentral-schema/validator/go"
 )
+
+var (
+	limitsMu          sync.RWMutex
+	maxConfigureSize  int
+	maxCertUpdateSize int
+	maxScriptSize     int
+)
+
+// SetLimits initializes the payload limits dynamically from the main program/environment.
+func SetLimits(configure, certUpdate, script int) {
+	limitsMu.Lock()
+	defer limitsMu.Unlock()
+	maxConfigureSize = configure
+	maxCertUpdateSize = certUpdate
+	maxScriptSize = script
+}
+
+func getConfigureLimit() int {
+	limitsMu.RLock()
+	defer limitsMu.RUnlock()
+	if maxConfigureSize > 0 {
+		return maxConfigureSize
+	}
+	return 10 * 1024 * 1024
+}
+
+func getCertUpdateLimit() int {
+	limitsMu.RLock()
+	defer limitsMu.RUnlock()
+	if maxCertUpdateSize > 0 {
+		return maxCertUpdateSize
+	}
+	return 2 * 1024 * 1024
+}
+
+func getScriptLimit() int {
+	limitsMu.RLock()
+	defer limitsMu.RUnlock()
+	if maxScriptSize > 0 {
+		return maxScriptSize
+	}
+	return 1024 * 1024
+}
 
 type Validatable interface {
 	Validate() error
@@ -222,88 +268,119 @@ type CloudConfigureRequest struct {
 	CompressSz uint32          `json:"compress_sz,omitempty"`
 }
 
+func (r *CloudConfigureRequest) decompress() ([]byte, error) {
+	if r.Compress64 == "" {
+		return nil, errors.New("compress_64 is required")
+	}
+	if r.CompressSz == 0 {
+		return nil, errors.New("compress_sz must be greater than zero")
+	}
+	limit := getConfigureLimit()
+	if int(r.CompressSz) > limit {
+		return nil, fmt.Errorf("compress_sz exceeds configured limit of %d bytes", limit)
+	}
+
+	decoder := base64.NewDecoder(base64.StdEncoding, strings.NewReader(r.Compress64))
+	zlibReader, err := zlib.NewReader(decoder)
+	if err != nil {
+		return nil, fmt.Errorf("invalid zlib data: %w", err)
+	}
+	defer zlibReader.Close()
+
+	limitReader := io.LimitReader(zlibReader, int64(r.CompressSz)+1)
+	bytesRead, err := io.ReadAll(limitReader)
+	if err != nil {
+		return nil, fmt.Errorf("decompression error: %w", err)
+	}
+
+	if len(bytesRead) != int(r.CompressSz) {
+		return nil, errors.New("decompressed size does not match compress_sz")
+	}
+	return bytesRead, nil
+}
+
 func (r *CloudConfigureRequest) Validate() error {
+	_, err := r.ValidateAndGetUUID()
+	return err
+}
+
+// ValidateAndGetUUID validates the request and extracts the configuration UUID.
+// It performs validation and decompression in a single, stateless operation.
+func (r *CloudConfigureRequest) ValidateAndGetUUID() (int64, error) {
 	hasConfig := len(r.Config) > 0 && string(r.Config) != "null"
 	hasCompress := r.Compress64 != "" || r.CompressSz > 0
 
 	if hasConfig && hasCompress {
-		return errors.New("cannot provide both config and compress_64")
+		return 0, errors.New("cannot provide both config and compress_64")
 	}
 	if !hasConfig && !hasCompress {
-		return errors.New("must provide either config or compress_64")
+		return 0, errors.New("must provide either config or compress_64")
 	}
 
 	if hasCompress {
 		if r.Serial != "" || r.UUID != 0 || r.When != 0 {
-			return errors.New("outer compressed request must not contain serial, uuid, or when")
+			return 0, errors.New("outer compressed request must not contain serial, uuid, or when")
 		}
 	} else {
 		if r.Serial == "" {
-			return errors.New("serial is required")
+			return 0, errors.New("serial is required")
 		}
 		if r.UUID <= 0 {
-			return errors.New("uuid must be greater than zero")
+			return 0, errors.New("uuid must be greater than zero")
 		}
 		if r.When != 0 {
-			return errors.New("when must be zero for configure")
+			return 0, errors.New("when must be zero for configure")
 		}
 	}
 
 	if hasConfig {
 		trimmed := bytes.TrimSpace(r.Config)
 		if len(trimmed) == 0 || trimmed[0] != '{' {
-			return errors.New("config must be a JSON object")
+			return 0, errors.New("config must be a JSON object")
 		}
-		var config map[string]json.RawMessage
-		if err := json.Unmarshal(trimmed, &config); err != nil {
-			return errors.New("config must contain a valid JSON object")
-		}
-	} else {
-		if r.Compress64 == "" {
-			return errors.New("compress_64 is required")
-		}
-		if r.CompressSz == 0 {
-			return errors.New("compress_sz must be greater than zero")
-		}
-		if r.CompressSz > 10*1024*1024 {
-			return errors.New("compress_sz exceeds 10 MB limit")
+		if err := validator.Validate(trimmed); err != nil {
+			return 0, fmt.Errorf("config schema validation failed: %w", err)
 		}
 
-		// Perform deep validation of the compressed payload
-		decoder := base64.NewDecoder(base64.StdEncoding, strings.NewReader(r.Compress64))
-		zlibReader, err := zlib.NewReader(decoder)
-		if err != nil {
-			return fmt.Errorf("invalid zlib data: %w", err)
+		// Note: The outer request-level UUID represents the cloud gateway's REST command/transaction index.
+		// The inner config-level UUID represents the authoritative version identifier of the configuration payload.
+		// Under the NATS/agentcore contract, ConfigureCommand.UUID must represent the configuration version UUID (config.uuid),
+		// which downstream local agents persist and compare to verify configuration freshness.
+		// These two UUIDs purposefully differ in production payloads generated by the Cloud Gateway.
+		// Therefore, we do not enforce equality between them, and treat the inner config.uuid as authoritative.
+		var configMeta struct {
+			UUID int64 `json:"uuid"`
 		}
-		defer zlibReader.Close()
-
-		limitReader := io.LimitReader(zlibReader, int64(r.CompressSz)+1)
-		bytesRead, err := io.ReadAll(limitReader)
-		if err != nil {
-			return fmt.Errorf("decompression error: %w", err)
+		if err := json.Unmarshal(trimmed, &configMeta); err == nil && configMeta.UUID > 0 {
+			return configMeta.UUID, nil
 		}
-
-		if len(bytesRead) != int(r.CompressSz) {
-			return errors.New("decompressed size does not match compress_sz")
-		}
-
-		trimmed := bytes.TrimSpace(bytesRead)
-		if len(trimmed) == 0 || trimmed[0] != '{' {
-			return errors.New("decompressed payload must be a JSON configuration object")
-		}
-
-		var innerReq CloudConfigureRequest
-		if err := json.Unmarshal(trimmed, &innerReq); err != nil {
-			return errors.New("decompressed payload must be a JSON configuration object")
-		}
-		if innerReq.Compress64 != "" {
-			return errors.New("nested compression is not supported")
-		}
-		if err := innerReq.Validate(); err != nil {
-			return fmt.Errorf("invalid compressed configuration: %w", err)
-		}
+		return r.UUID, nil
 	}
-	return nil
+
+	bytesRead, err := r.decompress()
+	if err != nil {
+		return 0, err
+	}
+
+	trimmed := bytes.TrimSpace(bytesRead)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return 0, errors.New("decompressed payload must be a JSON configuration object")
+	}
+
+	var innerReq CloudConfigureRequest
+	if err := json.Unmarshal(trimmed, &innerReq); err != nil {
+		return 0, errors.New("decompressed payload must be a JSON configuration object")
+	}
+	if innerReq.Compress64 != "" {
+		return 0, errors.New("nested compression is not supported")
+	}
+
+	// Validate inner request and get its configuration UUID
+	innerUUID, err := innerReq.ValidateAndGetUUID()
+	if err != nil {
+		return 0, fmt.Errorf("invalid compressed configuration: %w", err)
+	}
+	return innerUUID, nil
 }
 
 type ConfigureRejectedParameter struct {
@@ -703,7 +780,8 @@ func (r *CloudCertupdateRequest) Validate() error {
 	}
 
 	decoder := base64.NewDecoder(base64.StdEncoding, strings.NewReader(r.Certificates))
-	limitReader := io.LimitReader(decoder, 2*1024*1024+1)
+	limit := getCertUpdateLimit()
+	limitReader := io.LimitReader(decoder, int64(limit)+1)
 
 	bytesRead, err := io.ReadAll(limitReader)
 	if err != nil {
@@ -712,8 +790,8 @@ func (r *CloudCertupdateRequest) Validate() error {
 	if len(bytesRead) == 0 {
 		return errors.New("certificates payload must not be empty")
 	}
-	if len(bytesRead) > 2*1024*1024 {
-		return errors.New("certificates exceed 2 MB decoded limit")
+	if len(bytesRead) > limit {
+		return fmt.Errorf("certificates exceed configured limit of %d bytes", limit)
 	}
 	return nil
 }
@@ -801,7 +879,8 @@ func (r *CloudScriptRequest) Validate() error {
 
 	if r.Script != "" {
 		decoder := base64.NewDecoder(base64.StdEncoding, strings.NewReader(r.Script))
-		limitReader := io.LimitReader(decoder, 1024*1024+1)
+		limit := getScriptLimit()
+		limitReader := io.LimitReader(decoder, int64(limit)+1)
 
 		bytesRead, err := io.ReadAll(limitReader)
 		if err != nil {
@@ -810,8 +889,8 @@ func (r *CloudScriptRequest) Validate() error {
 		if len(bytesRead) == 0 {
 			return errors.New("decoded script must not be empty")
 		}
-		if len(bytesRead) > 1024*1024 {
-			return errors.New("script exceeds 1 MB decoded limit")
+		if len(bytesRead) > limit {
+			return fmt.Errorf("script exceeds configured limit of %d bytes", limit)
 		}
 	}
 
@@ -853,23 +932,21 @@ type CloudScriptResponse struct {
 
 func (r *CloudConfigureRequest) EffectiveUUID() (int64, error) {
 	if len(r.Config) > 0 && string(r.Config) != "null" {
+		var configMeta struct {
+			UUID int64 `json:"uuid"`
+		}
+		if err := json.Unmarshal(r.Config, &configMeta); err == nil && configMeta.UUID > 0 {
+			return configMeta.UUID, nil
+		}
 		return r.UUID, nil
 	}
 	if r.Compress64 == "" {
 		return 0, errors.New("neither config nor compress_64 is provided")
 	}
 
-	decoder := base64.NewDecoder(base64.StdEncoding, strings.NewReader(r.Compress64))
-	zlibReader, err := zlib.NewReader(decoder)
+	bytesRead, err := r.decompress()
 	if err != nil {
-		return 0, fmt.Errorf("invalid zlib data: %w", err)
-	}
-	defer zlibReader.Close()
-
-	limitReader := io.LimitReader(zlibReader, int64(r.CompressSz)+1)
-	bytesRead, err := io.ReadAll(limitReader)
-	if err != nil {
-		return 0, fmt.Errorf("decompression error: %w", err)
+		return 0, err
 	}
 
 	trimmed := bytes.TrimSpace(bytesRead)
@@ -877,7 +954,7 @@ func (r *CloudConfigureRequest) EffectiveUUID() (int64, error) {
 	if err := json.Unmarshal(trimmed, &innerReq); err != nil {
 		return 0, errors.New("decompressed payload must be a JSON configuration object")
 	}
-	return innerReq.UUID, nil
+	return innerReq.EffectiveUUID()
 }
 
 // EnsureStatusInResult wraps or injects "status":{"error":0,"text":"Success"}

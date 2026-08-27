@@ -6,9 +6,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/url"
-
+	"strings"
 	"testing"
 )
+
+func init() {
+	SetLimits(10*1024*1024, 2*1024*1024, 1024*1024)
+}
 
 func TestTC_CON_002_ErrorMappings(t *testing.T) {
 	rpcErr, err := NewInternalJSONRPCError(ErrServiceUnavailable, "Internal Error")
@@ -194,6 +198,41 @@ func TestTC_CON_006_ConfigureRequest(t *testing.T) {
 			wantError: true,
 		},
 		{
+			name:      "Invalid config schema (uuid is string)",
+			req:       CloudConfigureRequest{Serial: "123", UUID: 1, Config: []byte(`{"uuid": "not-an-integer"}`)},
+			wantError: true,
+		},
+		{
+			name:      "Invalid config schema (interfaces is not array)",
+			req:       CloudConfigureRequest{Serial: "123", UUID: 1, Config: []byte(`{"uuid": 1724773800, "interfaces": "not-an-array"}`)},
+			wantError: true,
+		},
+		{
+			name:      "Invalid config schema (invalid interface role enum)",
+			req:       CloudConfigureRequest{Serial: "123", UUID: 1, Config: []byte(`{"uuid": 1724773800, "interfaces": [{"name": "wan", "role": "invalid-role"}]}`)},
+			wantError: true,
+		},
+		{
+			name:      "Invalid config schema (invalid interface mtu maximum)",
+			req:       CloudConfigureRequest{Serial: "123", UUID: 1, Config: []byte(`{"uuid": 1724773800, "interfaces": [{"name": "wan", "role": "upstream", "mtu": 2000}]}`)},
+			wantError: true,
+		},
+		{
+			name:      "Invalid config schema (invalid interface ethernet macaddr format)",
+			req:       CloudConfigureRequest{Serial: "123", UUID: 1, Config: []byte(`{"uuid": 1724773800, "interfaces": [{"name": "wan", "role": "upstream", "ethernet": [{"macaddr": "invalid-mac"}]}]}`)},
+			wantError: true,
+		},
+		{
+			name:      "Valid config schema structure",
+			req:       CloudConfigureRequest{Serial: "123", UUID: 1, Config: []byte(`{"uuid": 1724773800, "interfaces": [{"name": "wan", "role": "upstream"}]}`)},
+			wantError: false,
+		},
+		{
+			name:      "Valid config schema structure with ethernet macaddr",
+			req:       CloudConfigureRequest{Serial: "123", UUID: 1, Config: []byte(`{"uuid": 1724773800, "interfaces": [{"name": "wan", "role": "upstream", "ethernet": [{"macaddr": "00:11:22:33:44:55"}]}]}`)},
+			wantError: false,
+		},
+		{
 			name:      "Nonzero when",
 			req:       CloudConfigureRequest{Serial: "123", UUID: 1, When: 12345, Config: []byte(`{}`)},
 			wantError: true,
@@ -313,6 +352,41 @@ func TestTC_CON_007_CompressedConfigureRequest(t *testing.T) {
 		})
 	}
 
+	t.Run("Compressed payload with inner config schema error", func(t *testing.T) {
+		var buf bytes.Buffer
+		zw := zlib.NewWriter(&buf)
+		innerJSON := `{"serial":"123","uuid":1,"config":{"uuid":"not-an-integer"}}`
+		zw.Write([]byte(innerJSON))
+		zw.Close()
+
+		b64Payload := base64.StdEncoding.EncodeToString(buf.Bytes())
+		req := CloudConfigureRequest{
+			Compress64: b64Payload,
+			CompressSz: uint32(len(innerJSON)),
+		}
+		err := req.Validate()
+		if err == nil {
+			t.Error("expected error for invalid schema inside compressed payload config")
+		}
+	})
+
+	t.Run("Compressed payload with valid inner config schema", func(t *testing.T) {
+		var buf bytes.Buffer
+		zw := zlib.NewWriter(&buf)
+		innerJSON := `{"serial":"123","uuid":1,"config":{"uuid":1724773800,"interfaces":[{"name":"wan","role":"upstream"}]}}`
+		zw.Write([]byte(innerJSON))
+		zw.Close()
+
+		b64Payload := base64.StdEncoding.EncodeToString(buf.Bytes())
+		req := CloudConfigureRequest{
+			Compress64: b64Payload,
+			CompressSz: uint32(len(innerJSON)),
+		}
+		err := req.Validate()
+		if err != nil {
+			t.Fatalf("expected valid schema config inside compressed payload to pass, got: %v", err)
+		}
+	})
 }
 
 func TestTC_ACT_001_RebootRequest(t *testing.T) {
@@ -933,4 +1007,163 @@ func TestBuildDeviceResultObject_AuthoritativeOverwrite(t *testing.T) {
 	if statusObj["text"] != "Firmware verification failed" {
 		t.Errorf("expected status.text to be overwritten, got %v", statusObj["text"])
 	}
+}
+
+func TestValidation_DefaultLimitsExceeded(t *testing.T) {
+	// Tests that the default limit checks work without mutating global variables during testing.
+
+	// 1. Configure Limit Test (11 MB exceeds default 10 MB limit)
+	cfgReq := CloudConfigureRequest{
+		Compress64: "eJz...",
+		CompressSz: 11 * 1024 * 1024,
+	}
+	err := cfgReq.Validate()
+	if err == nil || !strings.Contains(err.Error(), "compress_sz exceeds configured limit of 10485760 bytes") {
+		t.Errorf("expected validation failure for oversized configure payload, got %v", err)
+	}
+
+	// 2. CertUpdate Limit Test (2 MB + 1 byte exceeds default 2 MB limit)
+	certPayload := base64.StdEncoding.EncodeToString(make([]byte, 2*1024*1024+1))
+	certReq := CloudCertupdateRequest{
+		Serial:       "12345",
+		Certificates: certPayload,
+	}
+	err = certReq.Validate()
+	if err == nil || !strings.Contains(err.Error(), "certificates exceed configured limit of 2097152 bytes") {
+		t.Errorf("expected validation failure for oversized certupdate, got %v", err)
+	}
+
+	// 3. Script Limit Test (1 MB + 1 byte exceeds default 1 MB limit)
+	scriptPayload := base64.StdEncoding.EncodeToString(make([]byte, 1024*1024+1))
+	scriptReq := CloudScriptRequest{
+		Serial: "12345",
+		Type:   ScriptTypeShell,
+		Script: scriptPayload,
+	}
+	err = scriptReq.Validate()
+	if err == nil || !strings.Contains(err.Error(), "script exceeds configured limit of 1048576 bytes") {
+		t.Errorf("expected validation failure for oversized script, got %v", err)
+	}
+}
+
+func TestCloudConfigureRequest_EffectiveUUID(t *testing.T) {
+	// 1. Uncompressed configuration
+	uncompressedReq := CloudConfigureRequest{
+		Serial: "123",
+		UUID:   1724773800,
+		Config: []byte(`{"uuid":1724773800}`),
+	}
+	if err := uncompressedReq.Validate(); err != nil {
+		t.Fatalf("uncompressed validation failed: %v", err)
+	}
+	uuid, err := uncompressedReq.EffectiveUUID()
+	if err != nil {
+		t.Fatalf("uncompressed EffectiveUUID failed: %v", err)
+	}
+	if uuid != 1724773800 {
+		t.Errorf("expected UUID 1724773800, got %d", uuid)
+	}
+
+	// 2. Compressed configuration
+	var buf bytes.Buffer
+	zw := zlib.NewWriter(&buf)
+	innerJSON := `{"serial":"123","uuid":1724773800,"config":{"uuid":1724773800}}`
+	_, _ = zw.Write([]byte(innerJSON))
+	_ = zw.Close()
+	compress64 := base64.StdEncoding.EncodeToString(buf.Bytes())
+
+	compressedReq := CloudConfigureRequest{
+		Compress64: compress64,
+		CompressSz: uint32(len(innerJSON)),
+	}
+	if err := compressedReq.Validate(); err != nil {
+		t.Fatalf("compressed validation failed: %v", err)
+	}
+	uuid, err = compressedReq.EffectiveUUID()
+	if err != nil {
+		t.Fatalf("compressed EffectiveUUID failed: %v", err)
+	}
+	if uuid != 1724773800 {
+		t.Errorf("expected UUID 1724773800, got %d", uuid)
+	}
+}
+
+func TestCloudConfigureRequest_DifferingUUID(t *testing.T) {
+	// Verify that if the request-level UUID and inner config.uuid differ,
+	// the configuration version UUID (config.uuid) is returned as authoritative.
+
+	// 1. Uncompressed Case
+	req := CloudConfigureRequest{
+		Serial: "123",
+		UUID:   100,
+		Config: []byte(`{"uuid":200}`),
+	}
+	if err := req.Validate(); err != nil {
+		t.Fatalf("expected validation to pass, got: %v", err)
+	}
+	uuid, err := req.ValidateAndGetUUID()
+	if err != nil {
+		t.Fatalf("ValidateAndGetUUID failed: %v", err)
+	}
+	if uuid != 200 {
+		t.Errorf("expected extracted UUID to be config-level 200, got: %d", uuid)
+	}
+
+	// 2. Compressed Case
+	var buf bytes.Buffer
+	zw := zlib.NewWriter(&buf)
+	innerJSON := `{"serial":"123","uuid":100,"config":{"uuid":200}}`
+	_, _ = zw.Write([]byte(innerJSON))
+	_ = zw.Close()
+	compress64 := base64.StdEncoding.EncodeToString(buf.Bytes())
+
+	compressedReq := CloudConfigureRequest{
+		Compress64: compress64,
+		CompressSz: uint32(len(innerJSON)),
+	}
+	if err := compressedReq.Validate(); err != nil {
+		t.Fatalf("expected compressed validation to pass, got: %v", err)
+	}
+	uuid, err = compressedReq.ValidateAndGetUUID()
+	if err != nil {
+		t.Fatalf("compressed ValidateAndGetUUID failed: %v", err)
+	}
+	if uuid != 200 {
+		t.Errorf("expected extracted compressed UUID to be config-level 200, got: %d", uuid)
+	}
+}
+
+func TestValidation_FallbackLimitsAndSetLimits(t *testing.T) {
+	// Save original limits
+	origConf := getConfigureLimit()
+	origCert := getCertUpdateLimit()
+	origScript := getScriptLimit()
+
+	// 1. Reset limits to 0 to test fallback defaults (testing requirement 3 fallback behavior)
+	SetLimits(0, 0, 0)
+
+	if getConfigureLimit() != 10*1024*1024 {
+		t.Errorf("expected fallback configure limit of 10MB, got %d", getConfigureLimit())
+	}
+	if getCertUpdateLimit() != 2*1024*1024 {
+		t.Errorf("expected fallback certupdate limit of 2MB, got %d", getCertUpdateLimit())
+	}
+	if getScriptLimit() != 1024*1024 {
+		t.Errorf("expected fallback script limit of 1MB, got %d", getScriptLimit())
+	}
+
+	// 2. Test SetLimits with custom non-default values (testing requirement 2 limits setting)
+	SetLimits(1024, 512, 256)
+	if getConfigureLimit() != 1024 {
+		t.Errorf("expected custom configure limit of 1024, got %d", getConfigureLimit())
+	}
+	if getCertUpdateLimit() != 512 {
+		t.Errorf("expected custom certupdate limit of 512, got %d", getCertUpdateLimit())
+	}
+	if getScriptLimit() != 256 {
+		t.Errorf("expected custom script limit of 256, got %d", getScriptLimit())
+	}
+
+	// Restore original limits for subsequent tests
+	SetLimits(origConf, origCert, origScript)
 }

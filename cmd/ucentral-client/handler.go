@@ -280,12 +280,27 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 	}
 
 	// Validate method-specific parameter payload (Validate incoming API inputs)
-	if err := contracts.ValidateCommandPayload(command, action, rpcReq.Params); err != nil {
-		log.Printf("[FrameHandler] Invalid parameters for method %s: %v\n", rpcReq.Method, err)
+	var uuidVal = "0"
+	var valErr error
+	if command == contracts.CommandConfigure {
+		var cfgReq contracts.CloudConfigureRequest
+		if valErr = json.Unmarshal(rpcReq.Params, &cfgReq); valErr == nil {
+			var effUUID int64
+			effUUID, valErr = cfgReq.ValidateAndGetUUID()
+			if valErr == nil && effUUID > 0 {
+				uuidVal = strconv.FormatInt(effUUID, 10)
+			}
+		}
+	} else {
+		valErr = contracts.ValidateCommandPayload(command, action, rpcReq.Params)
+	}
+
+	if valErr != nil {
+		log.Printf("[FrameHandler] Invalid parameters for method %s: %v\n", rpcReq.Method, valErr)
 		if !isNotification {
 			errObj := &contracts.JSONRPCError{
 				Code:    contracts.ErrInvalidParams,
-				Message: fmt.Sprintf("Invalid parameters: %v", err),
+				Message: fmt.Sprintf("Invalid parameters: %v", valErr),
 			}
 			h.pushResponse(frame.SessionID, rpcReq.ID, nil, errObj)
 		}
@@ -342,12 +357,12 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 	}
 
 	// Handle transaction execution asynchronously (or synchronously for queries)
-	go h.executeTransaction(ctx, tx, command, action, rpcReq.Params)
+	go h.executeTransaction(ctx, tx, command, action, rpcReq.Params, uuidVal)
 
 	return websocket.FrameAccepted, nil
 }
 
-func (h *frameHandler) executeTransaction(ctx context.Context, tx *reqmgr.Transaction, command contracts.CommandType, action contracts.ActionType, params json.RawMessage) {
+func (h *frameHandler) executeTransaction(ctx context.Context, tx *reqmgr.Transaction, command contracts.CommandType, action contracts.ActionType, params json.RawMessage, uuidVal string) {
 	// Enforce NATS dispatch buffer limits asynchronously after admission (REQ-012).
 	// Note: This temporarily consumes request capacity before failing if the buffer is full.
 	select {
@@ -364,18 +379,6 @@ func (h *frameHandler) executeTransaction(ctx context.Context, tx *reqmgr.Transa
 		log.Printf("[FrameHandler] MarkPreparingDispatch failed: %v\n", err)
 		h.failTransaction(tx, fmt.Errorf("failed to enter preparing dispatch: %w", err))
 		return
-	}
-
-	// Retrieve capabilities uuid for configure or default checks
-	uuidVal := "0"
-	if command == contracts.CommandConfigure {
-		// Extract configuration UUID from params
-		var cfgParams struct {
-			UUID int64 `json:"uuid"`
-		}
-		if err := json.Unmarshal(params, &cfgParams); err == nil && cfgParams.UUID > 0 {
-			uuidVal = strconv.FormatInt(cfgParams.UUID, 10)
-		}
 	}
 
 	// Prepare NATS dispatch payload and transition to PendingPublish

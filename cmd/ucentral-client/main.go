@@ -445,6 +445,9 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 		}
 	}
 
+	// Publish the final clamped limits to the contracts validation package
+	contracts.SetLimits(payloadLimitConfigure, payloadLimitCertUpdate, payloadLimitScript)
+
 	var traceUploadAllowedURL *url.URL
 	traceUploadAllowedURLStr := os.Getenv("OLG_TRACE_UPLOAD_ALLOWED_URL")
 	if traceUploadAllowedURLStr != "" {

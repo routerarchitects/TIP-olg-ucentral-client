@@ -1091,6 +1091,8 @@ func TestCloudConfigureRequest_EffectiveUUID(t *testing.T) {
 func TestCloudConfigureRequest_DifferingUUID(t *testing.T) {
 	// Verify that if the request-level UUID and inner config.uuid differ,
 	// the configuration version UUID (config.uuid) is returned as authoritative.
+	
+	// 1. Uncompressed Case
 	req := CloudConfigureRequest{
 		Serial: "123",
 		UUID:   100,
@@ -1105,5 +1107,28 @@ func TestCloudConfigureRequest_DifferingUUID(t *testing.T) {
 	}
 	if uuid != 200 {
 		t.Errorf("expected extracted UUID to be config-level 200, got: %d", uuid)
+	}
+
+	// 2. Compressed Case
+	var buf bytes.Buffer
+	zw := zlib.NewWriter(&buf)
+	innerJSON := `{"serial":"123","uuid":100,"config":{"uuid":200}}`
+	_, _ = zw.Write([]byte(innerJSON))
+	_ = zw.Close()
+	compress64 := base64.StdEncoding.EncodeToString(buf.Bytes())
+
+	compressedReq := CloudConfigureRequest{
+		Compress64: compress64,
+		CompressSz: uint32(len(innerJSON)),
+	}
+	if err := compressedReq.Validate(); err != nil {
+		t.Fatalf("expected compressed validation to pass, got: %v", err)
+	}
+	uuid, err = compressedReq.ValidateAndGetUUID()
+	if err != nil {
+		t.Fatalf("compressed ValidateAndGetUUID failed: %v", err)
+	}
+	if uuid != 200 {
+		t.Errorf("expected extracted compressed UUID to be config-level 200, got: %d", uuid)
 	}
 }

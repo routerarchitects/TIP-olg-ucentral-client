@@ -10,9 +10,7 @@ import (
 )
 
 func init() {
-	MaxConfigureSize = 10 * 1024 * 1024
-	MaxCertUpdateSize = 2 * 1024 * 1024
-	MaxScriptSize = 1024 * 1024
+	SetLimits(10 * 1024 * 1024, 2 * 1024 * 1024, 1024 * 1024)
 }
 
 func TestTC_CON_002_ErrorMappings(t *testing.T) {

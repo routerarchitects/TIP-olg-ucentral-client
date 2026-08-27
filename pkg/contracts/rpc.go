@@ -15,28 +15,35 @@ import (
 )
 
 var (
-	MaxConfigureSize  int
-	MaxCertUpdateSize int
-	MaxScriptSize     int
+	maxConfigureSize  int
+	maxCertUpdateSize int
+	maxScriptSize     int
 )
 
+// SetLimits initializes the payload limits dynamically from the main program/environment.
+func SetLimits(configure, certUpdate, script int) {
+	maxConfigureSize = configure
+	maxCertUpdateSize = certUpdate
+	maxScriptSize = script
+}
+
 func getConfigureLimit() int {
-	if MaxConfigureSize > 0 {
-		return MaxConfigureSize
+	if maxConfigureSize > 0 {
+		return maxConfigureSize
 	}
 	return 10 * 1024 * 1024
 }
 
 func getCertUpdateLimit() int {
-	if MaxCertUpdateSize > 0 {
-		return MaxCertUpdateSize
+	if maxCertUpdateSize > 0 {
+		return maxCertUpdateSize
 	}
 	return 2 * 1024 * 1024
 }
 
 func getScriptLimit() int {
-	if MaxScriptSize > 0 {
-		return MaxScriptSize
+	if maxScriptSize > 0 {
+		return maxScriptSize
 	}
 	return 1024 * 1024
 }

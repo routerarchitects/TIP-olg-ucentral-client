@@ -425,9 +425,6 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 		payloadLimitDefault = payloadLimitAbsolute
 	}
 
-	contracts.MaxConfigureSize = payloadLimitConfigure
-	contracts.MaxCertUpdateSize = payloadLimitCertUpdate
-	contracts.MaxScriptSize = payloadLimitScript
 
 	// Validate absolute limit against WebSocket transport maximum frame size
 	wsMaxFrame := cfg.Cloud.MaxFrameSizeBytes
@@ -448,6 +445,9 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 			payloadLimitDefault = payloadLimitAbsolute
 		}
 	}
+
+	// Publish the final clamped limits to the contracts validation package
+	contracts.SetLimits(payloadLimitConfigure, payloadLimitCertUpdate, payloadLimitScript)
 
 	var traceUploadAllowedURL *url.URL
 	traceUploadAllowedURLStr := os.Getenv("OLG_TRACE_UPLOAD_ALLOWED_URL")

@@ -256,6 +256,8 @@ type CloudConfigureRequest struct {
 	Config     json.RawMessage `json:"config,omitempty"`
 	Compress64 string          `json:"compress_64,omitempty"`
 	CompressSz uint32          `json:"compress_sz,omitempty"`
+
+	effectiveUUID int64
 }
 
 func (r *CloudConfigureRequest) decompress() ([]byte, error) {
@@ -316,6 +318,7 @@ func (r *CloudConfigureRequest) Validate() error {
 		if err := validator.Validate(trimmed); err != nil {
 			return fmt.Errorf("config schema validation failed: %w", err)
 		}
+		r.effectiveUUID = r.UUID
 	} else {
 		if r.Compress64 == "" {
 			return errors.New("compress_64 is required")
@@ -348,6 +351,7 @@ func (r *CloudConfigureRequest) Validate() error {
 		if err := innerReq.Validate(); err != nil {
 			return fmt.Errorf("invalid compressed configuration: %w", err)
 		}
+		r.effectiveUUID = innerReq.UUID
 	}
 	return nil
 }
@@ -902,6 +906,9 @@ type CloudScriptResponse struct {
 func (r *CloudConfigureRequest) EffectiveUUID() (int64, error) {
 	if len(r.Config) > 0 && string(r.Config) != "null" {
 		return r.UUID, nil
+	}
+	if r.effectiveUUID > 0 {
+		return r.effectiveUUID, nil
 	}
 	if r.Compress64 == "" {
 		return 0, errors.New("neither config nor compress_64 is provided")

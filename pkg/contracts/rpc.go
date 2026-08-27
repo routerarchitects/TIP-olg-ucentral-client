@@ -341,7 +341,7 @@ func (r *CloudConfigureRequest) ValidateAndGetUUID() (int64, error) {
 		if err := validator.Validate(trimmed); err != nil {
 			return 0, fmt.Errorf("config schema validation failed: %w", err)
 		}
-		
+
 		var configMeta struct {
 			UUID int64 `json:"uuid"`
 		}
@@ -368,7 +368,7 @@ func (r *CloudConfigureRequest) ValidateAndGetUUID() (int64, error) {
 	if innerReq.Compress64 != "" {
 		return 0, errors.New("nested compression is not supported")
 	}
-	
+
 	// Validate inner request and get its configuration UUID
 	innerUUID, err := innerReq.ValidateAndGetUUID()
 	if err != nil {

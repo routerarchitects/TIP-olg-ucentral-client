@@ -10,7 +10,36 @@ import (
 	"io"
 	"net/url"
 	"strings"
+
+	"github.com/routerarchitects/TIP-olg-ucentral-schema/validator/go"
 )
+
+var (
+	MaxConfigureSize  int
+	MaxCertUpdateSize int
+	MaxScriptSize     int
+)
+
+func getConfigureLimit() int {
+	if MaxConfigureSize > 0 {
+		return MaxConfigureSize
+	}
+	return 10 * 1024 * 1024
+}
+
+func getCertUpdateLimit() int {
+	if MaxCertUpdateSize > 0 {
+		return MaxCertUpdateSize
+	}
+	return 2 * 1024 * 1024
+}
+
+func getScriptLimit() int {
+	if MaxScriptSize > 0 {
+		return MaxScriptSize
+	}
+	return 1024 * 1024
+}
 
 type Validatable interface {
 	Validate() error
@@ -254,9 +283,8 @@ func (r *CloudConfigureRequest) Validate() error {
 		if len(trimmed) == 0 || trimmed[0] != '{' {
 			return errors.New("config must be a JSON object")
 		}
-		var config map[string]json.RawMessage
-		if err := json.Unmarshal(trimmed, &config); err != nil {
-			return errors.New("config must contain a valid JSON object")
+		if err := validator.Validate(trimmed); err != nil {
+			return fmt.Errorf("config schema validation failed: %w", err)
 		}
 	} else {
 		if r.Compress64 == "" {
@@ -265,8 +293,9 @@ func (r *CloudConfigureRequest) Validate() error {
 		if r.CompressSz == 0 {
 			return errors.New("compress_sz must be greater than zero")
 		}
-		if r.CompressSz > 10*1024*1024 {
-			return errors.New("compress_sz exceeds 10 MB limit")
+		limit := getConfigureLimit()
+		if int(r.CompressSz) > limit {
+			return fmt.Errorf("compress_sz exceeds %d MB limit", limit/(1024*1024))
 		}
 
 		// Perform deep validation of the compressed payload
@@ -703,7 +732,8 @@ func (r *CloudCertupdateRequest) Validate() error {
 	}
 
 	decoder := base64.NewDecoder(base64.StdEncoding, strings.NewReader(r.Certificates))
-	limitReader := io.LimitReader(decoder, 2*1024*1024+1)
+	limit := getCertUpdateLimit()
+	limitReader := io.LimitReader(decoder, int64(limit)+1)
 
 	bytesRead, err := io.ReadAll(limitReader)
 	if err != nil {
@@ -712,8 +742,8 @@ func (r *CloudCertupdateRequest) Validate() error {
 	if len(bytesRead) == 0 {
 		return errors.New("certificates payload must not be empty")
 	}
-	if len(bytesRead) > 2*1024*1024 {
-		return errors.New("certificates exceed 2 MB decoded limit")
+	if len(bytesRead) > limit {
+		return fmt.Errorf("certificates exceed %d MB decoded limit", limit/(1024*1024))
 	}
 	return nil
 }
@@ -801,7 +831,8 @@ func (r *CloudScriptRequest) Validate() error {
 
 	if r.Script != "" {
 		decoder := base64.NewDecoder(base64.StdEncoding, strings.NewReader(r.Script))
-		limitReader := io.LimitReader(decoder, 1024*1024+1)
+		limit := getScriptLimit()
+		limitReader := io.LimitReader(decoder, int64(limit)+1)
 
 		bytesRead, err := io.ReadAll(limitReader)
 		if err != nil {
@@ -810,8 +841,8 @@ func (r *CloudScriptRequest) Validate() error {
 		if len(bytesRead) == 0 {
 			return errors.New("decoded script must not be empty")
 		}
-		if len(bytesRead) > 1024*1024 {
-			return errors.New("script exceeds 1 MB decoded limit")
+		if len(bytesRead) > limit {
+			return fmt.Errorf("script exceeds %d MB decoded limit", limit/(1024*1024))
 		}
 	}
 

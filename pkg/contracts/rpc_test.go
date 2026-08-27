@@ -6,9 +6,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/url"
-
 	"testing"
 )
+
+func init() {
+	MaxConfigureSize = 10 * 1024 * 1024
+	MaxCertUpdateSize = 2 * 1024 * 1024
+	MaxScriptSize = 1024 * 1024
+}
 
 func TestTC_CON_002_ErrorMappings(t *testing.T) {
 	rpcErr, err := NewInternalJSONRPCError(ErrServiceUnavailable, "Internal Error")
@@ -194,6 +199,41 @@ func TestTC_CON_006_ConfigureRequest(t *testing.T) {
 			wantError: true,
 		},
 		{
+			name:      "Invalid config schema (uuid is string)",
+			req:       CloudConfigureRequest{Serial: "123", UUID: 1, Config: []byte(`{"uuid": "not-an-integer"}`)},
+			wantError: true,
+		},
+		{
+			name:      "Invalid config schema (interfaces is not array)",
+			req:       CloudConfigureRequest{Serial: "123", UUID: 1, Config: []byte(`{"uuid": 1724773800, "interfaces": "not-an-array"}`)},
+			wantError: true,
+		},
+		{
+			name:      "Invalid config schema (invalid interface role enum)",
+			req:       CloudConfigureRequest{Serial: "123", UUID: 1, Config: []byte(`{"uuid": 1724773800, "interfaces": [{"name": "wan", "role": "invalid-role"}]}`)},
+			wantError: true,
+		},
+		{
+			name:      "Invalid config schema (invalid interface mtu maximum)",
+			req:       CloudConfigureRequest{Serial: "123", UUID: 1, Config: []byte(`{"uuid": 1724773800, "interfaces": [{"name": "wan", "role": "upstream", "mtu": 2000}]}`)},
+			wantError: true,
+		},
+		{
+			name:      "Invalid config schema (invalid interface ethernet macaddr format)",
+			req:       CloudConfigureRequest{Serial: "123", UUID: 1, Config: []byte(`{"uuid": 1724773800, "interfaces": [{"name": "wan", "role": "upstream", "ethernet": [{"macaddr": "invalid-mac"}]}]}`)},
+			wantError: true,
+		},
+		{
+			name:      "Valid config schema structure",
+			req:       CloudConfigureRequest{Serial: "123", UUID: 1, Config: []byte(`{"uuid": 1724773800, "interfaces": [{"name": "wan", "role": "upstream"}]}`)},
+			wantError: false,
+		},
+		{
+			name:      "Valid config schema structure with ethernet macaddr",
+			req:       CloudConfigureRequest{Serial: "123", UUID: 1, Config: []byte(`{"uuid": 1724773800, "interfaces": [{"name": "wan", "role": "upstream", "ethernet": [{"macaddr": "00:11:22:33:44:55"}]}]}`)},
+			wantError: false,
+		},
+		{
 			name:      "Nonzero when",
 			req:       CloudConfigureRequest{Serial: "123", UUID: 1, When: 12345, Config: []byte(`{}`)},
 			wantError: true,
@@ -313,6 +353,41 @@ func TestTC_CON_007_CompressedConfigureRequest(t *testing.T) {
 		})
 	}
 
+	t.Run("Compressed payload with inner config schema error", func(t *testing.T) {
+		var buf bytes.Buffer
+		zw := zlib.NewWriter(&buf)
+		innerJSON := `{"serial":"123","uuid":1,"config":{"uuid":"not-an-integer"}}`
+		zw.Write([]byte(innerJSON))
+		zw.Close()
+
+		b64Payload := base64.StdEncoding.EncodeToString(buf.Bytes())
+		req := CloudConfigureRequest{
+			Compress64: b64Payload,
+			CompressSz: uint32(len(innerJSON)),
+		}
+		err := req.Validate()
+		if err == nil {
+			t.Error("expected error for invalid schema inside compressed payload config")
+		}
+	})
+
+	t.Run("Compressed payload with valid inner config schema", func(t *testing.T) {
+		var buf bytes.Buffer
+		zw := zlib.NewWriter(&buf)
+		innerJSON := `{"serial":"123","uuid":1,"config":{"uuid":1724773800,"interfaces":[{"name":"wan","role":"upstream"}]}}`
+		zw.Write([]byte(innerJSON))
+		zw.Close()
+
+		b64Payload := base64.StdEncoding.EncodeToString(buf.Bytes())
+		req := CloudConfigureRequest{
+			Compress64: b64Payload,
+			CompressSz: uint32(len(innerJSON)),
+		}
+		err := req.Validate()
+		if err != nil {
+			t.Fatalf("expected valid schema config inside compressed payload to pass, got: %v", err)
+		}
+	})
 }
 
 func TestTC_ACT_001_RebootRequest(t *testing.T) {

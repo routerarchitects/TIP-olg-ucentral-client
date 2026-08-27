@@ -1,13 +1,18 @@
 package main
 
 import (
+	"bytes"
+	"compress/zlib"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/contracts"
+	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/nats"
 	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/queues"
 	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/reqmgr"
 	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/websocket"
@@ -397,4 +402,82 @@ func TestFrameHandler_Notifications(t *testing.T) {
 		t.Errorf("expected FrameRejectedKeepConnection for remote_access notification, got %v", disp)
 	}
 	assertNoQueuedResponse(t, scheduler, "remote_access notification")
+}
+
+func TestFrameHandler_CompressedConfigureUUID(t *testing.T) {
+	// Initialize frame handler with a test buffer capacity of 10
+	h, _, scheduler, _ := setupTestHandler(t, 10)
+
+	// Set up contracts package variable for tests
+	contracts.MaxConfigureSize = 10 * 1024 * 1024
+
+	// Initialize natsClient (without agentClient) so it returns "agentClient is not initialized"
+	// if envelope UUID validation passes.
+	h.SetNATSClient(&nats.NATSClient{})
+
+	// Generate valid compressed inner JSON configuration
+	var buf bytes.Buffer
+	zw := zlib.NewWriter(&buf)
+	innerJSON := `{"serial":"001122334455","uuid":1724773800,"config":{"uuid":1724773800}}`
+	_, _ = zw.Write([]byte(innerJSON))
+	_ = zw.Close()
+	compress64 := base64.StdEncoding.EncodeToString(buf.Bytes())
+
+	// JSON-RPC Configure frame containing compressed payload
+	payloadJSON := fmt.Sprintf(`{
+		"jsonrpc": "2.0",
+		"method": "configure",
+		"id": 42,
+		"params": {
+			"compress_64": "%s",
+			"compress_sz": %d
+		}
+	}`, compress64, len(innerJSON))
+
+	frame := websocket.InboundFrame{
+		SessionID: "sess-configure-compressed",
+		Type:      1,
+		Payload:   []byte(payloadJSON),
+	}
+
+	disp, err := h.HandleFrame(context.Background(), frame)
+	if err != nil {
+		t.Fatalf("HandleFrame failed: %v", err)
+	}
+	if disp != websocket.FrameAccepted {
+		t.Fatalf("Expected FrameAccepted, got %v", disp)
+	}
+
+	// Wait for executeTransaction asynchronous goroutine to finish dispatching to NATS
+	time.Sleep(100 * time.Millisecond)
+
+	// Read transaction response from the priority scheduler
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	outboundMsg, err := scheduler.Next(ctx)
+	if err != nil {
+		t.Fatalf("failed to pop transaction response from scheduler: %v", err)
+	}
+
+	var jsonRPCResponse struct {
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(outboundMsg.Payload, &jsonRPCResponse); err != nil {
+		t.Fatalf("failed to unmarshal JSON-RPC response: %v", err)
+	}
+
+	if jsonRPCResponse.Error == nil {
+		t.Fatal("expected JSON-RPC error response due to uninitialized agentClient, got success")
+	}
+
+	// If the UUID was incorrectly parsed as "0", NATS client ValidateCommandPayload will fail with:
+	// "envelope UUID \"0\" does not match payload UUID 1724773800".
+	// If the UUID is correctly parsed, it should bypass envelope verification and fail with:
+	// "agentClient is not initialized".
+	expectedError := "agentClient is not initialized"
+	if !strings.Contains(jsonRPCResponse.Error.Message, expectedError) {
+		t.Errorf("Expected error containing %q, got: %q", expectedError, jsonRPCResponse.Error.Message)
+	}
 }

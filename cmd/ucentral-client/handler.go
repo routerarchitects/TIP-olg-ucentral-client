@@ -369,12 +369,12 @@ func (h *frameHandler) executeTransaction(ctx context.Context, tx *reqmgr.Transa
 	// Retrieve capabilities uuid for configure or default checks
 	uuidVal := "0"
 	if command == contracts.CommandConfigure {
-		// Extract configuration UUID from params
-		var cfgParams struct {
-			UUID int64 `json:"uuid"`
-		}
-		if err := json.Unmarshal(params, &cfgParams); err == nil && cfgParams.UUID > 0 {
-			uuidVal = strconv.FormatInt(cfgParams.UUID, 10)
+		// Extract configuration UUID from params (supports both compressed and uncompressed)
+		var cfgReq contracts.CloudConfigureRequest
+		if err := json.Unmarshal(params, &cfgReq); err == nil {
+			if effUUID, err := cfgReq.EffectiveUUID(); err == nil && effUUID > 0 {
+				uuidVal = strconv.FormatInt(effUUID, 10)
+			}
 		}
 	}
 

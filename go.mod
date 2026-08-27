@@ -9,6 +9,7 @@ require (
 	github.com/nats-io/jwt/v2 v2.8.2
 	github.com/nats-io/nats.go v1.51.0
 	github.com/nats-io/nkeys v0.4.16
+	github.com/routerarchitects/TIP-olg-ucentral-schema v0.0.0-20260827064529-d0d77a83276b
 	golang.org/x/sync v0.22.0
 )
 

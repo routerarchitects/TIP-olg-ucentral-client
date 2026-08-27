@@ -10,11 +10,13 @@ import (
 	"io"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/routerarchitects/TIP-olg-ucentral-schema/validator/go"
 )
 
 var (
+	limitsMu          sync.RWMutex
 	maxConfigureSize  int
 	maxCertUpdateSize int
 	maxScriptSize     int
@@ -22,12 +24,16 @@ var (
 
 // SetLimits initializes the payload limits dynamically from the main program/environment.
 func SetLimits(configure, certUpdate, script int) {
+	limitsMu.Lock()
+	defer limitsMu.Unlock()
 	maxConfigureSize = configure
 	maxCertUpdateSize = certUpdate
 	maxScriptSize = script
 }
 
 func getConfigureLimit() int {
+	limitsMu.RLock()
+	defer limitsMu.RUnlock()
 	if maxConfigureSize > 0 {
 		return maxConfigureSize
 	}
@@ -35,6 +41,8 @@ func getConfigureLimit() int {
 }
 
 func getCertUpdateLimit() int {
+	limitsMu.RLock()
+	defer limitsMu.RUnlock()
 	if maxCertUpdateSize > 0 {
 		return maxCertUpdateSize
 	}
@@ -42,6 +50,8 @@ func getCertUpdateLimit() int {
 }
 
 func getScriptLimit() int {
+	limitsMu.RLock()
+	defer limitsMu.RUnlock()
 	if maxScriptSize > 0 {
 		return maxScriptSize
 	}

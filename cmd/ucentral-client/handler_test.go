@@ -448,9 +448,6 @@ func TestFrameHandler_CompressedConfigureUUID(t *testing.T) {
 		t.Fatalf("Expected FrameAccepted, got %v", disp)
 	}
 
-	// Wait for executeTransaction asynchronous goroutine to finish dispatching to NATS
-	time.Sleep(100 * time.Millisecond)
-
 	// Read transaction response from the priority scheduler
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()

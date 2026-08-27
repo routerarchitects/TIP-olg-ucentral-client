@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/url"
 	"strings"
-	"sync"
 
 	"github.com/routerarchitects/TIP-olg-ucentral-schema/validator/go"
 )
@@ -257,40 +256,29 @@ type CloudConfigureRequest struct {
 	Config     json.RawMessage `json:"config,omitempty"`
 	Compress64 string          `json:"compress_64,omitempty"`
 	CompressSz uint32          `json:"compress_sz,omitempty"`
-
-	decompressedOnce sync.Once
-	decompressedData []byte
-	decompressedErr  error
 }
 
 func (r *CloudConfigureRequest) decompress() ([]byte, error) {
-	r.decompressedOnce.Do(func() {
-		if r.Compress64 == "" {
-			r.decompressedErr = errors.New("compress_64 is required")
-			return
-		}
-		decoder := base64.NewDecoder(base64.StdEncoding, strings.NewReader(r.Compress64))
-		zlibReader, err := zlib.NewReader(decoder)
-		if err != nil {
-			r.decompressedErr = fmt.Errorf("invalid zlib data: %w", err)
-			return
-		}
-		defer zlibReader.Close()
+	if r.Compress64 == "" {
+		return nil, errors.New("compress_64 is required")
+	}
+	decoder := base64.NewDecoder(base64.StdEncoding, strings.NewReader(r.Compress64))
+	zlibReader, err := zlib.NewReader(decoder)
+	if err != nil {
+		return nil, fmt.Errorf("invalid zlib data: %w", err)
+	}
+	defer zlibReader.Close()
 
-		limitReader := io.LimitReader(zlibReader, int64(r.CompressSz)+1)
-		bytesRead, err := io.ReadAll(limitReader)
-		if err != nil {
-			r.decompressedErr = fmt.Errorf("decompression error: %w", err)
-			return
-		}
+	limitReader := io.LimitReader(zlibReader, int64(r.CompressSz)+1)
+	bytesRead, err := io.ReadAll(limitReader)
+	if err != nil {
+		return nil, fmt.Errorf("decompression error: %w", err)
+	}
 
-		if len(bytesRead) != int(r.CompressSz) {
-			r.decompressedErr = errors.New("decompressed size does not match compress_sz")
-			return
-		}
-		r.decompressedData = bytesRead
-	})
-	return r.decompressedData, r.decompressedErr
+	if len(bytesRead) != int(r.CompressSz) {
+		return nil, errors.New("decompressed size does not match compress_sz")
+	}
+	return bytesRead, nil
 }
 
 func (r *CloudConfigureRequest) Validate() error {

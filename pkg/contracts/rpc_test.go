@@ -1091,7 +1091,7 @@ func TestCloudConfigureRequest_EffectiveUUID(t *testing.T) {
 func TestCloudConfigureRequest_DifferingUUID(t *testing.T) {
 	// Verify that if the request-level UUID and inner config.uuid differ,
 	// the configuration version UUID (config.uuid) is returned as authoritative.
-	
+
 	// 1. Uncompressed Case
 	req := CloudConfigureRequest{
 		Serial: "123",

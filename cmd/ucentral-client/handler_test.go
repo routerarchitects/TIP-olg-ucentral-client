@@ -408,8 +408,6 @@ func TestFrameHandler_CompressedConfigureUUID(t *testing.T) {
 	// Initialize frame handler with a test buffer capacity of 10
 	h, _, scheduler, _ := setupTestHandler(t, 10)
 
-	// Set up contracts package variable for tests
-	contracts.SetLimits(10*1024*1024, 2*1024*1024, 1024*1024)
 
 	// Initialize natsClient (without agentClient) so it returns "agentClient is not initialized"
 	// if envelope UUID validation passes.

@@ -1009,41 +1009,81 @@ func TestBuildDeviceResultObject_AuthoritativeOverwrite(t *testing.T) {
 	}
 }
 
-func TestValidation_DynamicLimits(t *testing.T) {
-	// Configure small custom limits
-	SetLimits(1024, 512, 256)
-	defer SetLimits(10*1024*1024, 2*1024*1024, 1024*1024)
+func TestValidation_DefaultLimitsExceeded(t *testing.T) {
+	// Tests that the default limit checks work without mutating global variables during testing.
 
-	// 1. Configure Limit Test (1025 bytes exceeds 1024 bytes limit)
+	// 1. Configure Limit Test (11 MB exceeds default 10 MB limit)
 	cfgReq := CloudConfigureRequest{
 		Compress64: "eJz...",
-		CompressSz: 1025,
+		CompressSz: 11 * 1024 * 1024,
 	}
 	err := cfgReq.Validate()
-	if err == nil || !strings.Contains(err.Error(), "compress_sz exceeds configured limit of 1024 bytes") {
+	if err == nil || !strings.Contains(err.Error(), "compress_sz exceeds configured limit of 10485760 bytes") {
 		t.Errorf("expected validation failure for oversized configure payload, got %v", err)
 	}
 
-	// 2. CertUpdate Limit Test (513 bytes exceeds 512 bytes limit)
-	certPayload := base64.StdEncoding.EncodeToString(make([]byte, 513))
+	// 2. CertUpdate Limit Test (2 MB + 1 byte exceeds default 2 MB limit)
+	certPayload := base64.StdEncoding.EncodeToString(make([]byte, 2*1024*1024+1))
 	certReq := CloudCertupdateRequest{
 		Serial:       "12345",
 		Certificates: certPayload,
 	}
 	err = certReq.Validate()
-	if err == nil || !strings.Contains(err.Error(), "certificates exceed configured limit of 512 bytes") {
+	if err == nil || !strings.Contains(err.Error(), "certificates exceed configured limit of 2097152 bytes") {
 		t.Errorf("expected validation failure for oversized certupdate, got %v", err)
 	}
 
-	// 3. Script Limit Test (257 bytes exceeds 256 bytes limit)
-	scriptPayload := base64.StdEncoding.EncodeToString(make([]byte, 257))
+	// 3. Script Limit Test (1 MB + 1 byte exceeds default 1 MB limit)
+	scriptPayload := base64.StdEncoding.EncodeToString(make([]byte, 1024*1024+1))
 	scriptReq := CloudScriptRequest{
 		Serial: "12345",
 		Type:   ScriptTypeShell,
 		Script: scriptPayload,
 	}
 	err = scriptReq.Validate()
-	if err == nil || !strings.Contains(err.Error(), "script exceeds configured limit of 256 bytes") {
+	if err == nil || !strings.Contains(err.Error(), "script exceeds configured limit of 1048576 bytes") {
 		t.Errorf("expected validation failure for oversized script, got %v", err)
+	}
+}
+
+func TestCloudConfigureRequest_EffectiveUUID(t *testing.T) {
+	// 1. Uncompressed configuration
+	uncompressedReq := CloudConfigureRequest{
+		Serial: "123",
+		UUID:   1724773800,
+		Config: []byte(`{"uuid":1724773800}`),
+	}
+	if err := uncompressedReq.Validate(); err != nil {
+		t.Fatalf("uncompressed validation failed: %v", err)
+	}
+	uuid, err := uncompressedReq.EffectiveUUID()
+	if err != nil {
+		t.Fatalf("uncompressed EffectiveUUID failed: %v", err)
+	}
+	if uuid != 1724773800 {
+		t.Errorf("expected UUID 1724773800, got %d", uuid)
+	}
+
+	// 2. Compressed configuration
+	var buf bytes.Buffer
+	zw := zlib.NewWriter(&buf)
+	innerJSON := `{"serial":"123","uuid":1724773800,"config":{"uuid":1724773800}}`
+	_, _ = zw.Write([]byte(innerJSON))
+	_ = zw.Close()
+	compress64 := base64.StdEncoding.EncodeToString(buf.Bytes())
+
+	compressedReq := CloudConfigureRequest{
+		Compress64: compress64,
+		CompressSz: uint32(len(innerJSON)),
+	}
+	if err := compressedReq.Validate(); err != nil {
+		t.Fatalf("compressed validation failed: %v", err)
+	}
+	uuid, err = compressedReq.EffectiveUUID()
+	if err != nil {
+		t.Fatalf("compressed EffectiveUUID failed: %v", err)
+	}
+	if uuid != 1724773800 {
+		t.Errorf("expected UUID 1724773800, got %d", uuid)
 	}
 }

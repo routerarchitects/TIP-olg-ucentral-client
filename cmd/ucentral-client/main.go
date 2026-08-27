@@ -425,7 +425,6 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 		payloadLimitDefault = payloadLimitAbsolute
 	}
 
-
 	// Validate absolute limit against WebSocket transport maximum frame size
 	wsMaxFrame := cfg.Cloud.MaxFrameSizeBytes
 	if wsMaxFrame > 0 && payloadLimitAbsolute > wsMaxFrame {

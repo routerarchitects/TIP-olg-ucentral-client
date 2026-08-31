@@ -306,7 +306,7 @@ func TestComponent_ConfigureNegative_Rollback(t *testing.T) {
 			"target": "vyos",
 			"command_type": "configure",
 			"uuid": uuid,
-			"result": "failure",
+			"result": "failed",
 			"message": "commit failed",
 			"error_code": "-32603", "timestamp": "2026-08-31T18:00:00Z",
 		}
@@ -344,13 +344,20 @@ func TestComponent_ConfigureNegative_Rollback(t *testing.T) {
 		resp = make(map[string]interface{})
 		json.Unmarshal(respBytes, &resp)
 	}
-	errObj, ok := resp["error"].(map[string]interface{})
+	resultObj, ok := resp["result"].(map[string]interface{})
 	if !ok {
-		t.Fatalf("Expected error object, got %v", string(respBytes))
+		t.Fatalf("Expected result object, got %v", string(respBytes))
+	}
+	statusObj, ok := resultObj["status"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("Expected status object in result, got %v", resultObj)
 	}
 	
-	if int(errObj["code"].(float64)) != -32603 {
-		t.Errorf("Expected error code -32603, got %v", errObj["code"])
+	if int(statusObj["error"].(float64)) != -32603 {
+		t.Errorf("Expected error code -32603, got %v", statusObj["error"])
+	}
+	if statusObj["text"].(string) != "commit failed" {
+		t.Errorf("Expected error text 'commit failed', got %v", statusObj["text"])
 	}
 	
 	cancel()

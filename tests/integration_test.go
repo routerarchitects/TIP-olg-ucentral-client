@@ -485,8 +485,8 @@ func TestComponent_UnknownMethod(t *testing.T) {
 		t.Fatalf("Expected JSON-RPC error for unknown method, got: %v", resp)
 	}
 	code := int(errObj["code"].(float64))
-	if code >= 0 {
-		t.Errorf("Expected negative error code for unknown method, got %d", code)
+	if code != -32601 {
+		t.Errorf("Expected error code -32601 for unknown method, got %d", code)
 	}
 }
 

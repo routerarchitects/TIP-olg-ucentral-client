@@ -817,14 +817,14 @@ func TestComponent_ConcurrentImmediateResult(t *testing.T) {
 
 	respBytes1 := mc.WaitForResponse(t, 10*time.Second)
 	respBytes2 := mc.WaitForResponse(t, 10*time.Second)
-	
+
 	var resp1, resp2 map[string]interface{}
 	json.Unmarshal(respBytes1, &resp1)
 	json.Unmarshal(respBytes2, &resp2)
 
 	id1 := int(resp1["id"].(float64))
 	id2 := int(resp2["id"].(float64))
-	
+
 	if (id1 == 201 && id2 == 202) || (id1 == 202 && id2 == 201) {
 		// success
 	} else {

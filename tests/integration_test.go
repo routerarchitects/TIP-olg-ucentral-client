@@ -29,7 +29,7 @@ func TestMain(m *testing.M) {
 		fmt.Printf("Failed to build client binary for tests: %v\n", err)
 		os.Exit(1)
 	}
-	clientBinPath = "./ucentral-client.testbin"
+	clientBinPath, _ = filepath.Abs("./ucentral-client.testbin")
 	code := m.Run()
 	os.Remove(clientBinPath)
 	os.Exit(code)
@@ -281,6 +281,9 @@ func startClientProcess(t *testing.T, cfg map[string]interface{}) context.Cancel
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, clientBinPath, "-config", writeTempConfig(t, cfg))
+	if capFile, ok := cfg["capabilities_file"].(string); ok {
+		cmd.Dir = filepath.Dir(capFile)
+	}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Start()

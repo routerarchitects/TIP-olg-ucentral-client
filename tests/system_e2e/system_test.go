@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"testing"
+	"time"
 )
 
 type Config struct {
@@ -78,7 +79,10 @@ func getAuthToken(t *testing.T, cfg Config, client *http.Client) string {
 func TestSystemE2E_ConfigSync(t *testing.T) {
 	cfg := loadConfig(t)
 	// We use a 30s timeout here because the Gateway waits for the device to apply the config
-	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
+	client := &http.Client{
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+		Timeout:   30 * time.Second,
+	}
 	token := getAuthToken(t, cfg, client)
 	uniqueConfigUUID := int64(1788177501) // dummy UUID
 

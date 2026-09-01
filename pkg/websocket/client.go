@@ -414,33 +414,6 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn) 
 	}
 
 	log.Printf("ws: connect handshake frame sent")
-
-	if err := conn.SetReadDeadline(deadline); err != nil {
-		log.Printf("ws: failed to set handshake read deadline: %v", err)
-		return HandshakeRetryableFailure
-	}
-
-	_, respPayload, err := conn.ReadMessage()
-	if err != nil {
-		log.Printf("ws: failed to read connect response: %v", err)
-		return HandshakeRetryableFailure
-	}
-
-	var hsResp struct {
-		Result struct {
-			Status string `json:"status"`
-		} `json:"result"`
-	}
-	if err := json.Unmarshal(respPayload, &hsResp); err != nil {
-		log.Printf("ws: failed to parse connect response: %v", err)
-		return HandshakeRetryableFailure
-	}
-
-	if hsResp.Result.Status != "connected" {
-		log.Printf("ws: handshake rejected, unexpected status: %s", hsResp.Result.Status)
-		return HandshakeRejected
-	}
-
 	return HandshakeAccepted
 }
 

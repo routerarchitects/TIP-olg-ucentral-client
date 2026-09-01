@@ -91,13 +91,8 @@ func startMockCloud(t *testing.T) *MockCloud {
 			var rpcReq map[string]interface{}
 			if err := json.Unmarshal(msg, &rpcReq); err == nil {
 				if method, ok := rpcReq["method"].(string); ok && method == "connect" {
-					resp := map[string]interface{}{
-						"jsonrpc": "2.0",
-						"id":      rpcReq["id"],
-						"result":  map[string]interface{}{"status": "connected"},
-					}
-					b, _ := json.Marshal(resp)
-					conn.WriteMessage(websocket.TextMessage, b)
+					// The real uCentral Gateway does NOT send a JSON-RPC response
+					// to the connect handshake (it's a Notification).
 					continue
 				}
 			}

@@ -20,9 +20,6 @@ type Config struct {
 	AdminUser    string
 	AdminPass    string
 	DeviceSerial string
-	VyosIP       string
-	VyosUser     string
-	VyosPass     string
 }
 
 func loadConfig(t *testing.T) Config {
@@ -33,9 +30,6 @@ func loadConfig(t *testing.T) Config {
 		AdminUser:    requireEnv(t, "OW_ADMIN_USER"),
 		AdminPass:    requireEnv(t, "OW_ADMIN_PASS"),
 		DeviceSerial: getEnvOrDefault("OW_DEVICE_SERIAL", "001122334455"),
-		VyosIP:       getEnvOrDefault("VYOS_IP", "172.16.3.185:22"), // Updated IP
-		VyosUser:     getEnvOrDefault("VYOS_USER", "vyos"),
-		VyosPass:     getEnvOrDefault("VYOS_PASS", "vyos"),
 	}
 }
 

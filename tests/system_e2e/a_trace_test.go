@@ -39,8 +39,62 @@ func TestSystemE2E_TraceUp(t *testing.T) {
 		t.Fatalf("Cloud API rejected request (Status %d): %s", resp.StatusCode, string(body))
 	}
 	t.Logf("Cloud API accepted request successfully.")
-
-	time.Sleep(10 * time.Second)
-	t.Logf("SUCCESS! Trace action was accepted by the cloud and processed by the device.")
-	t.Logf("Note: SSH verification is skipped to prevent failures if the device is currently in a lockdown state.")
+	
+	var apiResponse map[string]interface{}
+	if err := json.Unmarshal(body, &apiResponse); err != nil {
+		t.Fatalf("Failed to parse Cloud API response: %v", err)
+	}
+	
+	// OpenWiFi trace API might block and return the result directly or return a command UUID to poll.
+	// We'll verify that it either returned completed results directly, or fetch it if needed.
+	uuidVal, ok := apiResponse["UUID"].(string)
+	if !ok {
+		t.Fatalf("Response missing UUID: %s", string(body))
+	}
+	
+	status, _ := apiResponse["status"].(string)
+	
+	// If the API didn't block and wait for completion, we poll the command status
+	if status != "completed" {
+		t.Logf("Command %s is %s, polling for completion...", uuidVal, status)
+		
+		deadline := time.Now().Add(30 * time.Second)
+		completed := false
+		
+		for time.Now().Before(deadline) {
+			time.Sleep(2 * time.Second)
+			
+			pollReq, _ := http.NewRequest("GET", fmt.Sprintf("%s/api/v1/command/%s", cfg.GwAPIURL, uuidVal), nil)
+			pollReq.Header.Set("Authorization", "Bearer "+token)
+			
+			pollResp, err := client.Do(pollReq)
+			if err != nil {
+				continue
+			}
+			pollBody, _ := io.ReadAll(pollResp.Body)
+			pollResp.Body.Close()
+			
+			if pollResp.StatusCode == 200 {
+				var pollResult map[string]interface{}
+				json.Unmarshal(pollBody, &pollResult)
+				
+				if pollStatus, ok := pollResult["status"].(string); ok && pollStatus == "completed" {
+					apiResponse = pollResult
+					completed = true
+					break
+				}
+			}
+		}
+		
+		if !completed {
+			t.Fatalf("Timeout waiting for trace command %s to complete", uuidVal)
+		}
+	}
+	
+	results, ok := apiResponse["results"].(map[string]interface{})
+	if !ok || len(results) == 0 {
+		t.Fatalf("Trace command completed but contains no results object: %v", apiResponse)
+	}
+	
+	t.Logf("SUCCESS! Trace action completed and results returned: %v", results)
 }

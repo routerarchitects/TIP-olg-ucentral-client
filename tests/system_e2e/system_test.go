@@ -29,8 +29,8 @@ func loadConfig(t *testing.T) Config {
 	return Config{
 		SecAPIURL:    getEnvOrDefault("OW_SEC_URL", "https://openwifi.wlan.local:16001"),
 		GwAPIURL:     getEnvOrDefault("OW_GW_URL", "https://openwifi.wlan.local:16002"),
-		AdminUser:    getEnvOrDefault("OW_ADMIN_USER", "tip@ucentral.com"),
-		AdminPass:    getEnvOrDefault("OW_ADMIN_PASS", "Iotina@123"),
+		AdminUser:    requireEnv(t, "OW_ADMIN_USER"),
+		AdminPass:    requireEnv(t, "OW_ADMIN_PASS"),
 		DeviceSerial: getEnvOrDefault("OW_DEVICE_SERIAL", "001122334455"),
 		VyosIP:       getEnvOrDefault("VYOS_IP", "172.16.3.185:22"), // Updated IP
 		VyosUser:     getEnvOrDefault("VYOS_USER", "vyos"),
@@ -43,6 +43,15 @@ func getEnvOrDefault(key, defaultVal string) string {
 		return val
 	}
 	return defaultVal
+}
+
+func requireEnv(t *testing.T, key string) string {
+	t.Helper()
+	val := os.Getenv(key)
+	if val == "" {
+		t.Fatalf("Required environment variable %s is not set", key)
+	}
+	return val
 }
 
 func getAuthToken(t *testing.T, cfg Config, client *http.Client) string {

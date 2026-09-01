@@ -653,7 +653,7 @@ func TestComponent_MultipleSequentialCommands(t *testing.T) {
 // Positive: concurrent commands with out-of-order responses
 // ---------------------------------------------------------------------------
 
-func TestComponent_ConcurrentCommands(t *testing.T) {
+func TestComponent_ConcurrentOutOfOrder(t *testing.T) {
 	ns := startEmbeddedNATS(t)
 	nc, err := nats.Connect(ns.ClientURL())
 	if err != nil {
@@ -662,8 +662,6 @@ func TestComponent_ConcurrentCommands(t *testing.T) {
 	defer nc.Close()
 	mc := startMockCloud(t)
 
-	// We will manually subscribe to NATS to capture the RPC IDs and UUIDs
-	// so we can reply out of order.
 	reqCh := make(chan map[string]interface{}, 2)
 
 	_, err = nc.Subscribe("cmd.action.vyos.trace", func(m *nats.Msg) {
@@ -684,11 +682,9 @@ func TestComponent_ConcurrentCommands(t *testing.T) {
 	cfg := getTestConfig(t, mc, ns)
 	startClientProcess(t, mc, cfg)
 
-	// Send two commands back-to-back over WebSocket without waiting
 	mc.SendMessage(t, `{"jsonrpc":"2.0","method":"trace","id":101,"params":{"serial":"001122334455","duration":5}}`)
 	mc.SendMessage(t, `{"jsonrpc":"2.0","method":"trace","id":102,"params":{"serial":"001122334455","duration":10}}`)
 
-	// Wait for both commands to hit NATS
 	var req1, req2 map[string]interface{}
 	select {
 	case req1 = <-reqCh:
@@ -701,16 +697,6 @@ func TestComponent_ConcurrentCommands(t *testing.T) {
 		t.Fatal("Timeout waiting for second NATS request")
 	}
 
-	// We want to reply to 102 first, then 101.
-	// But which one is which? We can match by rpc_id or we know they are ordered 101 then 102 if TCP guarantees it.
-	// Let's just find which req corresponds to which UUID based on what the client sends.
-	// The client generates its own rpcID (uuid). The cloud id (101/102) is only known to the client.
-	// How do we differentiate? The trace duration was 5 for 101, 10 for 102.
-	// Wait, the client doesn't include the full params in the nats envelope?
-	// The payload is passed through.
-	// Let's just reply in reverse order of reception.
-
-	time.Sleep(500 * time.Millisecond)
 	replyToNATS := func(req map[string]interface{}, status, msg string) {
 		rpcID, _ := req["rpc_id"].(string)
 		action, _ := req["action"].(string)
@@ -730,15 +716,26 @@ func TestComponent_ConcurrentCommands(t *testing.T) {
 		nc.Publish("result.vyos", b)
 	}
 
-	// Reply to req2 first
-	replyToNATS(req2, "success", "response for second request")
-	// Reply to req1 second
-	replyToNATS(req1, "success", "response for first request")
+	// Determine which request is which based on duration
+	var req101, req102 map[string]interface{}
 
-	// Now wait for both responses from the Mock Cloud
-	// Since we replied to req2 first, the WebSocket response for 102 should arrive.
-	// Wait! We can't guarantee WebSocket order of arrival because it depends on the client's internal channels.
-	// We'll just wait for both IDs and verify they are correct.
+	getDuration := func(req map[string]interface{}) float64 {
+		payload, _ := req["payload"].(map[string]interface{})
+		dur, _ := payload["duration"].(float64)
+		return dur
+	}
+
+	if getDuration(req1) == 5 {
+		req101 = req1
+		req102 = req2
+	} else {
+		req101 = req2
+		req102 = req1
+	}
+
+	// Reply to 102 first, then 101
+	replyToNATS(req102, "success", "result-for-102")
+	replyToNATS(req101, "success", "result-for-101")
 
 	respBytes1 := mc.WaitForResponse(t, 10*time.Second)
 	respBytes2 := mc.WaitForResponse(t, 10*time.Second)
@@ -747,14 +744,81 @@ func TestComponent_ConcurrentCommands(t *testing.T) {
 	json.Unmarshal(respBytes1, &resp1)
 	json.Unmarshal(respBytes2, &resp2)
 
-	// Make sure we have one for 101 and one for 102
 	id1 := int(resp1["id"].(float64))
 	id2 := int(resp2["id"].(float64))
 
-	if (id1 == 101 && id2 == 102) || (id1 == 102 && id2 == 101) {
-		// success
+	validateResponse := func(id int, resp map[string]interface{}) {
+		resultObj := resp["result"].(map[string]interface{})
+		statusObj := resultObj["status"].(map[string]interface{})
+		text := statusObj["text"].(string)
+		if id == 101 && text != "result-for-101" {
+			t.Fatalf("Expected result-for-101 for id 101, got %v", text)
+		}
+		if id == 102 && text != "result-for-102" {
+			t.Fatalf("Expected result-for-102 for id 102, got %v", text)
+		}
+	}
+
+	if id1 == 101 && id2 == 102 {
+		validateResponse(101, resp1)
+		validateResponse(102, resp2)
+	} else if id1 == 102 && id2 == 101 {
+		validateResponse(102, resp1)
+		validateResponse(101, resp2)
 	} else {
 		t.Fatalf("Expected IDs 101 and 102, got %v and %v", id1, id2)
 	}
+}
 
+// ---------------------------------------------------------------------------
+// Positive: concurrent commands with immediate results
+// ---------------------------------------------------------------------------
+
+func TestComponent_ConcurrentImmediateResult(t *testing.T) {
+	ns := startEmbeddedNATS(t)
+	nc, err := nats.Connect(ns.ClientURL())
+	if err != nil {
+		t.Fatalf("Failed to connect to NATS: %v", err)
+	}
+	defer nc.Close()
+	mc := startMockCloud(t)
+
+	_, err = nc.Subscribe("cmd.action.vyos.trace", func(m *nats.Msg) {
+		var req map[string]interface{}
+		json.Unmarshal(m.Data, &req)
+		rpcID, _ := req["rpc_id"].(string)
+		action, _ := req["action"].(string)
+		uuid, _ := req["uuid"].(string)
+
+		res := map[string]interface{}{
+			"version":      "1.0",
+			"rpc_id":       rpcID,
+			"target":       "vyos",
+			"command_type": "action",
+			"uuid":         uuid,
+			"action":       action,
+			"result":       "success",
+			"message":      "immediate-result",
+			"timestamp":    "2026-08-31T18:00:00Z",
+		}
+		b, _ := json.Marshal(res)
+		nc.Publish("result.vyos", b)
+	})
+	if err != nil {
+		t.Fatalf("Failed to subscribe: %v", err)
+	}
+	nc.Flush()
+
+	cfg := getTestConfig(t, mc, ns)
+	startClientProcess(t, mc, cfg)
+
+	mc.SendMessage(t, `{"jsonrpc":"2.0","method":"trace","id":201,"params":{"serial":"001122334455","duration":5}}`)
+	mc.SendMessage(t, `{"jsonrpc":"2.0","method":"trace","id":202,"params":{"serial":"001122334455","duration":10}}`)
+
+	_, respFor201 := mc.WaitForResponseWithID(t, 201, 10*time.Second)
+	_, respFor202 := mc.WaitForResponseWithID(t, 202, 10*time.Second)
+
+	if respFor201["error"] != nil || respFor202["error"] != nil {
+		t.Fatalf("Both traces should succeed")
+	}
 }

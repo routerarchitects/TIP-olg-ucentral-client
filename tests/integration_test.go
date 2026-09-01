@@ -191,16 +191,24 @@ func getTestConfig(t *testing.T, mc *MockCloud, ns *server.Server) map[string]in
 		Bytes: certBytes,
 	}
 	pemData := pem.EncodeToMemory(pemBlock)
-	os.WriteFile(certFile, pemData, 0644)
+	if err := os.WriteFile(certFile, pemData, 0644); err != nil {
+		t.Fatalf("Failed to write CA cert: %v", err)
+	}
 
 	dummyClientCert := filepath.Join(t.TempDir(), "client.crt")
 	dummyClientKey := filepath.Join(t.TempDir(), "client.key")
-	os.WriteFile(dummyClientCert, pemData, 0644)
+	if err := os.WriteFile(dummyClientCert, pemData, 0644); err != nil {
+		t.Fatalf("Failed to write dummy client cert: %v", err)
+	}
 
-	exec.Command("openssl", "req", "-x509", "-newkey", "rsa:2048", "-keyout", dummyClientKey, "-out", dummyClientCert, "-days", "365", "-nodes", "-subj", "/CN=localhost").Run()
+	if err := exec.Command("openssl", "req", "-x509", "-newkey", "rsa:2048", "-keyout", dummyClientKey, "-out", dummyClientCert, "-days", "365", "-nodes", "-subj", "/CN=localhost").Run(); err != nil {
+		t.Fatalf("Failed to generate client certificates via openssl: %v", err)
+	}
 
 	capFile := filepath.Join(t.TempDir(), "capabilities.json")
-	os.WriteFile(capFile, []byte(`{"compatible":"vyos", "version": {"olg": {"major": 1, "minor": 0, "patch": 0}}}`), 0644)
+	if err := os.WriteFile(capFile, []byte(`{"compatible":"vyos", "version": {"olg": {"major": 1, "minor": 0, "patch": 0}}}`), 0644); err != nil {
+		t.Fatalf("Failed to write capabilities.json: %v", err)
+	}
 
 	return map[string]interface{}{
 		"serial":            "001122334455",
@@ -286,7 +294,9 @@ func startClientProcess(t *testing.T, cfg map[string]interface{}) context.Cancel
 	}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Start()
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("Failed to start client process: %v", err)
+	}
 	t.Cleanup(func() {
 		cancel()
 		cmd.Wait()
@@ -320,7 +330,10 @@ func TestConfigValidation_InvalidConfig(t *testing.T) {
 
 func TestComponent_ConfigurePositive(t *testing.T) {
 	ns := startEmbeddedNATS(t)
-	nc, _ := nats.Connect(ns.ClientURL())
+	nc, err := nats.Connect(ns.ClientURL())
+	if err != nil {
+		t.Fatalf("Failed to connect to NATS: %v", err)
+	}
 	defer nc.Close()
 	mc := startMockCloud(t)
 
@@ -349,7 +362,10 @@ func TestComponent_ConfigurePositive(t *testing.T) {
 
 func TestComponent_ConfigureNegative_Failed(t *testing.T) {
 	ns := startEmbeddedNATS(t)
-	nc, _ := nats.Connect(ns.ClientURL())
+	nc, err := nats.Connect(ns.ClientURL())
+	if err != nil {
+		t.Fatalf("Failed to connect to NATS: %v", err)
+	}
 	defer nc.Close()
 	mc := startMockCloud(t)
 
@@ -378,7 +394,10 @@ func TestComponent_ConfigureNegative_Failed(t *testing.T) {
 
 func TestComponent_ConfigureNegative_Rejected(t *testing.T) {
 	ns := startEmbeddedNATS(t)
-	nc, _ := nats.Connect(ns.ClientURL())
+	nc, err := nats.Connect(ns.ClientURL())
+	if err != nil {
+		t.Fatalf("Failed to connect to NATS: %v", err)
+	}
 	defer nc.Close()
 	mc := startMockCloud(t)
 
@@ -408,7 +427,10 @@ func TestComponent_ConfigureNegative_Rejected(t *testing.T) {
 
 func TestComponent_TracePositive(t *testing.T) {
 	ns := startEmbeddedNATS(t)
-	nc, _ := nats.Connect(ns.ClientURL())
+	nc, err := nats.Connect(ns.ClientURL())
+	if err != nil {
+		t.Fatalf("Failed to connect to NATS: %v", err)
+	}
 	defer nc.Close()
 	mc := startMockCloud(t)
 
@@ -438,7 +460,10 @@ func TestComponent_TracePositive(t *testing.T) {
 
 func TestComponent_TraceNegative_Failed(t *testing.T) {
 	ns := startEmbeddedNATS(t)
-	nc, _ := nats.Connect(ns.ClientURL())
+	nc, err := nats.Connect(ns.ClientURL())
+	if err != nil {
+		t.Fatalf("Failed to connect to NATS: %v", err)
+	}
 	defer nc.Close()
 	mc := startMockCloud(t)
 
@@ -524,7 +549,10 @@ func TestComponent_MalformedRequest_NoMethod(t *testing.T) {
 
 func TestComponent_MultipleSequentialCommands(t *testing.T) {
 	ns := startEmbeddedNATS(t)
-	nc, _ := nats.Connect(ns.ClientURL())
+	nc, err := nats.Connect(ns.ClientURL())
+	if err != nil {
+		t.Fatalf("Failed to connect to NATS: %v", err)
+	}
 	defer nc.Close()
 	mc := startMockCloud(t)
 

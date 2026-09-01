@@ -1,0 +1,39 @@
+{
+  "serial": "001122334455",
+  "cloud": {
+    "url": "wss://openwifi.wlan.local:15002",
+    "connect_timeout_seconds": 30,
+    "write_timeout_seconds": 15,
+    "ping_interval_seconds": 60,
+    "pong_timeout_seconds": 30,
+    "stable_session_threshold_seconds": 60,
+    "compression_threshold_bytes": 1024,
+    "max_frame_size_bytes": 11534336,
+    "max_consecutive_frame_errors": 20,
+    "tls": {
+      "ca_file": "/etc/ucentral/certs/ca.pem",
+      "client_cert_file": "/etc/ucentral/certs/client.pem",
+      "client_key_file": "/etc/ucentral/certs/client.key",
+      "server_name": "openwifi.wlan.local"
+    }
+  },
+  "nats": {
+    "servers": [
+      "nats://127.0.0.1:4222"
+    ],
+    "credentials_file": "/etc/ucentral/nats/user.creds",
+    "ca_file": "/etc/ucentral/nats/ca.pem",
+    "client_cert_file": "/etc/ucentral/nats/client.pem",
+    "client_key_file": "/etc/ucentral/nats/client.key",
+    "allow_insecure_local_dev": false,
+    "target": "vyos"
+  },
+  "queues": {
+    "ws_writer_capacity": 100,
+    "emergency_capacity": 50,
+    "nats_publish_capacity": 500,
+    "command_result_capacity": 100,
+    "telemetry_capacity": 200,
+    "max_concurrent_requests": 20
+  }
+}

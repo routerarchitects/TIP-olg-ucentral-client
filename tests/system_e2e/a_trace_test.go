@@ -112,5 +112,15 @@ func TestSystemE2E_TraceUp(t *testing.T) {
 		t.Fatalf("Trace command completed but contains no results object: %v", apiResponse)
 	}
 
+	statusObj, ok := results["status"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("Results object missing status field: %v", results)
+	}
+
+	errCode, ok := statusObj["error"].(float64)
+	if !ok || errCode != 0 {
+		t.Fatalf("Trace command failed on device! error code: %v, full results: %v", statusObj["error"], results)
+	}
+
 	t.Logf("SUCCESS! Trace action completed and results returned: %v", results)
 }

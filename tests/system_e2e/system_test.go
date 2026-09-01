@@ -100,7 +100,7 @@ func TestSystemE2E_ConfigSync(t *testing.T) {
 		Timeout:   30 * time.Second,
 	}
 	token := getAuthToken(t, cfg, client)
-	uniqueConfigUUID := int64(1788177501) // dummy UUID
+	uniqueConfigUUID := time.Now().Unix()
 
 	configPayload := map[string]interface{}{
 		"serialNumber": cfg.DeviceSerial,

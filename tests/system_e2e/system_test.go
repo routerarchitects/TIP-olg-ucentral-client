@@ -92,7 +92,7 @@ func getAuthToken(t *testing.T, cfg Config, client *http.Client) string {
 	return result.AccessToken
 }
 
-func TestSystemE2E_ConfigSync(t *testing.T) {
+func TestSystemE2E_ConfigureCommandFlow(t *testing.T) {
 	cfg := loadConfig(t)
 	// We use a 30s timeout here because the Gateway waits for the device to apply the config
 	client := &http.Client{

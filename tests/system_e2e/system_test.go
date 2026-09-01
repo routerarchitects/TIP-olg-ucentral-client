@@ -132,7 +132,69 @@ func TestSystemE2E_ConfigSync(t *testing.T) {
 		t.Fatalf("Cloud API rejected request (Status %d): %s", resp.StatusCode, string(body))
 	}
 
-	// If the Cloud API returned 200 OK, it means the Gateway received the "success" WebSocket message from the agent!
+	var apiResponse map[string]interface{}
+	if err := json.Unmarshal(body, &apiResponse); err != nil {
+		t.Fatalf("Failed to parse Cloud API response: %v", err)
+	}
+
+	uuidVal, ok := apiResponse["UUID"].(string)
+	if !ok {
+		t.Fatalf("Response missing UUID: %s", string(body))
+	}
+
+	status, _ := apiResponse["status"].(string)
+
+	if status != "completed" {
+		t.Logf("Command %s is %s, polling for completion...", uuidVal, status)
+
+		deadline := time.Now().Add(30 * time.Second)
+		completed := false
+
+		for time.Now().Before(deadline) {
+			time.Sleep(2 * time.Second)
+
+			pollReq, _ := http.NewRequest("GET", fmt.Sprintf("%s/api/v1/command/%s", cfg.GwAPIURL, uuidVal), nil)
+			pollReq.Header.Set("Authorization", "Bearer "+token)
+
+			pollResp, err := client.Do(pollReq)
+			if err != nil {
+				continue
+			}
+			pollBody, _ := io.ReadAll(pollResp.Body)
+			pollResp.Body.Close()
+
+			if pollResp.StatusCode == 200 {
+				var pollResult map[string]interface{}
+				json.Unmarshal(pollBody, &pollResult)
+
+				if pollStatus, ok := pollResult["status"].(string); ok && pollStatus == "completed" {
+					apiResponse = pollResult
+					completed = true
+					break
+				}
+			}
+		}
+
+		if !completed {
+			t.Fatalf("Timeout waiting for configure command %s to complete", uuidVal)
+		}
+	}
+
+	results, ok := apiResponse["results"].(map[string]interface{})
+	if !ok || len(results) == 0 {
+		t.Fatalf("Configure command completed but contains no results object: %v", apiResponse)
+	}
+
+	statusObj, ok := results["status"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("Results object missing status field: %v", results)
+	}
+
+	errCode, ok := statusObj["error"].(float64)
+	if !ok || errCode != 0 {
+		t.Fatalf("Configure command failed on device! error code: %v, full results: %v", statusObj["error"], results)
+	}
+
 	t.Logf("SUCCESS! Cloud API returned OK, meaning the agent successfully applied the configuration and NATS relayed it back!")
 	t.Logf("Note: The VyOS SSH daemon is now disabled by the renderer, so SSH verification is skipped.")
 }

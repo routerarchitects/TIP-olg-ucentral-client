@@ -295,7 +295,10 @@ func mockNATSResult(t *testing.T, nc *nats.Conn, subject string, commandType str
 	t.Helper()
 	_, err := nc.Subscribe(subject, func(m *nats.Msg) {
 		var req map[string]interface{}
-		json.Unmarshal(m.Data, &req)
+		if err := json.Unmarshal(m.Data, &req); err != nil {
+			t.Errorf("Failed to unmarshal NATS message: %v", err)
+			return
+		}
 		rpcID := ""
 		if id, ok := req["rpc_id"].(string); ok {
 			rpcID = id
@@ -323,8 +326,14 @@ func mockNATSResult(t *testing.T, nc *nats.Conn, subject string, commandType str
 		if errorCode != "" {
 			res["error_code"] = errorCode
 		}
-		b, _ := json.Marshal(res)
-		nc.Publish("result.vyos", b)
+		b, err := json.Marshal(res)
+		if err != nil {
+			t.Errorf("Failed to marshal NATS response: %v", err)
+			return
+		}
+		if err := nc.Publish("result.vyos", b); err != nil {
+			t.Errorf("Failed to publish NATS response: %v", err)
+		}
 	})
 	if err != nil {
 		t.Fatalf("Failed to subscribe to %s: %v", subject, err)

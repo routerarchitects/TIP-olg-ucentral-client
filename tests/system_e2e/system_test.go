@@ -61,18 +61,34 @@ func getAuthToken(t *testing.T, cfg Config, client *http.Client) string {
 		"userId":   cfg.AdminUser,
 		"password": cfg.AdminPass,
 	}
-	b, _ := json.Marshal(loginPayload)
-	req, _ := http.NewRequest("POST", cfg.SecAPIURL+"/api/v1/oauth2", bytes.NewReader(b))
+	b, err := json.Marshal(loginPayload)
+	if err != nil {
+		t.Fatalf("Failed to marshal login payload: %v", err)
+	}
+	req, err := http.NewRequest("POST", cfg.SecAPIURL+"/api/v1/oauth2", bytes.NewReader(b))
+	if err != nil {
+		t.Fatalf("Failed to create login request: %v", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("Login request failed: %v", err)
 	}
 	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Login request rejected (Status %d)", resp.StatusCode)
+	}
+
 	var result struct {
 		AccessToken string `json:"access_token"`
 	}
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("Failed to decode login response: %v", err)
+	}
+	if result.AccessToken == "" {
+		t.Fatalf("Login response missing access_token")
+	}
 	return result.AccessToken
 }
 
@@ -115,8 +131,14 @@ func TestSystemE2E_ConfigSync(t *testing.T) {
 			},
 		},
 	}
-	b, _ := json.Marshal(configPayload)
-	req, _ := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/device/%s/configure", cfg.GwAPIURL, cfg.DeviceSerial), bytes.NewReader(b))
+	b, err := json.Marshal(configPayload)
+	if err != nil {
+		t.Fatalf("Failed to marshal config payload: %v", err)
+	}
+	req, err := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/device/%s/configure", cfg.GwAPIURL, cfg.DeviceSerial), bytes.NewReader(b))
+	if err != nil {
+		t.Fatalf("Failed to create configure request: %v", err)
+	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 
@@ -125,7 +147,10 @@ func TestSystemE2E_ConfigSync(t *testing.T) {
 		t.Fatalf("Cloud API request failed: %v", err)
 	}
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("Failed to read Cloud API response: %v", err)
+	}
 	resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
@@ -153,14 +178,21 @@ func TestSystemE2E_ConfigSync(t *testing.T) {
 		for time.Now().Before(deadline) {
 			time.Sleep(2 * time.Second)
 
-			pollReq, _ := http.NewRequest("GET", fmt.Sprintf("%s/api/v1/command/%s", cfg.GwAPIURL, uuidVal), nil)
+			pollReq, err := http.NewRequest("GET", fmt.Sprintf("%s/api/v1/command/%s", cfg.GwAPIURL, uuidVal), nil)
+			if err != nil {
+				continue
+			}
 			pollReq.Header.Set("Authorization", "Bearer "+token)
 
 			pollResp, err := client.Do(pollReq)
 			if err != nil {
 				continue
 			}
-			pollBody, _ := io.ReadAll(pollResp.Body)
+			pollBody, err := io.ReadAll(pollResp.Body)
+			if err != nil {
+				pollResp.Body.Close()
+				continue
+			}
 			pollResp.Body.Close()
 
 			if pollResp.StatusCode == 200 {

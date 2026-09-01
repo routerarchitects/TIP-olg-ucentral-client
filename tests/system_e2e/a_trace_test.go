@@ -23,8 +23,14 @@ func TestSystemE2E_TraceUp(t *testing.T) {
 		"duration":     5,
 		"network":      "up",
 	}
-	b, _ := json.Marshal(payload)
-	req, _ := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/device/%s/trace", cfg.GwAPIURL, cfg.DeviceSerial), bytes.NewReader(b))
+	b, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Failed to marshal trace payload: %v", err)
+	}
+	req, err := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/device/%s/trace", cfg.GwAPIURL, cfg.DeviceSerial), bytes.NewReader(b))
+	if err != nil {
+		t.Fatalf("Failed to create trace request: %v", err)
+	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 
@@ -33,7 +39,10 @@ func TestSystemE2E_TraceUp(t *testing.T) {
 		t.Fatalf("Cloud API request failed: %v", err)
 	}
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("Failed to read Cloud API response: %v", err)
+	}
 	resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		t.Fatalf("Cloud API rejected request (Status %d): %s", resp.StatusCode, string(body))
@@ -64,14 +73,21 @@ func TestSystemE2E_TraceUp(t *testing.T) {
 		for time.Now().Before(deadline) {
 			time.Sleep(2 * time.Second)
 
-			pollReq, _ := http.NewRequest("GET", fmt.Sprintf("%s/api/v1/command/%s", cfg.GwAPIURL, uuidVal), nil)
+			pollReq, err := http.NewRequest("GET", fmt.Sprintf("%s/api/v1/command/%s", cfg.GwAPIURL, uuidVal), nil)
+			if err != nil {
+				continue
+			}
 			pollReq.Header.Set("Authorization", "Bearer "+token)
 
 			pollResp, err := client.Do(pollReq)
 			if err != nil {
 				continue
 			}
-			pollBody, _ := io.ReadAll(pollResp.Body)
+			pollBody, err := io.ReadAll(pollResp.Body)
+			if err != nil {
+				pollResp.Body.Close()
+				continue
+			}
 			pollResp.Body.Close()
 
 			if pollResp.StatusCode == 200 {

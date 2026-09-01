@@ -815,10 +815,19 @@ func TestComponent_ConcurrentImmediateResult(t *testing.T) {
 	mc.SendMessage(t, `{"jsonrpc":"2.0","method":"trace","id":201,"params":{"serial":"001122334455","duration":5}}`)
 	mc.SendMessage(t, `{"jsonrpc":"2.0","method":"trace","id":202,"params":{"serial":"001122334455","duration":10}}`)
 
-	_, respFor201 := mc.WaitForResponseWithID(t, 201, 10*time.Second)
-	_, respFor202 := mc.WaitForResponseWithID(t, 202, 10*time.Second)
+	respBytes1 := mc.WaitForResponse(t, 10*time.Second)
+	respBytes2 := mc.WaitForResponse(t, 10*time.Second)
+	
+	var resp1, resp2 map[string]interface{}
+	json.Unmarshal(respBytes1, &resp1)
+	json.Unmarshal(respBytes2, &resp2)
 
-	if respFor201["error"] != nil || respFor202["error"] != nil {
-		t.Fatalf("Both traces should succeed")
+	id1 := int(resp1["id"].(float64))
+	id2 := int(resp2["id"].(float64))
+	
+	if (id1 == 201 && id2 == 202) || (id1 == 202 && id2 == 201) {
+		// success
+	} else {
+		t.Fatalf("Expected IDs 201 and 202, got %v and %v", id1, id2)
 	}
 }

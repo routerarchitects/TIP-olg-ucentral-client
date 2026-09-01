@@ -2,9 +2,14 @@ package tests
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -216,12 +221,35 @@ func getTestConfig(t *testing.T, mc *MockCloud, ns *server.Server) map[string]in
 
 	dummyClientCert := filepath.Join(t.TempDir(), "client.crt")
 	dummyClientKey := filepath.Join(t.TempDir(), "client.key")
-	if err := os.WriteFile(dummyClientCert, pemData, 0644); err != nil {
+	
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("Failed to generate RSA key: %v", err)
+	}
+	
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "localhost"},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+	}
+	
+	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+	if err != nil {
+		t.Fatalf("Failed to create certificate: %v", err)
+	}
+	
+	certOut := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
+	if err := os.WriteFile(dummyClientCert, certOut, 0644); err != nil {
 		t.Fatalf("Failed to write dummy client cert: %v", err)
 	}
-
-	if err := exec.Command("openssl", "req", "-x509", "-newkey", "rsa:2048", "-keyout", dummyClientKey, "-out", dummyClientCert, "-days", "365", "-nodes", "-subj", "/CN=localhost").Run(); err != nil {
-		t.Fatalf("Failed to generate client certificates via openssl: %v", err)
+	
+	keyOut := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
+	if err := os.WriteFile(dummyClientKey, keyOut, 0600); err != nil {
+		t.Fatalf("Failed to write dummy client key: %v", err)
 	}
 
 	capFile := filepath.Join(t.TempDir(), "capabilities.json")

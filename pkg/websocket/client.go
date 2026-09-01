@@ -499,7 +499,6 @@ func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler 
 			return fmt.Errorf("decompressed websocket message exceeds limit")
 		}
 
-
 		frame := InboundFrame{
 			SessionID: sessID,
 			Type:      msgType,

@@ -3,6 +3,8 @@
 package system_e2e
 
 import (
+	"crypto/x509"
+
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
@@ -29,7 +31,7 @@ func loadConfig(t *testing.T) Config {
 		GwAPIURL:     getEnvOrDefault("OW_GW_URL", "https://openwifi.wlan.local:16002"),
 		AdminUser:    requireEnv(t, "OW_ADMIN_USER"),
 		AdminPass:    requireEnv(t, "OW_ADMIN_PASS"),
-		DeviceSerial: getEnvOrDefault("OW_DEVICE_SERIAL", "001122334455"),
+		DeviceSerial: requireEnv(t, "OW_DEVICE_SERIAL"),
 	}
 }
 
@@ -89,10 +91,7 @@ func getAuthToken(t *testing.T, cfg Config, client *http.Client) string {
 func TestSystemE2E_ConfigureCommandFlow(t *testing.T) {
 	cfg := loadConfig(t)
 	// We use a 30s timeout here because the Gateway waits for the device to apply the config
-	client := &http.Client{
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
-		Timeout:   30 * time.Second,
-	}
+	client := createHTTPClient(t, 30*time.Second)
 	token := getAuthToken(t, cfg, client)
 	uniqueConfigUUID := time.Now().Unix()
 
@@ -223,4 +222,30 @@ func TestSystemE2E_ConfigureCommandFlow(t *testing.T) {
 
 	t.Logf("SUCCESS! The configure command completed successfully and the agent result was relayed back through NATS to the Cloud API.")
 	t.Logf("Note: The VyOS SSH daemon is now disabled by the renderer, so SSH verification is skipped.")
+}
+
+func createHTTPClient(t *testing.T, timeout time.Duration) *http.Client {
+	t.Helper()
+
+	tlsConfig := &tls.Config{}
+
+	if os.Getenv("OW_INSECURE_TLS") == "true" {
+		tlsConfig.InsecureSkipVerify = true
+	} else {
+		caFile := getEnvOrDefault("OW_CA_FILE", "../../ca.pem")
+		caCert, err := os.ReadFile(caFile)
+		if err != nil {
+			t.Fatalf("Failed to read CA file %s (set OW_INSECURE_TLS=true to bypass): %v", caFile, err)
+		}
+		caCertPool := x509.NewCertPool()
+		if !caCertPool.AppendCertsFromPEM(caCert) {
+			t.Fatalf("Failed to parse CA certificate from %s", caFile)
+		}
+		tlsConfig.RootCAs = caCertPool
+	}
+
+	return &http.Client{
+		Transport: &http.Transport{TLSClientConfig: tlsConfig},
+		Timeout:   timeout,
+	}
 }

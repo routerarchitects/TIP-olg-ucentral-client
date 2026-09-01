@@ -4,7 +4,6 @@ package system_e2e
 
 import (
 	"bytes"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,7 +14,7 @@ import (
 
 func TestSystemE2E_TraceUp(t *testing.T) {
 	cfg := loadConfig(t)
-	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, Timeout: 15 * time.Second}
+	client := createHTTPClient(t, 15*time.Second)
 	token := getAuthToken(t, cfg, client)
 
 	payload := map[string]interface{}{

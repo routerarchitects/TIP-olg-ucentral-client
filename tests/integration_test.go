@@ -49,6 +49,7 @@ func startEmbeddedNATS(t *testing.T) *server.Server {
 		Host:      "127.0.0.1",
 		Port:      server.RANDOM_PORT,
 		JetStream: true,
+		StoreDir:  t.TempDir(),
 	}
 	ns, err := server.NewServer(opts)
 	if err != nil {

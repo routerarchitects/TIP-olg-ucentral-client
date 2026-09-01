@@ -221,6 +221,6 @@ func TestSystemE2E_ConfigureCommandFlow(t *testing.T) {
 		t.Fatalf("Configure command failed on device! error code: %v, full results: %v", statusObj["error"], results)
 	}
 
-	t.Logf("SUCCESS! Cloud API returned OK, meaning the agent successfully applied the configuration and NATS relayed it back!")
+	t.Logf("SUCCESS! The configure command completed successfully and the agent result was relayed back through NATS to the Cloud API.")
 	t.Logf("Note: The VyOS SSH daemon is now disabled by the renderer, so SSH verification is skipped.")
 }

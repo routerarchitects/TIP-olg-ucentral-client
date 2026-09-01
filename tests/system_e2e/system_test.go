@@ -75,7 +75,7 @@ func getAuthToken(t *testing.T, cfg Config, client *http.Client) string {
 		t.Fatalf("Login request failed: %v", err)
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("Login request rejected (Status %d)", resp.StatusCode)
 	}

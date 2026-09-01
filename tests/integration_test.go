@@ -111,6 +111,22 @@ func startMockCloud(t *testing.T) *MockCloud {
 	return mc
 }
 
+
+func (mc *MockCloud) WaitForConnection(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		mc.mu.Lock()
+		conn := mc.conn
+		mc.mu.Unlock()
+		if conn != nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("Timeout waiting for WebSocket connection from client")
+}
+
 func (mc *MockCloud) SendMessage(t *testing.T, msg string) {
 	t.Helper()
 	mc.mu.Lock()
@@ -247,8 +263,9 @@ func getTestConfig(t *testing.T, mc *MockCloud, ns *server.Server) map[string]in
 
 // mockNATSResult is a helper that subscribes to a NATS subject and publishes
 // a result envelope back on result.vyos when a command arrives.
-func mockNATSResult(nc *nats.Conn, subject string, commandType string, result string, message string, errorCode string) {
-	nc.Subscribe(subject, func(m *nats.Msg) {
+func mockNATSResult(t *testing.T, nc *nats.Conn, subject string, commandType string, result string, message string, errorCode string) {
+	t.Helper()
+	_, err := nc.Subscribe(subject, func(m *nats.Msg) {
 		var req map[string]interface{}
 		json.Unmarshal(m.Data, &req)
 		rpcID := ""
@@ -281,11 +298,20 @@ func mockNATSResult(nc *nats.Conn, subject string, commandType string, result st
 		b, _ := json.Marshal(res)
 		nc.Publish("result.vyos", b)
 	})
+	if err != nil {
+		t.Fatalf("Failed to subscribe to %s: %v", subject, err)
+	}
+	if err := nc.Flush(); err != nil {
+		t.Fatalf("Failed to flush NATS connection: %v", err)
+	}
+	if err := nc.LastError(); err != nil {
+		t.Fatalf("NATS connection error after flush: %v", err)
+	}
 }
 
 // startClientProcess builds the config, sets env, and starts the client binary.
 // Returns a cancel func that stops the process.
-func startClientProcess(t *testing.T, cfg map[string]interface{}) context.CancelFunc {
+func startClientProcess(t *testing.T, mc *MockCloud, cfg map[string]interface{}) context.CancelFunc {
 	t.Helper()
 	os.Setenv("OLG_INSECURE_SKIP_VERIFY", "true")
 	t.Cleanup(func() { os.Unsetenv("OLG_INSECURE_SKIP_VERIFY") })
@@ -306,7 +332,7 @@ func startClientProcess(t *testing.T, cfg map[string]interface{}) context.Cancel
 	})
 
 	// Wait for the client to connect to NATS + WebSocket
-	time.Sleep(2 * time.Second)
+	mc.WaitForConnection(t, 5*time.Second)
 	return cancel
 }
 
@@ -340,10 +366,10 @@ func TestComponent_ConfigurePositive(t *testing.T) {
 	defer nc.Close()
 	mc := startMockCloud(t)
 
-	mockNATSResult(nc, "cmd.configure.vyos", "configure", "success", "applied successfully", "")
+	mockNATSResult(t, nc, "cmd.configure.vyos", "configure", "success", "applied successfully", "")
 
 	cfg := getTestConfig(t, mc, ns)
-	startClientProcess(t, cfg)
+	startClientProcess(t, mc, cfg)
 
 	req := `{"jsonrpc":"2.0","method":"configure","id":10,"params":{"serial":"001122334455","uuid":123,"config":{"interfaces":[]}}}`
 	mc.SendMessage(t, req)
@@ -372,10 +398,10 @@ func TestComponent_ConfigureNegative_Failed(t *testing.T) {
 	defer nc.Close()
 	mc := startMockCloud(t)
 
-	mockNATSResult(nc, "cmd.configure.vyos", "configure", "failed", "commit failed", "-32603")
+	mockNATSResult(t, nc, "cmd.configure.vyos", "configure", "failed", "commit failed", "-32603")
 
 	cfg := getTestConfig(t, mc, ns)
-	startClientProcess(t, cfg)
+	startClientProcess(t, mc, cfg)
 
 	req := `{"jsonrpc":"2.0","method":"configure","id":20,"params":{"serial":"001122334455","uuid":456,"config":{"interfaces":[]}}}`
 	mc.SendMessage(t, req)
@@ -404,10 +430,10 @@ func TestComponent_ConfigureNegative_Rejected(t *testing.T) {
 	defer nc.Close()
 	mc := startMockCloud(t)
 
-	mockNATSResult(nc, "cmd.configure.vyos", "configure", "rejected", "schema validation error", "-32602")
+	mockNATSResult(t, nc, "cmd.configure.vyos", "configure", "rejected", "schema validation error", "-32602")
 
 	cfg := getTestConfig(t, mc, ns)
-	startClientProcess(t, cfg)
+	startClientProcess(t, mc, cfg)
 
 	req := `{"jsonrpc":"2.0","method":"configure","id":21,"params":{"serial":"001122334455","uuid":789,"config":{"interfaces":[]}}}`
 	mc.SendMessage(t, req)
@@ -438,10 +464,10 @@ func TestComponent_TracePositive(t *testing.T) {
 	mc := startMockCloud(t)
 
 	// Trace is an action → subject is cmd.action.vyos.trace
-	mockNATSResult(nc, "cmd.action.vyos.trace", "action", "success", "trace completed", "")
+	mockNATSResult(t, nc, "cmd.action.vyos.trace", "action", "success", "trace completed", "")
 
 	cfg := getTestConfig(t, mc, ns)
-	startClientProcess(t, cfg)
+	startClientProcess(t, mc, cfg)
 
 	req := `{"jsonrpc":"2.0","method":"trace","id":30,"params":{"serial":"001122334455","duration":5,"network":"lan","interface":"eth0","packets":100}}`
 	mc.SendMessage(t, req)
@@ -470,10 +496,10 @@ func TestComponent_TraceNegative_Failed(t *testing.T) {
 	defer nc.Close()
 	mc := startMockCloud(t)
 
-	mockNATSResult(nc, "cmd.action.vyos.trace", "action", "failed", "traceroute command not found", "-32603")
+	mockNATSResult(t, nc, "cmd.action.vyos.trace", "action", "failed", "traceroute command not found", "-32603")
 
 	cfg := getTestConfig(t, mc, ns)
-	startClientProcess(t, cfg)
+	startClientProcess(t, mc, cfg)
 
 	req := `{"jsonrpc":"2.0","method":"trace","id":31,"params":{"serial":"001122334455","duration":5,"network":"lan","interface":"eth0","packets":100}}`
 	mc.SendMessage(t, req)
@@ -499,7 +525,7 @@ func TestComponent_UnknownMethod(t *testing.T) {
 	mc := startMockCloud(t)
 
 	cfg := getTestConfig(t, mc, ns)
-	startClientProcess(t, cfg)
+	startClientProcess(t, mc, cfg)
 
 	// Send a method the client doesn't recognize
 	req := `{"jsonrpc":"2.0","method":"nonexistent_method","id":40,"params":{"serial":"001122334455"}}`
@@ -527,7 +553,7 @@ func TestComponent_MalformedRequest_NoMethod(t *testing.T) {
 	mc := startMockCloud(t)
 
 	cfg := getTestConfig(t, mc, ns)
-	startClientProcess(t, cfg)
+	startClientProcess(t, mc, cfg)
 
 	// JSON-RPC request with no method field
 	req := `{"jsonrpc":"2.0","id":50,"params":{"serial":"001122334455"}}`
@@ -560,11 +586,11 @@ func TestComponent_MultipleSequentialCommands(t *testing.T) {
 	mc := startMockCloud(t)
 
 	// Mock both configure and trace
-	mockNATSResult(nc, "cmd.configure.vyos", "configure", "success", "config applied", "")
-	mockNATSResult(nc, "cmd.action.vyos.trace", "action", "success", "trace done", "")
+	mockNATSResult(t, nc, "cmd.configure.vyos", "configure", "success", "config applied", "")
+	mockNATSResult(t, nc, "cmd.action.vyos.trace", "action", "success", "trace done", "")
 
 	cfg := getTestConfig(t, mc, ns)
-	startClientProcess(t, cfg)
+	startClientProcess(t, mc, cfg)
 
 	// 1. Send configure
 	mc.SendMessage(t, `{"jsonrpc":"2.0","method":"configure","id":60,"params":{"serial":"001122334455","uuid":100,"config":{"interfaces":[]}}}`)

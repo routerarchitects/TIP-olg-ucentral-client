@@ -146,9 +146,9 @@ func (mc *MockCloud) WaitForResponse(t *testing.T, timeout time.Duration) []byte
 	return nil
 }
 
-// WaitForResponseWithID waits for a JSON-RPC response matching the given id,
-// skipping over any intermediate messages (e.g. the "Invalid request" error
-// the client sends in response to the connect handshake).
+// WaitForResponseWithID waits for a JSON-RPC response matching the given id.
+// Since the client now correctly consumes the connect handshake, we should not
+// see unexpected Invalid Request errors.
 func (mc *MockCloud) WaitForResponseWithID(t *testing.T, expectedID float64, timeout time.Duration) ([]byte, map[string]interface{}) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -160,9 +160,17 @@ func (mc *MockCloud) WaitForResponseWithID(t *testing.T, expectedID float64, tim
 		respBytes := mc.WaitForResponse(t, remaining)
 		var resp map[string]interface{}
 		json.Unmarshal(respBytes, &resp)
+
+		// If it's a request from the client (e.g. telemetry, ping), ignore it
+		if _, hasMethod := resp["method"]; hasMethod {
+			continue
+		}
+
 		if idVal, ok := resp["id"].(float64); ok && idVal == expectedID {
 			return respBytes, resp
 		}
+
+		t.Fatalf("Received unexpected JSON-RPC response while waiting for id=%v: %s", expectedID, string(respBytes))
 	}
 	t.Fatalf("Timeout waiting for response with id=%v", expectedID)
 	return nil, nil

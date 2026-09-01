@@ -15,8 +15,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/joho/godotenv"
 	"github.com/Telecominfraproject/olg-nats-agent-core/agentcore"
+	"github.com/joho/godotenv"
 	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/config"
 	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/contracts"
 	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/nats"

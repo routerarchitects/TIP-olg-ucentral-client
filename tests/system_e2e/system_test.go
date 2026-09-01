@@ -1,4 +1,5 @@
 //go:build e2e
+
 package system_e2e
 
 import (
@@ -10,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"testing"
-
 )
 
 type Config struct {
@@ -84,11 +84,11 @@ func TestSystemE2E_ConfigSync(t *testing.T) {
 					"role": "downstream",
 					"ipv4": map[string]interface{}{
 						"addressing": "static",
-						"subnet": "192.168.100.1/24",
+						"subnet":     "192.168.100.1/24",
 						"dhcp": map[string]interface{}{
-							"lease-time": "24h",
+							"lease-time":  "24h",
 							"lease-start": "192.168.100.10",
-							"lease-end": "192.168.100.200",
+							"lease-end":   "192.168.100.200",
 							"lease-first": 10,
 							"lease-count": 100,
 						},
@@ -106,19 +106,19 @@ func TestSystemE2E_ConfigSync(t *testing.T) {
 	req, _ := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/device/%s/configure", cfg.GwAPIURL, cfg.DeviceSerial), bytes.NewReader(b))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
-	
+
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("Cloud API request failed: %v", err)
 	}
-	
+
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	
+
 	if resp.StatusCode >= 400 {
 		t.Fatalf("Cloud API rejected request (Status %d): %s", resp.StatusCode, string(body))
 	}
-	
+
 	// If the Cloud API returned 200 OK, it means the Gateway received the "success" WebSocket message from the agent!
 	t.Logf("SUCCESS! Cloud API returned OK, meaning the agent successfully applied the configuration and NATS relayed it back!")
 	t.Logf("Note: The VyOS SSH daemon is now disabled by the renderer, so SSH verification is skipped.")

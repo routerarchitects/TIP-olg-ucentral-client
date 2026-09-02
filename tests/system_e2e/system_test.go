@@ -17,21 +17,23 @@ import (
 )
 
 type Config struct {
-	SecAPIURL    string
-	GwAPIURL     string
-	AdminUser    string
-	AdminPass    string
-	DeviceSerial string
+	SecAPIURL         string
+	GwAPIURL          string
+	AdminUser         string
+	AdminPass         string
+	DeviceSerial      string
+	DefaultConfigName string
 }
 
 func loadConfig(t *testing.T) Config {
 	t.Helper()
 	return Config{
-		SecAPIURL:    getEnvOrDefault("OW_SEC_URL", "https://openwifi.wlan.local:16001"),
-		GwAPIURL:     getEnvOrDefault("OW_GW_URL", "https://openwifi.wlan.local:16002"),
-		AdminUser:    requireEnv(t, "OW_ADMIN_USER"),
-		AdminPass:    requireEnv(t, "OW_ADMIN_PASS"),
-		DeviceSerial: requireEnv(t, "OW_DEVICE_SERIAL"),
+		SecAPIURL:         getEnvOrDefault("OW_SEC_URL", "https://openwifi.wlan.local:16001"),
+		GwAPIURL:          getEnvOrDefault("OW_GW_URL", "https://openwifi.wlan.local:16002"),
+		AdminUser:         requireEnv(t, "OW_ADMIN_USER"),
+		AdminPass:         requireEnv(t, "OW_ADMIN_PASS"),
+		DeviceSerial:      requireEnv(t, "OW_DEVICE_SERIAL"),
+		DefaultConfigName: getEnvOrDefault("OW_DEFAULT_CONFIG_NAME", "default_old"),
 	}
 }
 
@@ -90,7 +92,7 @@ func getAuthToken(t *testing.T, cfg Config, client *http.Client) string {
 
 // fetchDefaultConfig retrieves the default baseline configuration from the Cloud Gateway
 func fetchDefaultConfig(t *testing.T, cfg Config, token string, client *http.Client) map[string]interface{} {
-	req, err := http.NewRequest("GET", fmt.Sprintf("%s/api/v1/default_configuration/default_old", cfg.GwAPIURL), nil)
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/api/v1/default_configuration/%s", cfg.GwAPIURL, cfg.DefaultConfigName), nil)
 	if err != nil {
 		t.Fatalf("Failed to create GET request: %v", err)
 	}

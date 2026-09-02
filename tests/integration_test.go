@@ -832,3 +832,36 @@ func TestComponent_ConcurrentImmediateResult(t *testing.T) {
 		t.Fatalf("Expected IDs 201 and 202, got %v and %v", id1, id2)
 	}
 }
+
+func TestComponent_ConfigureNegative_EmptyErrorCode(t *testing.T) {
+	ns := startEmbeddedNATS(t)
+	nc, err := nats.Connect(ns.ClientURL())
+	if err != nil {
+		t.Fatalf("Failed to connect to NATS: %v", err)
+	}
+	defer nc.Close()
+	mc := startMockCloud(t)
+
+	// Mock an empty error code
+	mockNATSResult(t, nc, "cmd.configure.vyos", "configure", "failure", "image validation failed", "")
+
+	cfg := getTestConfig(t, mc, ns)
+	startClientProcess(t, mc, cfg)
+
+	req := `{"jsonrpc":"2.0","method":"configure","id":99,"params":{"serial":"001122334455","uuid":789,"config":{"interfaces":[]}}}`
+	mc.SendMessage(t, req)
+
+	_, resp := mc.WaitForResponseWithID(t, 99, 10*time.Second)
+
+	resultObj, ok := resp["result"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("Expected result object, got %v", resp)
+	}
+	statusObj := resultObj["status"].(map[string]interface{})
+	if int(statusObj["error"].(float64)) != 1 {
+		t.Errorf("Expected status.error=1 for empty NATS error_code, got %v", statusObj["error"])
+	}
+	if statusObj["text"].(string) != "image validation failed" {
+		t.Errorf("Expected text 'image validation failed', got %v", statusObj["text"])
+	}
+}

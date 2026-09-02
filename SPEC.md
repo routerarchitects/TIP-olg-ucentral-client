@@ -468,7 +468,7 @@ TIP-olg-ucentral-client/
     const (
     	ResultSuccess        ResultType = "success"
     	ResultRejected       ResultType = "rejected"
-    	ResultFailed         ResultType = "failed"
+    	ResultFailed         ResultType = "failure"
     	ResultTimeout        ResultType = "timeout"
     	ResultRolledBack     ResultType = "rolled_back"
     	ResultRollbackFailed ResultType = "rollback_failed"

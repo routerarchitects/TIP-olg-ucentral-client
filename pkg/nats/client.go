@@ -240,6 +240,10 @@ func validateResultEnvelope(expectedTarget string, msg agentcore.ResultEnvelope)
 		return fmt.Errorf("invalid result state: %q", msg.Result)
 	}
 
+	if msg.Result == string(contracts.ResultSuccess) && msg.ErrorCode != "" && msg.ErrorCode != "0" {
+		return errors.New("success result cannot contain non-zero error_code")
+	}
+
 	command := contracts.CommandType(msg.CommandType)
 	action := contracts.ActionType(msg.Action)
 

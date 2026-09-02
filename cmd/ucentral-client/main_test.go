@@ -59,7 +59,7 @@ func TestProcessNATSResult_UpgradePersistenceFailure(t *testing.T) {
 	res := agentcore.ResultEnvelope{
 		RPCID:       tx.RPCID,
 		CommandType: "upgrade",
-		Result:      `{"status":{"error":0}}`, // Success from agent
+		Result:      "success", // Success from agent
 		ErrorCode:   "0",
 	}
 
@@ -112,7 +112,7 @@ func TestHandleNATSResultOverflow_UpgradePersistenceFailure(t *testing.T) {
 	res := agentcore.ResultEnvelope{
 		RPCID:       tx.RPCID,
 		CommandType: "upgrade",
-		Result:      `{"status":{"error":0}}`, // Success from agent
+		Result:      "success", // Success from agent
 		ErrorCode:   "0",
 	}
 

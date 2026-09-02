@@ -240,7 +240,7 @@ Firmware upgrades take minutes to complete and cannot block the Request Manager 
 1.  **Operation ID:** A persistent `operation_id` must be generated to identify the long-running upgrade process independently of the original JSON-RPC `id` and the NATS `rpc_id`.
 2.  **Initial Response:** The client receives the `upgrade` command, validates it, and immediately returns a JSON-RPC "started" response (closing the JSON-RPC exchange) to the Cloud.
 3.  **Background Tracking & Authoritative Status:** The upgrade continues executing asynchronously. The downstream agent must expose structured, authoritative upgrade status. The uCentral client must use this structured status to determine completion; **system logs must not be used as a completion signal**.
-4.  **State Lock Lifetime:** The state-changing lock (`activeStateTx`) remains held until a defined terminal upgrade state (e.g., success, failed) is received from the downstream agent.
+4.  **State Lock Lifetime:** The state-changing lock (`activeStateTx`) remains held until a defined terminal upgrade state (e.g., success, failure) is received from the downstream agent.
 5.  **Reconnection Resilience:** Upon WebSocket reconnection, the daemon resumes reporting the current upgrade state to the Cloud using the persistent `operation_id`.
 6.  **Crash Recovery (Startup Query):** To prevent losing the in-memory state lock if the daemon process crashes, the daemon must explicitly load the active operation from the `OperationStore` on boot to recover the Cloud JSON-RPC `id` and **immediately restore the `activeStateTx` lock**. It must then query the downstream agent via `status.get.<target>` generating a **fresh internal `rpc_id`**, correlate the generic response using the locally persisted `operation_id` (as the NATS agent does not track Cloud identities), and release the lock if a terminal state is observed. The uCentral client is only the requester for this subject; it must not subscribe to or respond on `status.get`.
 7.  **Duplicate Rejection:** Any state-changing commands received while the background upgrade is active are rejected immediately as busy.
@@ -467,7 +467,7 @@ All result structures return one of the following standard values:
 
 *   `success`: Command processed and applied successfully.
 *   `rejected`: Command failed validation checks (non-destructive).
-*   `failed`: Command failed during execution (destructive).
+*   `failure`: Command failed during execution (destructive).
 *   `timeout`: Command timed out on NATS or local apply.
 *   `rolled_back`: Config apply failed; device successfully rolled back to last good UUID.
 *   `rollback_failed`: Config apply failed and rollback also failed.
@@ -482,6 +482,7 @@ All result structures return one of the following standard values:
 | Internal result                       | Cloud response                                 |
 | ------------------------------------- | ---------------------------------------------- |
 | `success`                             | `result.status.error = 0`                      |
+| `failure`                             | agent-provided error code; default to 1 if no valid agent error code is supplied |
 | `rejected`, substitutions applied     | `result.status.error = 1`                      |
 | `rejected`, configuration not applied | `result.status.error = 2`                      |
 | NATS unavailable                      | JSON-RPC error                                 |

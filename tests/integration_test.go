@@ -8,12 +8,14 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -434,7 +436,7 @@ func TestComponent_ConfigureNegative_Failed(t *testing.T) {
 	defer nc.Close()
 	mc := startMockCloud(t)
 
-	mockNATSResult(t, nc, "cmd.configure.vyos", "configure", "failed", "commit failed", "-32603")
+	mockNATSResult(t, nc, "cmd.configure.vyos", "configure", "failure", "commit failed", "-32603")
 
 	cfg := getTestConfig(t, mc, ns)
 	startClientProcess(t, mc, cfg)
@@ -532,7 +534,7 @@ func TestComponent_TraceNegative_Failed(t *testing.T) {
 	defer nc.Close()
 	mc := startMockCloud(t)
 
-	mockNATSResult(t, nc, "cmd.action.vyos.trace", "action", "failed", "traceroute command not found", "-32603")
+	mockNATSResult(t, nc, "cmd.action.vyos.trace", "action", "failure", "traceroute command not found", "-32603")
 
 	cfg := getTestConfig(t, mc, ns)
 	startClientProcess(t, mc, cfg)
@@ -830,5 +832,221 @@ func TestComponent_ConcurrentImmediateResult(t *testing.T) {
 		// success
 	} else {
 		t.Fatalf("Expected IDs 201 and 202, got %v and %v", id1, id2)
+	}
+}
+
+func TestComponent_ConfigureNegative_EmptyErrorCode(t *testing.T) {
+	ns := startEmbeddedNATS(t)
+	nc, err := nats.Connect(ns.ClientURL())
+	if err != nil {
+		t.Fatalf("Failed to connect to NATS: %v", err)
+	}
+	defer nc.Close()
+	mc := startMockCloud(t)
+
+	// Mock an empty error code
+	mockNATSResult(t, nc, "cmd.configure.vyos", "configure", "failure", "image validation failed", "")
+
+	cfg := getTestConfig(t, mc, ns)
+	startClientProcess(t, mc, cfg)
+
+	req := `{"jsonrpc":"2.0","method":"configure","id":99,"params":{"serial":"001122334455","uuid":789,"config":{"interfaces":[]}}}`
+	mc.SendMessage(t, req)
+
+	_, resp := mc.WaitForResponseWithID(t, 99, 10*time.Second)
+
+	resultObj, ok := resp["result"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("Expected result object, got %v", resp)
+	}
+	statusObj := resultObj["status"].(map[string]interface{})
+	if int(statusObj["error"].(float64)) != 1 {
+		t.Errorf("Expected status.error=1 for empty NATS error_code, got %v", statusObj["error"])
+	}
+	if statusObj["text"].(string) != "image validation failed" {
+		t.Errorf("Expected text 'image validation failed', got %v", statusObj["text"])
+	}
+}
+
+func TestComponent_UpgradeLockRelease_OnEmptyErrorCode(t *testing.T) {
+	ns := startEmbeddedNATS(t)
+	nc, err := nats.Connect(ns.ClientURL())
+	if err != nil {
+		t.Fatalf("Failed to connect to NATS: %v", err)
+	}
+	defer nc.Close()
+	mc := startMockCloud(t)
+
+	// 1. Mock an empty error code for the upgrade action
+	mockNATSResult(t, nc, "cmd.action.vyos.upgrade", "action", "failure", "image validation failed", "")
+
+	// 2. Mock a normal successful configure command for later
+	mockNATSResult(t, nc, "cmd.configure.vyos", "configure", "success", "commit successful", "")
+
+	cfg := getTestConfig(t, mc, ns)
+	startClientProcess(t, mc, cfg)
+
+	// 3. Send the upgrade command.
+	reqUpgrade := `{"jsonrpc":"2.0","method":"upgrade","id":100,"params":{"serial":"001122334455","action":"upgrade","uri":"https://example.com/fw.bin"}}`
+	mc.SendMessage(t, reqUpgrade)
+
+	// Gateway should immediately return a JSON-RPC response acknowledging the upgrade started
+	// We just wait for ANY response for ID 100 to clear it out.
+	mc.WaitForResponseWithID(t, 100, 5*time.Second)
+
+	// 4. Poll with configure commands until the lock is released or we timeout.
+	deadline := time.Now().Add(5 * time.Second)
+	var lastErr string
+	id := 101
+	for time.Now().Before(deadline) {
+		reqConfigure := fmt.Sprintf(`{"jsonrpc":"2.0","method":"configure","id":%d,"params":{"serial":"001122334455","uuid":789,"config":{"interfaces":[]}}}`, id)
+		mc.SendMessage(t, reqConfigure)
+
+		_, respCfg := mc.WaitForResponseWithID(t, float64(id), 2*time.Second)
+
+		if respCfg["error"] != nil {
+			errObj := respCfg["error"].(map[string]interface{})
+			lastErr = errObj["message"].(string)
+			if strings.Contains(lastErr, "busy") {
+				time.Sleep(100 * time.Millisecond)
+				id++
+				continue
+			}
+			t.Fatalf("Unexpected error from configure: %v", lastErr)
+		}
+
+		resultObj, ok := respCfg["result"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("Expected result object, got %v", respCfg)
+		}
+		statusObj := resultObj["status"].(map[string]interface{})
+		if int(statusObj["error"].(float64)) != 0 {
+			t.Errorf("Expected configure success (error=0), got %v", statusObj["error"])
+		}
+		return // Success! Lock was successfully released.
+	}
+
+	t.Fatalf("Timed out waiting for upgrade lock to release. Last error: %v", lastErr)
+}
+
+func TestComponent_UpgradeLockRelease_OnRejectedEmptyErrorCode(t *testing.T) {
+	ns := startEmbeddedNATS(t)
+	nc, err := nats.Connect(ns.ClientURL())
+	if err != nil {
+		t.Fatalf("Failed to connect to NATS: %v", err)
+	}
+	defer nc.Close()
+	mc := startMockCloud(t)
+
+	// Mock an empty error code for the upgrade action returning "rejected"
+	mockNATSResult(t, nc, "cmd.action.vyos.upgrade", "action", "rejected", "URI validation failed", "")
+
+	mockNATSResult(t, nc, "cmd.configure.vyos", "configure", "success", "commit successful", "")
+
+	cfg := getTestConfig(t, mc, ns)
+	startClientProcess(t, mc, cfg)
+
+	reqUpgrade := `{"jsonrpc":"2.0","method":"upgrade","id":100,"params":{"serial":"001122334455","action":"upgrade","uri":"https://example.com/fw.bin"}}`
+	mc.SendMessage(t, reqUpgrade)
+
+	mc.WaitForResponseWithID(t, 100, 5*time.Second)
+
+	deadline := time.Now().Add(5 * time.Second)
+	var lastErr string
+	id := 101
+	for time.Now().Before(deadline) {
+		reqConfigure := fmt.Sprintf(`{"jsonrpc":"2.0","method":"configure","id":%d,"params":{"serial":"001122334455","uuid":789,"config":{"interfaces":[]}}}`, id)
+		mc.SendMessage(t, reqConfigure)
+
+		_, respCfg := mc.WaitForResponseWithID(t, float64(id), 2*time.Second)
+
+		if respCfg["error"] != nil {
+			errObj := respCfg["error"].(map[string]interface{})
+			lastErr = errObj["message"].(string)
+			if strings.Contains(lastErr, "busy") {
+				time.Sleep(100 * time.Millisecond)
+				id++
+				continue
+			}
+			t.Fatalf("Unexpected error from configure: %v", lastErr)
+		}
+
+		resultObj, ok := respCfg["result"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("Expected result object, got %v", respCfg)
+		}
+		statusObj := resultObj["status"].(map[string]interface{})
+		if int(statusObj["error"].(float64)) != 0 {
+			t.Errorf("Expected configure success (error=0), got %v", statusObj["error"])
+		}
+		return
+	}
+
+	t.Fatalf("Timed out waiting for upgrade lock to release on rejected. Last error: %v", lastErr)
+}
+
+func TestComponent_ConfigureNegative_ZeroErrorCode(t *testing.T) {
+	ns := startEmbeddedNATS(t)
+	nc, err := nats.Connect(ns.ClientURL())
+	if err != nil {
+		t.Fatalf("Failed to connect to NATS: %v", err)
+	}
+	defer nc.Close()
+	mc := startMockCloud(t)
+
+	// Mock an explicit "0" error code on a failure
+	mockNATSResult(t, nc, "cmd.configure.vyos", "configure", "failure", "commit failed but sent zero", "0")
+
+	cfg := getTestConfig(t, mc, ns)
+	startClientProcess(t, mc, cfg)
+
+	req := `{"jsonrpc":"2.0","method":"configure","id":99,"params":{"serial":"001122334455","uuid":789,"config":{"interfaces":[]}}}`
+	mc.SendMessage(t, req)
+
+	_, resp := mc.WaitForResponseWithID(t, 99, 10*time.Second)
+
+	resultObj, ok := resp["result"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("Expected result object, got %v", resp)
+	}
+	statusObj := resultObj["status"].(map[string]interface{})
+	if int(statusObj["error"].(float64)) != 1 {
+		t.Errorf("Expected status.error=1 for failure with error_code=0, got %v", statusObj["error"])
+	}
+	if statusObj["text"].(string) != "commit failed but sent zero" {
+		t.Errorf("Expected text 'commit failed but sent zero', got %v", statusObj["text"])
+	}
+}
+
+func TestComponent_ConfigureNegative_SuccessWithErrorCode(t *testing.T) {
+	ns := startEmbeddedNATS(t)
+	nc, err := nats.Connect(ns.ClientURL())
+	if err != nil {
+		t.Fatalf("Failed to connect to NATS: %v", err)
+	}
+	defer nc.Close()
+	mc := startMockCloud(t)
+
+	// Mock an inconsistent envelope: result=success but error_code=-32603
+	mockNATSResult(t, nc, "cmd.configure.vyos", "configure", "success", "commit successful", "-32603")
+
+	cfg := getTestConfig(t, mc, ns)
+	startClientProcess(t, mc, cfg)
+
+	req := `{"jsonrpc":"2.0","method":"configure","id":102,"params":{"serial":"001122334455","uuid":790,"config":{"interfaces":[]}}}`
+	mc.SendMessage(t, req)
+
+	// Because the NATS result envelope is malformed (success with error_code), validateResultEnvelope drops it.
+	// We wait a short duration and ensure NO response was sent to the mock cloud.
+	time.Sleep(2 * time.Second)
+
+	mc.mu.Lock()
+	defer mc.mu.Unlock()
+	for _, rawMsg := range mc.messages {
+		var r map[string]interface{}
+		json.Unmarshal(rawMsg, &r)
+		if idVal, ok := r["id"].(float64); ok && idVal == 102 {
+			t.Fatalf("Expected NO response due to dropped envelope, but got: %s", string(rawMsg))
+		}
 	}
 }

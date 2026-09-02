@@ -263,7 +263,7 @@ func processNATSResult(ctx context.Context, res agentcore.ResultEnvelope, compon
 
 	// Complete the transaction in RequestManager with the full response payload (REQ-009)
 	if tx.Method == string(contracts.ActionUpgrade) {
-		if res.ErrorCode != "" && res.ErrorCode != "0" {
+		if res.Result != string(contracts.ResultSuccess) || (res.ErrorCode != "" && res.ErrorCode != "0") {
 			log.Printf("[NATS RESULT] WARNING: Upgrade request rejected by device. Aborting persistent operation for RPCID %s\n", res.RPCID)
 			if err := components.ReqManager.Fail(res.RPCID, respBytes); err != nil {
 				log.Printf("[NATS RESULT] WARNING: Fail() rejected for RPCID %s: %v\n", res.RPCID, err)
@@ -346,7 +346,7 @@ func handleNATSResult(ctx context.Context, res agentcore.ResultEnvelope, resultQ
 			// Complete and cache the transaction in RequestManager so it is resolved and cleaned up from memory.
 			// We do not push it to the scheduler to avoid further congestion.
 			if tx.Method == string(contracts.ActionUpgrade) {
-				if res.ErrorCode != "" && res.ErrorCode != "0" {
+				if res.Result != string(contracts.ResultSuccess) || (res.ErrorCode != "" && res.ErrorCode != "0") {
 					log.Printf("[NATS RESULT OVERFLOW] WARNING: Upgrade request rejected by device. Aborting persistent operation for RPCID %s\n", res.RPCID)
 					_ = components.ReqManager.Fail(res.RPCID, respBytes) // Ignore error since we don't push overflow failures anyway
 					return

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"strconv"
 	"strings"
@@ -204,6 +205,15 @@ func (n *NATSClient) SubscribeResults(ctx context.Context, target string, handle
 
 	err := n.agentClient.RegisterResultHandler(target, func(ctx context.Context, msg agentcore.ResultEnvelope) error {
 		if err := validateResultEnvelope(target, msg); err != nil {
+			log.Printf(
+				"dropping invalid NATS result: target=%q rpc_id=%q command=%q action=%q result=%q: %v",
+				msg.Target,
+				msg.RPCID,
+				msg.CommandType,
+				msg.Action,
+				msg.Result,
+				err,
+			)
 			return err
 		}
 		handler(msg)
@@ -228,6 +238,10 @@ func validateResultEnvelope(expectedTarget string, msg agentcore.ResultEnvelope)
 
 	if !contracts.ResultType(msg.Result).Valid() {
 		return fmt.Errorf("invalid result state: %q", msg.Result)
+	}
+
+	if msg.Result == string(contracts.ResultSuccess) && msg.ErrorCode != "" && msg.ErrorCode != "0" {
+		return errors.New("success result cannot contain non-zero error_code")
 	}
 
 	command := contracts.CommandType(msg.CommandType)

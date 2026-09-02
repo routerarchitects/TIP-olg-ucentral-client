@@ -902,7 +902,7 @@ func TestComponent_UpgradeLockRelease_OnEmptyErrorCode(t *testing.T) {
 
 	// 5. Verify the configure command succeeds (meaning the lock was successfully released by the empty error code logic)
 	_, respCfg := mc.WaitForResponseWithID(t, 101, 10*time.Second)
-	
+
 	// If the lock wasn't released, we would get an error object with "Device is busy".
 	// Since we expect it to succeed, we check for a valid result.
 	if respCfg["error"] != nil {

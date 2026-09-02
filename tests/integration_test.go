@@ -8,12 +8,14 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -892,30 +894,37 @@ func TestComponent_UpgradeLockRelease_OnEmptyErrorCode(t *testing.T) {
 	// We just wait for ANY response for ID 100 to clear it out.
 	mc.WaitForResponseWithID(t, 100, 5*time.Second)
 
-	// The mock NATS agent has also concurrently published the `failure` result over NATS.
-	// Give the ucentral-client a brief moment to process the NATS result and release the lock.
-	time.Sleep(500 * time.Millisecond)
+	// 4. Poll with configure commands until the lock is released or we timeout.
+	deadline := time.Now().Add(5 * time.Second)
+	var lastErr string
+	id := 101
+	for time.Now().Before(deadline) {
+		reqConfigure := fmt.Sprintf(`{"jsonrpc":"2.0","method":"configure","id":%d,"params":{"serial":"001122334455","uuid":789,"config":{"interfaces":[]}}}`, id)
+		mc.SendMessage(t, reqConfigure)
 
-	// 4. Send a subsequent state-changing command (configure)
-	reqConfigure := `{"jsonrpc":"2.0","method":"configure","id":101,"params":{"serial":"001122334455","uuid":789,"config":{"interfaces":[]}}}`
-	mc.SendMessage(t, reqConfigure)
+		_, respCfg := mc.WaitForResponseWithID(t, float64(id), 2*time.Second)
 
-	// 5. Verify the configure command succeeds (meaning the lock was successfully released by the empty error code logic)
-	_, respCfg := mc.WaitForResponseWithID(t, 101, 10*time.Second)
+		if respCfg["error"] != nil {
+			errObj := respCfg["error"].(map[string]interface{})
+			lastErr = errObj["message"].(string)
+			if strings.Contains(lastErr, "busy") {
+				time.Sleep(100 * time.Millisecond)
+				id++
+				continue
+			}
+			t.Fatalf("Unexpected error from configure: %v", lastErr)
+		}
 
-	// If the lock wasn't released, we would get an error object with "Device is busy".
-	// Since we expect it to succeed, we check for a valid result.
-	if respCfg["error"] != nil {
-		errObj := respCfg["error"].(map[string]interface{})
-		t.Fatalf("Configure failed, which means the upgrade lock was NOT released! Error: %v", errObj["message"])
+		resultObj, ok := respCfg["result"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("Expected result object, got %v", respCfg)
+		}
+		statusObj := resultObj["status"].(map[string]interface{})
+		if int(statusObj["error"].(float64)) != 0 {
+			t.Errorf("Expected configure success (error=0), got %v", statusObj["error"])
+		}
+		return // Success! Lock was successfully released.
 	}
 
-	resultObj, ok := respCfg["result"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("Expected result object, got %v", respCfg)
-	}
-	statusObj := resultObj["status"].(map[string]interface{})
-	if int(statusObj["error"].(float64)) != 0 {
-		t.Errorf("Expected configure success (error=0), got %v", statusObj["error"])
-	}
+	t.Fatalf("Timed out waiting for upgrade lock to release. Last error: %v", lastErr)
 }

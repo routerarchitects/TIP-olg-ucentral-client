@@ -1,0 +1,359 @@
+//go:build e2e
+
+package system_e2e
+
+import (
+	"crypto/x509"
+
+	"bytes"
+	"crypto/tls"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/joho/godotenv"
+)
+
+type Config struct {
+	SecAPIURL         string
+	GwAPIURL          string
+	AdminUser         string
+	AdminPass         string
+	DeviceSerial      string
+	DefaultConfigName string
+	AllowDestructive  bool
+}
+
+func loadConfig(t *testing.T) Config {
+	t.Helper()
+
+	// Attempt to load .env file if it exists. Ignore errors to allow tests to rely purely on injected env vars.
+	_ = godotenv.Load()
+
+	return Config{
+		SecAPIURL:         getEnvOrDefault("OW_SEC_URL", "https://openwifi.wlan.local:16001"),
+		GwAPIURL:          getEnvOrDefault("OW_GW_URL", "https://openwifi.wlan.local:16002"),
+		AdminUser:         requireEnv(t, "OW_ADMIN_USER"),
+		AdminPass:         requireEnv(t, "OW_ADMIN_PASS"),
+		DeviceSerial:      requireEnv(t, "OW_DEVICE_SERIAL"),
+		DefaultConfigName: requireEnv(t, "OW_DEFAULT_CONFIG_NAME"),
+		AllowDestructive:  os.Getenv("OW_ALLOW_DESTRUCTIVE_E2E") == "true",
+	}
+}
+
+func getEnvOrDefault(key, defaultVal string) string {
+	if val := os.Getenv(key); val != "" {
+		return val
+	}
+	return defaultVal
+}
+
+func requireEnv(t *testing.T, key string) string {
+	t.Helper()
+	val := os.Getenv(key)
+	if val == "" {
+		t.Fatalf("Required environment variable %s is not set", key)
+	}
+	return val
+}
+
+func getAuthToken(t *testing.T, cfg Config, client *http.Client) string {
+	t.Helper()
+	loginPayload := map[string]interface{}{
+		"userId":   cfg.AdminUser,
+		"password": cfg.AdminPass,
+	}
+	b, err := json.Marshal(loginPayload)
+	if err != nil {
+		t.Fatalf("Failed to marshal login payload: %v", err)
+	}
+	req, err := http.NewRequest("POST", cfg.SecAPIURL+"/api/v1/oauth2", bytes.NewReader(b))
+	if err != nil {
+		t.Fatalf("Failed to create login request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("Login request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Login request rejected (Status %d)", resp.StatusCode)
+	}
+
+	var result struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("Failed to decode login response: %v", err)
+	}
+	if result.AccessToken == "" {
+		t.Fatalf("Login response missing access_token")
+	}
+	return result.AccessToken
+}
+
+// fetchDefaultConfig retrieves the default baseline configuration from the Cloud Gateway.
+// IMPORTANT PREREQUISITE: Before running this E2E test suite, you MUST create a valid
+// baseline configuration template in the OpenWiFi system with the exact name provided in
+// the OW_DEFAULT_CONFIG_NAME environment variable. If this template does not exist, the
+// test cleanup phase will fail to fetch a valid config and might leave your lab device broken!
+func fetchDefaultConfig(t *testing.T, cfg Config, token string, client *http.Client) map[string]interface{} {
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/api/v1/default_configuration/%s", cfg.GwAPIURL, cfg.DefaultConfigName), nil)
+	if err != nil {
+		t.Fatalf("Failed to create GET request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("Cloud API GET request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		t.Fatalf("CRITICAL: Failed to fetch default config '%s' (Status %d). Cannot proceed with tests without a valid cleanup template!", cfg.DefaultConfigName, resp.StatusCode)
+	}
+
+	var payload map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("Failed to decode default configuration JSON: %v", err)
+	}
+
+	// Assuming the endpoint returns the configuration nested under a 'configuration' key,
+	// similar to the device API. If it returns it flat, we fallback to the raw payload.
+	if config, ok := payload["configuration"].(map[string]interface{}); ok {
+		return config
+	}
+	return payload
+}
+
+// restoreConfig pushes a configuration back to the Cloud Gateway
+func restoreConfig(t *testing.T, cfg Config, token string, client *http.Client, originalConfig map[string]interface{}) {
+	if originalConfig == nil {
+		t.Fatalf("CRITICAL: restoreConfig called with nil configuration!")
+	}
+	t.Logf("Restoring '%s' default configuration to device...", cfg.DefaultConfigName)
+
+	uniqueConfigUUID := time.Now().Unix()
+	originalConfig["uuid"] = uniqueConfigUUID
+
+	configPayload := map[string]interface{}{
+		"serialNumber":  cfg.DeviceSerial,
+		"UUID":          uniqueConfigUUID,
+		"configuration": originalConfig,
+	}
+
+	b, _ := json.Marshal(configPayload)
+	req, _ := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/device/%s/configure", cfg.GwAPIURL, cfg.DeviceSerial), bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("Failed to restore config: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("Failed to read restore config response: %v", err)
+	}
+
+	if resp.StatusCode >= 400 {
+		t.Fatalf("Gateway rejected restore config (Status %d): %s", resp.StatusCode, string(body))
+	}
+
+	var apiResponse map[string]interface{}
+	if err := json.Unmarshal(body, &apiResponse); err != nil {
+		t.Fatalf("Failed to parse restore config response: %v", err)
+	}
+
+	pollCommandCompletion(t, cfg, token, client, apiResponse)
+	t.Log("Successfully verified original configuration restore command completed on the device.")
+}
+
+func TestSystemE2E_ConfigureCommandFlow(t *testing.T) {
+	cfg := loadConfig(t)
+	if !cfg.AllowDestructive {
+		t.Skip("Skipping destructive E2E test. Set OW_ALLOW_DESTRUCTIVE_E2E=true to enable.")
+	}
+
+	// We use a 30s timeout here because the Gateway waits for the device to apply the config
+	client := createHTTPClient(t, 30*time.Second)
+	token := getAuthToken(t, cfg, client)
+
+	defaultConfig := fetchDefaultConfig(t, cfg, token, client)
+	t.Cleanup(func() {
+		restoreConfig(t, cfg, token, client, defaultConfig)
+	})
+
+	uniqueConfigUUID := time.Now().Unix()
+
+	configPayload := map[string]interface{}{
+		"serialNumber": cfg.DeviceSerial,
+		"UUID":         uniqueConfigUUID,
+		"configuration": map[string]interface{}{
+			"uuid": uniqueConfigUUID,
+			"interfaces": []map[string]interface{}{
+				{
+					"name": "LAN",
+					"role": "downstream",
+					"ipv4": map[string]interface{}{
+						"addressing": "static",
+						"subnet":     "192.168.100.1/24",
+						"dhcp": map[string]interface{}{
+							"lease-time":  "24h",
+							"lease-start": "192.168.100.10",
+							"lease-end":   "192.168.100.200",
+							"lease-first": 10,
+							"lease-count": 100,
+						},
+					},
+					"ethernet": []map[string]interface{}{
+						{
+							"select-ports": []string{"LAN*"},
+						},
+					},
+				},
+			},
+		},
+	}
+	b, err := json.Marshal(configPayload)
+	if err != nil {
+		t.Fatalf("Failed to marshal config payload: %v", err)
+	}
+	req, err := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/device/%s/configure", cfg.GwAPIURL, cfg.DeviceSerial), bytes.NewReader(b))
+	if err != nil {
+		t.Fatalf("Failed to create configure request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("Cloud API request failed: %v", err)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("Failed to read Cloud API response: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		t.Fatalf("Cloud API rejected request (Status %d): %s", resp.StatusCode, string(body))
+	}
+
+	var apiResponse map[string]interface{}
+	if err := json.Unmarshal(body, &apiResponse); err != nil {
+		t.Fatalf("Failed to parse Cloud API response: %v", err)
+	}
+
+	pollCommandCompletion(t, cfg, token, client, apiResponse)
+
+	t.Logf("SUCCESS! The configure command completed successfully and the agent result was relayed back through NATS to the Cloud API.")
+}
+
+func pollCommandCompletion(t *testing.T, cfg Config, token string, client *http.Client, initialResponse map[string]interface{}) {
+	t.Helper()
+	apiResponse := initialResponse
+	uuidVal, ok := apiResponse["UUID"].(string)
+	if !ok {
+		t.Fatalf("Response missing UUID: %v", apiResponse)
+	}
+
+	status, _ := apiResponse["status"].(string)
+
+	if status != "completed" {
+		t.Logf("Command %s is %s, polling for completion...", uuidVal, status)
+
+		deadline := time.Now().Add(30 * time.Second)
+		completed := false
+
+		for time.Now().Before(deadline) {
+			time.Sleep(2 * time.Second)
+
+			pollReq, err := http.NewRequest("GET", fmt.Sprintf("%s/api/v1/command/%s", cfg.GwAPIURL, uuidVal), nil)
+			if err != nil {
+				continue
+			}
+			pollReq.Header.Set("Authorization", "Bearer "+token)
+
+			pollResp, err := client.Do(pollReq)
+			if err != nil {
+				continue
+			}
+			pollBody, err := io.ReadAll(pollResp.Body)
+			if err != nil {
+				pollResp.Body.Close()
+				continue
+			}
+			pollResp.Body.Close()
+
+			if pollResp.StatusCode == 200 {
+				var pollResult map[string]interface{}
+				json.Unmarshal(pollBody, &pollResult)
+
+				if pollStatus, ok := pollResult["status"].(string); ok && pollStatus == "completed" {
+					apiResponse = pollResult
+					completed = true
+					break
+				}
+			}
+		}
+
+		if !completed {
+			t.Fatalf("Timeout waiting for configure command %s to complete", uuidVal)
+		}
+	}
+
+	results, ok := apiResponse["results"].(map[string]interface{})
+	if !ok || len(results) == 0 {
+		t.Fatalf("Configure command completed but contains no results object: %v", apiResponse)
+	}
+
+	statusObj, ok := results["status"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("Results object missing status field: %v", results)
+	}
+
+	errCode, ok := statusObj["error"].(float64)
+	if !ok || errCode != 0 {
+		t.Fatalf("Configure command failed on device! error code: %v, full results: %v", statusObj["error"], results)
+	}
+
+	t.Logf("SUCCESS! The configure command completed successfully and the agent result was relayed back through NATS to the Cloud API.")
+	t.Logf("Note: The VyOS SSH daemon is now disabled by the renderer, so SSH verification is skipped.")
+}
+
+func createHTTPClient(t *testing.T, timeout time.Duration) *http.Client {
+	t.Helper()
+
+	tlsConfig := &tls.Config{}
+
+	if os.Getenv("OW_INSECURE_TLS") == "true" {
+		tlsConfig.InsecureSkipVerify = true
+	} else {
+		caFile := getEnvOrDefault("OW_CA_FILE", "../../ca.pem")
+		caCert, err := os.ReadFile(caFile)
+		if err != nil {
+			t.Fatalf("Failed to read CA file %s (set OW_INSECURE_TLS=true to bypass): %v", caFile, err)
+		}
+		caCertPool := x509.NewCertPool()
+		if !caCertPool.AppendCertsFromPEM(caCert) {
+			t.Fatalf("Failed to parse CA certificate from %s", caFile)
+		}
+		tlsConfig.RootCAs = caCertPool
+	}
+
+	return &http.Client{
+		Transport: &http.Transport{TLSClientConfig: tlsConfig},
+		Timeout:   timeout,
+	}
+}

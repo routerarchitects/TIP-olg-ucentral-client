@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Telecominfraproject/olg-nats-agent-core/agentcore"
+	"github.com/joho/godotenv"
 	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/config"
 	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/contracts"
 	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/nats"
@@ -40,6 +41,9 @@ func parseTimeoutEnv(envKey string, defaultVal time.Duration) (time.Duration, er
 }
 
 func main() {
+	// Load .env file if it exists
+	_ = godotenv.Load()
+
 	configPath := flag.String("config", "config.json", "Path to JSON configuration file")
 	flag.Parse()
 

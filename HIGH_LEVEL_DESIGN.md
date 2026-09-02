@@ -482,7 +482,7 @@ All result structures return one of the following standard values:
 | Internal result                       | Cloud response                                 |
 | ------------------------------------- | ---------------------------------------------- |
 | `success`                             | `result.status.error = 0`                      |
-| `failure`                             | `result.status.error = 1` (or agent-provided error code)|
+| `failure`                             | agent-provided error code; default to 1 if no valid agent error code is supplied |
 | `rejected`, substitutions applied     | `result.status.error = 1`                      |
 | `rejected`, configuration not applied | `result.status.error = 2`                      |
 | NATS unavailable                      | JSON-RPC error                                 |

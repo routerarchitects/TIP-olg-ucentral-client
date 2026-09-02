@@ -97,3 +97,23 @@ func TestValidCommandAction(t *testing.T) {
 		})
 	}
 }
+
+func TestResultTypeValid(t *testing.T) {
+	tests := []struct {
+		result ResultType
+		valid  bool
+	}{
+		{ResultType("success"), true},
+		{ResultType("failure"), true},
+		{ResultType("failed"), false}, // legacy compatibility was intentionally not retained
+		{ResultType("rejected"), true},
+		{ResultType("timeout"), true},
+		{ResultType("unknown"), false},
+	}
+
+	for _, tt := range tests {
+		if got := tt.result.Valid(); got != tt.valid {
+			t.Errorf("ResultType(%q).Valid() = %v, want %v", tt.result, got, tt.valid)
+		}
+	}
+}

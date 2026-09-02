@@ -14,6 +14,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
 type Config struct {
@@ -23,10 +25,15 @@ type Config struct {
 	AdminPass         string
 	DeviceSerial      string
 	DefaultConfigName string
+	AllowDestructive  bool
 }
 
 func loadConfig(t *testing.T) Config {
 	t.Helper()
+	
+	// Attempt to load .env file if it exists. Ignore errors to allow tests to rely purely on injected env vars.
+	_ = godotenv.Load()
+
 	return Config{
 		SecAPIURL:         getEnvOrDefault("OW_SEC_URL", "https://openwifi.wlan.local:16001"),
 		GwAPIURL:          getEnvOrDefault("OW_GW_URL", "https://openwifi.wlan.local:16002"),
@@ -34,6 +41,7 @@ func loadConfig(t *testing.T) Config {
 		AdminPass:         requireEnv(t, "OW_ADMIN_PASS"),
 		DeviceSerial:      requireEnv(t, "OW_DEVICE_SERIAL"),
 		DefaultConfigName: requireEnv(t, "OW_DEFAULT_CONFIG_NAME"),
+		AllowDestructive:  os.Getenv("OW_ALLOW_DESTRUCTIVE_E2E") == "true",
 	}
 }
 
@@ -109,8 +117,7 @@ func fetchDefaultConfig(t *testing.T, cfg Config, token string, client *http.Cli
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		t.Logf("Warning: Could not fetch default config (Status %d)", resp.StatusCode)
-		return nil
+		t.Fatalf("CRITICAL: Failed to fetch default config '%s' (Status %d). Cannot proceed with tests without a valid cleanup template!", cfg.DefaultConfigName, resp.StatusCode)
 	}
 
 	var payload map[string]interface{}
@@ -129,13 +136,9 @@ func fetchDefaultConfig(t *testing.T, cfg Config, token string, client *http.Cli
 // restoreConfig pushes a configuration back to the Cloud Gateway
 func restoreConfig(t *testing.T, cfg Config, token string, client *http.Client, originalConfig map[string]interface{}) {
 	if originalConfig == nil {
-		t.Log("No original configuration found (new device). Restoring to empty baseline configuration...")
-		originalConfig = map[string]interface{}{
-			"interfaces": []interface{}{},
-		}
-	} else {
-		t.Log("Restoring original configuration to device...")
+		t.Fatalf("CRITICAL: restoreConfig called with nil configuration!")
 	}
+	t.Logf("Restoring '%s' default configuration to device...", cfg.DefaultConfigName)
 
 	uniqueConfigUUID := time.Now().Unix()
 	originalConfig["uuid"] = uniqueConfigUUID
@@ -166,6 +169,10 @@ func restoreConfig(t *testing.T, cfg Config, token string, client *http.Client, 
 
 func TestSystemE2E_ConfigureCommandFlow(t *testing.T) {
 	cfg := loadConfig(t)
+	if !cfg.AllowDestructive {
+		t.Skip("Skipping destructive E2E test. Set OW_ALLOW_DESTRUCTIVE_E2E=true to enable.")
+	}
+
 	// We use a 30s timeout here because the Gateway waits for the device to apply the config
 	client := createHTTPClient(t, 30*time.Second)
 	token := getAuthToken(t, cfg, client)

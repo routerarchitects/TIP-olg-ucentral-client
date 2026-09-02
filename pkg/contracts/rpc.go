@@ -1023,7 +1023,7 @@ func BuildDeviceResultObject(serial, configUUID string, natsResult string, errCo
 	if natsResult == "success" {
 		errCodeVal = 0
 	} else {
-		if _, err := fmt.Sscan(errCode, &errCodeVal); err != nil {
+		if _, err := fmt.Sscan(errCode, &errCodeVal); err != nil || errCodeVal == 0 {
 			errCodeVal = 1 // Default to 1 (ErrAppFailure)
 		}
 	}

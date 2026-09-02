@@ -928,3 +928,92 @@ func TestComponent_UpgradeLockRelease_OnEmptyErrorCode(t *testing.T) {
 
 	t.Fatalf("Timed out waiting for upgrade lock to release. Last error: %v", lastErr)
 }
+
+func TestComponent_UpgradeLockRelease_OnRejectedEmptyErrorCode(t *testing.T) {
+	ns := startEmbeddedNATS(t)
+	nc, err := nats.Connect(ns.ClientURL())
+	if err != nil {
+		t.Fatalf("Failed to connect to NATS: %v", err)
+	}
+	defer nc.Close()
+	mc := startMockCloud(t)
+
+	// Mock an empty error code for the upgrade action returning "rejected"
+	mockNATSResult(t, nc, "cmd.action.vyos.upgrade", "action", "rejected", "URI validation failed", "")
+
+	mockNATSResult(t, nc, "cmd.configure.vyos", "configure", "success", "commit successful", "")
+
+	cfg := getTestConfig(t, mc, ns)
+	startClientProcess(t, mc, cfg)
+
+	reqUpgrade := `{"jsonrpc":"2.0","method":"upgrade","id":100,"params":{"serial":"001122334455","action":"upgrade","uri":"https://example.com/fw.bin"}}`
+	mc.SendMessage(t, reqUpgrade)
+
+	mc.WaitForResponseWithID(t, 100, 5*time.Second)
+
+	deadline := time.Now().Add(5 * time.Second)
+	var lastErr string
+	id := 101
+	for time.Now().Before(deadline) {
+		reqConfigure := fmt.Sprintf(`{"jsonrpc":"2.0","method":"configure","id":%d,"params":{"serial":"001122334455","uuid":789,"config":{"interfaces":[]}}}`, id)
+		mc.SendMessage(t, reqConfigure)
+
+		_, respCfg := mc.WaitForResponseWithID(t, float64(id), 2*time.Second)
+
+		if respCfg["error"] != nil {
+			errObj := respCfg["error"].(map[string]interface{})
+			lastErr = errObj["message"].(string)
+			if strings.Contains(lastErr, "busy") {
+				time.Sleep(100 * time.Millisecond)
+				id++
+				continue
+			}
+			t.Fatalf("Unexpected error from configure: %v", lastErr)
+		}
+
+		resultObj, ok := respCfg["result"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("Expected result object, got %v", respCfg)
+		}
+		statusObj := resultObj["status"].(map[string]interface{})
+		if int(statusObj["error"].(float64)) != 0 {
+			t.Errorf("Expected configure success (error=0), got %v", statusObj["error"])
+		}
+		return
+	}
+
+	t.Fatalf("Timed out waiting for upgrade lock to release on rejected. Last error: %v", lastErr)
+}
+
+func TestComponent_ConfigureNegative_ZeroErrorCode(t *testing.T) {
+	ns := startEmbeddedNATS(t)
+	nc, err := nats.Connect(ns.ClientURL())
+	if err != nil {
+		t.Fatalf("Failed to connect to NATS: %v", err)
+	}
+	defer nc.Close()
+	mc := startMockCloud(t)
+
+	// Mock an explicit "0" error code on a failure
+	mockNATSResult(t, nc, "cmd.configure.vyos", "configure", "failure", "commit failed but sent zero", "0")
+
+	cfg := getTestConfig(t, mc, ns)
+	startClientProcess(t, mc, cfg)
+
+	req := `{"jsonrpc":"2.0","method":"configure","id":99,"params":{"serial":"001122334455","uuid":789,"config":{"interfaces":[]}}}`
+	mc.SendMessage(t, req)
+
+	_, resp := mc.WaitForResponseWithID(t, 99, 10*time.Second)
+
+	resultObj, ok := resp["result"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("Expected result object, got %v", resp)
+	}
+	statusObj := resultObj["status"].(map[string]interface{})
+	if int(statusObj["error"].(float64)) != 1 {
+		t.Errorf("Expected status.error=1 for failure with error_code=0, got %v", statusObj["error"])
+	}
+	if statusObj["text"].(string) != "commit failed but sent zero" {
+		t.Errorf("Expected text 'commit failed but sent zero', got %v", statusObj["text"])
+	}
+}

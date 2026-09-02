@@ -88,11 +88,87 @@ func getAuthToken(t *testing.T, cfg Config, client *http.Client) string {
 	return result.AccessToken
 }
 
+// fetchDefaultConfig retrieves the default baseline configuration from the Cloud Gateway
+func fetchDefaultConfig(t *testing.T, cfg Config, token string, client *http.Client) map[string]interface{} {
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/api/v1/default_configuration/default_old", cfg.GwAPIURL), nil)
+	if err != nil {
+		t.Fatalf("Failed to create GET request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("Cloud API GET request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		t.Logf("Warning: Could not fetch default config (Status %d)", resp.StatusCode)
+		return nil
+	}
+
+	var payload map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("Failed to decode default configuration JSON: %v", err)
+	}
+
+	// Assuming the endpoint returns the configuration nested under a 'configuration' key,
+	// similar to the device API. If it returns it flat, we fallback to the raw payload.
+	if config, ok := payload["configuration"].(map[string]interface{}); ok {
+		return config
+	}
+	return payload
+}
+
+// restoreConfig pushes a configuration back to the Cloud Gateway
+func restoreConfig(t *testing.T, cfg Config, token string, client *http.Client, originalConfig map[string]interface{}) {
+	if originalConfig == nil {
+		t.Log("No original configuration found (new device). Restoring to empty baseline configuration...")
+		originalConfig = map[string]interface{}{
+			"interfaces": []interface{}{},
+		}
+	} else {
+		t.Log("Restoring original configuration to device...")
+	}
+
+	uniqueConfigUUID := time.Now().Unix()
+	originalConfig["uuid"] = uniqueConfigUUID
+
+	configPayload := map[string]interface{}{
+		"serialNumber":  cfg.DeviceSerial,
+		"UUID":          uniqueConfigUUID,
+		"configuration": originalConfig,
+	}
+
+	b, _ := json.Marshal(configPayload)
+	req, _ := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/device/%s/configure", cfg.GwAPIURL, cfg.DeviceSerial), bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Logf("Failed to restore config: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		t.Logf("Failed to restore config, Gateway returned status %d", resp.StatusCode)
+	} else {
+		t.Log("Successfully dispatched original configuration restore command.")
+	}
+}
+
 func TestSystemE2E_ConfigureCommandFlow(t *testing.T) {
 	cfg := loadConfig(t)
 	// We use a 30s timeout here because the Gateway waits for the device to apply the config
 	client := createHTTPClient(t, 30*time.Second)
 	token := getAuthToken(t, cfg, client)
+
+	defaultConfig := fetchDefaultConfig(t, cfg, token, client)
+	t.Cleanup(func() {
+		restoreConfig(t, cfg, token, client, defaultConfig)
+	})
+
 	uniqueConfigUUID := time.Now().Unix()
 
 	configPayload := map[string]interface{}{

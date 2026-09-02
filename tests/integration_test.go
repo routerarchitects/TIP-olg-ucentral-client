@@ -865,3 +865,57 @@ func TestComponent_ConfigureNegative_EmptyErrorCode(t *testing.T) {
 		t.Errorf("Expected text 'image validation failed', got %v", statusObj["text"])
 	}
 }
+
+func TestComponent_UpgradeLockRelease_OnEmptyErrorCode(t *testing.T) {
+	ns := startEmbeddedNATS(t)
+	nc, err := nats.Connect(ns.ClientURL())
+	if err != nil {
+		t.Fatalf("Failed to connect to NATS: %v", err)
+	}
+	defer nc.Close()
+	mc := startMockCloud(t)
+
+	// 1. Mock an empty error code for the upgrade action
+	mockNATSResult(t, nc, "cmd.action.vyos.upgrade", "action", "failure", "image validation failed", "")
+
+	// 2. Mock a normal successful configure command for later
+	mockNATSResult(t, nc, "cmd.configure.vyos", "configure", "success", "commit successful", "")
+
+	cfg := getTestConfig(t, mc, ns)
+	startClientProcess(t, mc, cfg)
+
+	// 3. Send the upgrade command.
+	reqUpgrade := `{"jsonrpc":"2.0","method":"upgrade","id":100,"params":{"serial":"001122334455","action":"upgrade","uri":"https://example.com/fw.bin"}}`
+	mc.SendMessage(t, reqUpgrade)
+
+	// Gateway should immediately return a JSON-RPC response acknowledging the upgrade started
+	// We just wait for ANY response for ID 100 to clear it out.
+	mc.WaitForResponseWithID(t, 100, 5*time.Second)
+
+	// The mock NATS agent has also concurrently published the `failure` result over NATS.
+	// Give the ucentral-client a brief moment to process the NATS result and release the lock.
+	time.Sleep(500 * time.Millisecond)
+
+	// 4. Send a subsequent state-changing command (configure)
+	reqConfigure := `{"jsonrpc":"2.0","method":"configure","id":101,"params":{"serial":"001122334455","uuid":789,"config":{"interfaces":[]}}}`
+	mc.SendMessage(t, reqConfigure)
+
+	// 5. Verify the configure command succeeds (meaning the lock was successfully released by the empty error code logic)
+	_, respCfg := mc.WaitForResponseWithID(t, 101, 10*time.Second)
+	
+	// If the lock wasn't released, we would get an error object with "Device is busy".
+	// Since we expect it to succeed, we check for a valid result.
+	if respCfg["error"] != nil {
+		errObj := respCfg["error"].(map[string]interface{})
+		t.Fatalf("Configure failed, which means the upgrade lock was NOT released! Error: %v", errObj["message"])
+	}
+
+	resultObj, ok := respCfg["result"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("Expected result object, got %v", respCfg)
+	}
+	statusObj := resultObj["status"].(map[string]interface{})
+	if int(statusObj["error"].(float64)) != 0 {
+		t.Errorf("Expected configure success (error=0), got %v", statusObj["error"])
+	}
+}

@@ -33,7 +33,7 @@ func loadConfig(t *testing.T) Config {
 		AdminUser:         requireEnv(t, "OW_ADMIN_USER"),
 		AdminPass:         requireEnv(t, "OW_ADMIN_PASS"),
 		DeviceSerial:      requireEnv(t, "OW_DEVICE_SERIAL"),
-		DefaultConfigName: getEnvOrDefault("OW_DEFAULT_CONFIG_NAME", "default_old"),
+		DefaultConfigName: requireEnv(t, "OW_DEFAULT_CONFIG_NAME"),
 	}
 }
 
@@ -90,7 +90,11 @@ func getAuthToken(t *testing.T, cfg Config, client *http.Client) string {
 	return result.AccessToken
 }
 
-// fetchDefaultConfig retrieves the default baseline configuration from the Cloud Gateway
+// fetchDefaultConfig retrieves the default baseline configuration from the Cloud Gateway.
+// IMPORTANT PREREQUISITE: Before running this E2E test suite, you MUST create a valid
+// baseline configuration template in the OpenWiFi system with the exact name provided in
+// the OW_DEFAULT_CONFIG_NAME environment variable. If this template does not exist, the
+// test cleanup phase will fail to fetch a valid config and might leave your lab device broken!
 func fetchDefaultConfig(t *testing.T, cfg Config, token string, client *http.Client) map[string]interface{} {
 	req, err := http.NewRequest("GET", fmt.Sprintf("%s/api/v1/default_configuration/%s", cfg.GwAPIURL, cfg.DefaultConfigName), nil)
 	if err != nil {

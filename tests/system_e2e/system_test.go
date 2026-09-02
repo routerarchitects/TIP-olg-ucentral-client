@@ -30,7 +30,7 @@ type Config struct {
 
 func loadConfig(t *testing.T) Config {
 	t.Helper()
-	
+
 	// Attempt to load .env file if it exists. Ignore errors to allow tests to rely purely on injected env vars.
 	_ = godotenv.Load()
 

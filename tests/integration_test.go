@@ -434,7 +434,7 @@ func TestComponent_ConfigureNegative_Failed(t *testing.T) {
 	defer nc.Close()
 	mc := startMockCloud(t)
 
-	mockNATSResult(t, nc, "cmd.configure.vyos", "configure", "failed", "commit failed", "-32603")
+	mockNATSResult(t, nc, "cmd.configure.vyos", "configure", "failure", "commit failed", "-32603")
 
 	cfg := getTestConfig(t, mc, ns)
 	startClientProcess(t, mc, cfg)
@@ -532,7 +532,7 @@ func TestComponent_TraceNegative_Failed(t *testing.T) {
 	defer nc.Close()
 	mc := startMockCloud(t)
 
-	mockNATSResult(t, nc, "cmd.action.vyos.trace", "action", "failed", "traceroute command not found", "-32603")
+	mockNATSResult(t, nc, "cmd.action.vyos.trace", "action", "failure", "traceroute command not found", "-32603")
 
 	cfg := getTestConfig(t, mc, ns)
 	startClientProcess(t, mc, cfg)

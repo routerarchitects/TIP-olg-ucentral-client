@@ -482,6 +482,7 @@ All result structures return one of the following standard values:
 | Internal result                       | Cloud response                                 |
 | ------------------------------------- | ---------------------------------------------- |
 | `success`                             | `result.status.error = 0`                      |
+| `failure`, configuration not applied  | `result.status.error = 1`                      |
 | `rejected`, substitutions applied     | `result.status.error = 1`                      |
 | `rejected`, configuration not applied | `result.status.error = 2`                      |
 | NATS unavailable                      | JSON-RPC error                                 |

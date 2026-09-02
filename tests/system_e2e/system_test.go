@@ -156,15 +156,26 @@ func restoreConfig(t *testing.T, cfg Config, token string, client *http.Client, 
 
 	resp, err := client.Do(req)
 	if err != nil {
-		t.Logf("Failed to restore config: %v", err)
-		return
+		t.Fatalf("Failed to restore config: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		t.Logf("Failed to restore config, Gateway returned status %d", resp.StatusCode)
-	} else {
-		t.Log("Successfully dispatched original configuration restore command.")
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("Failed to read restore config response: %v", err)
 	}
+
+	if resp.StatusCode >= 400 {
+		t.Fatalf("Gateway rejected restore config (Status %d): %s", resp.StatusCode, string(body))
+	}
+
+	var apiResponse map[string]interface{}
+	if err := json.Unmarshal(body, &apiResponse); err != nil {
+		t.Fatalf("Failed to parse restore config response: %v", err)
+	}
+
+	pollCommandCompletion(t, cfg, token, client, apiResponse)
+	t.Log("Successfully verified original configuration restore command completed on the device.")
 }
 
 func TestSystemE2E_ConfigureCommandFlow(t *testing.T) {
@@ -244,9 +255,17 @@ func TestSystemE2E_ConfigureCommandFlow(t *testing.T) {
 		t.Fatalf("Failed to parse Cloud API response: %v", err)
 	}
 
+	pollCommandCompletion(t, cfg, token, client, apiResponse)
+
+	t.Logf("SUCCESS! The configure command completed successfully and the agent result was relayed back through NATS to the Cloud API.")
+}
+
+func pollCommandCompletion(t *testing.T, cfg Config, token string, client *http.Client, initialResponse map[string]interface{}) {
+	t.Helper()
+	apiResponse := initialResponse
 	uuidVal, ok := apiResponse["UUID"].(string)
 	if !ok {
-		t.Fatalf("Response missing UUID: %s", string(body))
+		t.Fatalf("Response missing UUID: %v", apiResponse)
 	}
 
 	status, _ := apiResponse["status"].(string)

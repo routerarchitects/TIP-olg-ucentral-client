@@ -1,6 +1,51 @@
-# uCentral Client Daemon (`TIP-olg-ucentral-client`)
+# OpenLAN Gateway uCentral Client
 
-The uCentral client is a lightweight, Go-based gateway daemon that bridges a cloud management platform (via the uCentral WebSocket/JSON-RPC 2.0 protocol) with local device microservices using a local **NATS message bus**.
+The OpenLAN Gateway uCentral Client is a lightweight Go-based daemon that connects an OpenLAN Gateway to Mango Cloud or another compatible uCentral cloud controller.
+
+## Role in Mango Cloud
+
+This repository is part of [Mango Cloud](https://www.mangowifi.cloud/), Router Architects' open-source platform for OpenLAN/OpenWiFi managed connectivity.
+
+Within an OpenLAN Gateway deployment, the uCentral client provides the secure cloud-to-device communication layer between Mango Cloud and gateway services running locally on the device.
+
+It enables cloud-driven gateway operations such as:
+
+- Configuration
+- Diagnostics
+- Firmware and software upgrade workflows
+- Reboot and factory-reset operations
+- Remote access
+- Certificate updates and re-enrollment
+- Telemetry and status reporting
+- Execution of supported gateway actions
+
+### Architecture
+
+```text
+                 Mango Cloud
+                      |
+              Secure WebSocket
+             uCentral / JSON-RPC
+                      |
+                      v
+        OpenLAN Gateway uCentral Client
+                      |
+                   NATS
+                      |
+        +-------------+-------------+
+        |             |             |
+     Routing       Firewall      WAN / VPN
+     Services       Services       Services
+        |             |             |
+        +-------------+-------------+
+                      |
+                OpenLAN Gateway
+```
+## About This Fork
+
+This repository is Router Architects' development fork of the Telecom Infra Project OpenLAN Gateway uCentral client.
+
+Router Architects contributes to OpenLAN Gateway development and maintains this fork for Mango Cloud integration, production validation, and upstream contributions to the OpenLAN ecosystem.
 
 ---
 

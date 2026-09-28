@@ -536,4 +536,3 @@ func TestFrameHandler_BusyErrorMapping(t *testing.T) {
 		t.Fatalf("expected ErrInternal (-32603) 'Device is busy', got: %+v", resp.Error)
 	}
 }
-

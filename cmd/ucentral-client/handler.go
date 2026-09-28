@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -191,7 +190,7 @@ func (h *frameHandler) pushResponse(sessionID string, id json.RawMessage, result
 	if errObj != nil {
 		errCode = errObj.Code
 	}
-	log.Printf("[FrameHandler] Pushing response to cloud (Session=%s, ID=%s, ErrorCode=%d, Size=%d)\n", sessionID, contracts.FormatLogID(id), errCode, len(respBytes))
+	log.Printf("[CLOUD RESPONSE OUT] Session=%s, ID=%s, ErrorCode=%d, Size=%d, Payload=%s\n", sessionID, contracts.FormatLogID(id), errCode, len(respBytes), string(respBytes))
 	if err := h.scheduler.Push(queues.OutboundMessage{
 		SessionID: sessionID,
 		Priority:  queues.PriorityHighest,
@@ -208,8 +207,7 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 		return websocket.FrameRejectedKeepConnection, nil
 	}
 
-	// Log frame metadata only. Avoid logging raw payload to prevent leaking configuration, certificates, or script contents.
-	log.Printf("[FrameHandler] Received frame: Session=%s, Type=%d, Size=%d\n", frame.SessionID, frame.Type, len(frame.Payload))
+	log.Printf("[CLOUD REQUEST IN] Session=%s, Type=%d, Size=%d, Payload=%s\n", frame.SessionID, frame.Type, len(frame.Payload), string(frame.Payload))
 
 	// 2. Extract method and ID using a lightweight, bounded parse to enforce specific limits before full unmarshalling (REQ-020)
 	var metaExtractor struct {
@@ -342,7 +340,9 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 
 		log.Printf("[FrameHandler] Transaction admission failed: %v\n", err)
 		if !isNotification {
-			if errors.Is(err, reqmgr.ErrCapacityExceeded) || strings.Contains(err.Error(), "busy") || strings.Contains(err.Error(), "concurrency lock") {
+			if errors.Is(err, reqmgr.ErrCapacityExceeded) ||
+				errors.Is(err, reqmgr.ErrStateLockBusy) ||
+				errors.Is(err, reqmgr.ErrDuplicateRequest) {
 				errObj := &contracts.JSONRPCError{
 					Code:    contracts.ErrInternal,
 					Message: "Device is busy",
@@ -453,14 +453,7 @@ func (h *frameHandler) failTransactionWithCode(tx *reqmgr.Transaction, err error
 
 	switch {
 	case failErr == nil:
-		// failure won; send failure response
-		if tx.RespondToCloud {
-			_ = h.scheduler.Push(queues.OutboundMessage{
-				SessionID: tx.CloudSessionID,
-				Priority:  queues.PriorityHighest,
-				Payload:   respBytes,
-			})
-		}
+		// failure won; Fail() in reqmgr automatically pushes respBytes to scheduler
 	case errors.Is(failErr, reqmgr.ErrAlreadyTerminal):
 		// another terminal event (like a fast success reply) won
 		// DO NOT send this failure response, as the success response was already sent!

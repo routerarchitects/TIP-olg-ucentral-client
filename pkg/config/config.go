@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strings"
@@ -200,8 +201,11 @@ func (n *NATSConfig) Validate() error {
 		for _, srv := range n.Servers {
 			u, _ := url.ParseRequestURI(srv)
 			host := u.Hostname()
-			if host != "localhost" && host != "127.0.0.1" && host != "::1" {
-				return fmt.Errorf("insecure features (nats://, missing creds, missing CA) are only permitted for loopback addresses (localhost, 127.0.0.1, ::1)")
+			ip := net.ParseIP(host)
+			isPrivateIP := ip != nil && (ip.IsLoopback() || ip.IsPrivate())
+			isLocalHost := host == "localhost" || host == "nats-server" || isPrivateIP
+			if !isLocalHost {
+				return fmt.Errorf("insecure features (nats://, missing creds, missing CA) are only permitted for loopback addresses or private local dev addresses")
 			}
 		}
 	}

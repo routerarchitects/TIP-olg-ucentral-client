@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/contracts"
 	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/queues"
 )
 
@@ -200,11 +201,6 @@ func (m *DefaultRequestManager) CreateTransaction(sessionID string, cloudRPCID j
 		m.activeCloudRequests[reqKey] = rpcID
 	}
 	m.transactionsByRPCID[rpcID] = tx
-
-	// Setup DispatchTimer
-	tx.DispatchTimer = time.AfterFunc(m.dispatchTimeout, func() {
-		m.dispatchTimeoutFail(rpcID)
-	})
 
 	return tx, nil
 }
@@ -562,6 +558,17 @@ func (m *DefaultRequestManager) Timeout(rpcID string) error {
 		return ErrTransactionNotFound
 	}
 
+	var timeoutResp []byte
+	if tx.RespondToCloud {
+		errObj, _ := contracts.NewInternalJSONRPCError(contracts.ErrTimeout, "Command timed out waiting for device response")
+		resp := contracts.JSONRPCResponse{
+			JSONRPC: contracts.JSONRPCVersion,
+			Error:   errObj,
+			ID:      tx.CloudRPCID,
+		}
+		timeoutResp, _ = json.Marshal(resp)
+	}
+
 	isHandoff := tx.HandoffInProgress
 
 	if !isHandoff {
@@ -584,11 +591,11 @@ func (m *DefaultRequestManager) Timeout(rpcID string) error {
 		} else if _, exists := m.pendingReplies[rpcID]; exists {
 			return ErrAlreadyTerminal
 		}
-		m.pendingReplies[rpcID] = PendingReply{Payload: nil, State: TxTimedOut}
+		m.pendingReplies[rpcID] = PendingReply{Payload: timeoutResp, State: TxTimedOut}
 		return nil
 	}
 
-	return m.terminalTransition(rpcID, TxTimedOut, nil)
+	return m.terminalTransition(rpcID, TxTimedOut, timeoutResp)
 }
 
 func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState TransactionState, payload []byte) error {
@@ -645,6 +652,17 @@ func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState Tran
 
 	if releaseStateLock {
 		m.stateLock.Unlock()
+	}
+
+	// Single central place that pushes responses to the cloud scheduler
+	if tx.RespondToCloud && len(payload) > 0 && m.scheduler != nil {
+		log.Printf("[RequestManager] Pushing terminal response to cloud (Session=%s, RPCID=%s, State=%v, Size=%d, Payload=%s)\n",
+			tx.CloudSessionID, rpcID, finalState, len(payload), string(payload))
+		_ = m.scheduler.Push(queues.OutboundMessage{
+			SessionID: tx.CloudSessionID,
+			Priority:  queues.PriorityHighest,
+			Payload:   payload,
+		})
 	}
 
 	return nil
@@ -725,9 +743,10 @@ func (m *DefaultRequestManager) sweepOrphanedOperations(ctx context.Context) {
 
 		m.mu.Lock()
 		isActive := (m.activeStateTx == op.OperationID)
+		isHandoff := (m.activeStateOwner == LockTransferPending)
 		m.mu.Unlock()
 
-		// 1. If the operation has exceeded the maximum 15-minute TTL, force kill it
+		// 1. If the operation has exceeded the maximum TTL, force kill it
 		if isExpired {
 			if isActive {
 				if err := m.ReleaseOperationLock(ctx, op.OperationID); err != nil {
@@ -739,6 +758,11 @@ func (m *DefaultRequestManager) sweepOrphanedOperations(ctx context.Context) {
 					log.Printf("reqmgr: sweeper failed to durably delete expired operation %s: %v", op.OperationID, err)
 				}
 			}
+			continue
+		}
+
+		// Skip deletion if an active lock handoff to disk is in progress
+		if isHandoff {
 			continue
 		}
 

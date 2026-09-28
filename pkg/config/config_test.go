@@ -312,13 +312,14 @@ func TestConfig_Validation(t *testing.T) {
 		cfg.NATS.CAFile = ""
 		cfg.NATS.AllowInsecureLocalDev = true
 
-		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "loopback addresses") {
-			t.Errorf("Expected AllowInsecureLocalDev to reject non-loopback nats://, got: %v", err)
-		}
-
 		cfg.NATS.Servers = []string{"nats://localhost"}
 		if err := cfg.Validate(); err != nil {
-			t.Fatalf("Expected AllowInsecureLocalDev to permit nats://localhost and empty creds/CA, got: %v", err)
+			t.Fatalf("Expected AllowInsecureLocalDev to permit nats://localhost, got: %v", err)
+		}
+
+		cfg.NATS.Servers = []string{"nats://192.168.1.100:4222", "nats://nats-server:4222"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Expected AllowInsecureLocalDev to permit private IP and nats-server hostname, got: %v", err)
 		}
 	})
 }

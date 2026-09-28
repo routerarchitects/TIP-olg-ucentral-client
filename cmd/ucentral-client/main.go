@@ -237,7 +237,6 @@ func processNATSResult(ctx context.Context, res agentcore.ResultEnvelope, compon
 		log.Printf("[NATS RESULT] WARNING: Transaction not found for NATS RPCID: %s\n", res.RPCID)
 		return
 	}
-	sessionID := tx.CloudSessionID
 	rawCloudID := tx.CloudRPCID
 	isNotification := !tx.RespondToCloud
 
@@ -302,15 +301,6 @@ func processNATSResult(ctx context.Context, res agentcore.ResultEnvelope, compon
 			log.Printf("[NATS RESULT OVERFLOW] WARNING: Transaction Complete failed for NATS RPCID %s: %v\n", res.RPCID, err)
 			return
 		}
-	}
-
-	if !isNotification {
-		log.Printf("[NATS RESULT] Pushing response to cloud (Session=%s, ID=%s, Size=%d)\n", sessionID, contracts.FormatLogID(rawCloudID), len(respBytes))
-		_ = components.Scheduler.Push(queues.OutboundMessage{
-			SessionID: sessionID,
-			Priority:  queues.PriorityHighest,
-			Payload:   respBytes,
-		})
 	}
 }
 
@@ -512,7 +502,7 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 		scheduler,
 		store,
 		cfg.Queues.MaxConcurrentRequests,
-		5*time.Minute,
+		15*time.Minute,
 		1000,
 	)
 	if err != nil {

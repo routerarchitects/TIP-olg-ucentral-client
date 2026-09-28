@@ -475,3 +475,65 @@ func TestFrameHandler_CompressedConfigureUUID(t *testing.T) {
 		t.Errorf("Expected error containing %q, got: %q", expectedError, jsonRPCResponse.Error.Message)
 	}
 }
+
+func TestFrameHandler_BusyErrorMapping(t *testing.T) {
+	h, reqMgr, scheduler, _ := setupTestHandler(t, 10)
+
+	// 1. ErrStateLockBusy: Start a state-changing transaction
+	_, err := reqMgr.CreateTransaction("sess-1", json.RawMessage(`"tx-1"`), true, "reboot", 10*time.Second, true)
+	if err != nil {
+		t.Fatalf("failed to create first state-changing transaction: %v", err)
+	}
+
+	// Attempt another state-changing request
+	frameStateLock := websocket.InboundFrame{
+		SessionID: "sess-1",
+		Type:      1,
+		Payload:   []byte(`{"jsonrpc":"2.0","method":"reboot","id":"tx-2","params":{"serial":"001122334455"}}`),
+	}
+	disp, err := h.HandleFrame(context.Background(), frameStateLock)
+	if err != nil {
+		t.Fatalf("unexpected handle error: %v", err)
+	}
+	if disp != websocket.FrameRejectedKeepConnection {
+		t.Errorf("expected FrameRejectedKeepConnection, got %v", disp)
+	}
+
+	msg, err := scheduler.Next(context.Background())
+	if err != nil {
+		t.Fatalf("failed to pop from scheduler: %v", err)
+	}
+	var resp contracts.JSONRPCResponse
+	if err := json.Unmarshal(msg.Payload, &resp); err != nil {
+		t.Fatalf("failed to unmarshal JSON-RPC response: %v", err)
+	}
+	if resp.Error == nil || resp.Error.Code != contracts.ErrInternal || resp.Error.Message != "Device is busy" {
+		t.Fatalf("expected ErrInternal (-32603) 'Device is busy', got: %+v", resp.Error)
+	}
+
+	// 2. ErrDuplicateRequest: Submit identical in-flight transaction
+	frameDup := websocket.InboundFrame{
+		SessionID: "sess-1",
+		Type:      1,
+		Payload:   []byte(`{"jsonrpc":"2.0","method":"reboot","id":"tx-1","params":{"serial":"001122334455"}}`),
+	}
+	disp, err = h.HandleFrame(context.Background(), frameDup)
+	if err != nil {
+		t.Fatalf("unexpected handle error: %v", err)
+	}
+	if disp != websocket.FrameRejectedKeepConnection {
+		t.Errorf("expected FrameRejectedKeepConnection, got %v", disp)
+	}
+
+	msg, err = scheduler.Next(context.Background())
+	if err != nil {
+		t.Fatalf("failed to pop from scheduler: %v", err)
+	}
+	if err := json.Unmarshal(msg.Payload, &resp); err != nil {
+		t.Fatalf("failed to unmarshal JSON-RPC response: %v", err)
+	}
+	if resp.Error == nil || resp.Error.Code != contracts.ErrInternal || resp.Error.Message != "Device is busy" {
+		t.Fatalf("expected ErrInternal (-32603) 'Device is busy', got: %+v", resp.Error)
+	}
+}
+

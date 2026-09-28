@@ -312,6 +312,10 @@ func TestConfig_Validation(t *testing.T) {
 		cfg.NATS.CAFile = ""
 		cfg.NATS.AllowInsecureLocalDev = true
 
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("Expected AllowInsecureLocalDev to reject non-local/non-private host, got nil")
+		}
+
 		cfg.NATS.Servers = []string{"nats://localhost"}
 		if err := cfg.Validate(); err != nil {
 			t.Fatalf("Expected AllowInsecureLocalDev to permit nats://localhost, got: %v", err)

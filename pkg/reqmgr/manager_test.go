@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/contracts"
 	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/queues"
 )
 
@@ -1444,5 +1445,230 @@ func TestTCUPG_RespondAndRetain_ConcurrentHandoff(t *testing.T) {
 
 	if exists {
 		t.Errorf("expected transaction to be deleted from memory, but it still exists")
+	}
+}
+
+func TestDefaultRequestManager_TimeoutPayloadDelivery(t *testing.T) {
+	cache := NewTransactionCache()
+	config := CacheTTLConfig{}
+	scheduler := queues.NewPriorityScheduler(10, 10)
+	store := &mockStore{}
+	m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store, 1000, 15*time.Minute, 100)
+
+	cloudRPCID := json.RawMessage(`"tx-timeout-test"`)
+	tx, err := m.CreateTransaction("sess-timeout", cloudRPCID, true, "configure", 10*time.Second, true)
+	if err != nil {
+		t.Fatalf("failed to create tx: %v", err)
+	}
+
+	_ = m.MarkPreparingDispatch(tx.RPCID)
+	_ = m.MarkPendingPublish(tx.RPCID)
+	_ = m.MarkInFlight(tx.RPCID)
+
+	// Invoke Timeout
+	if err := m.Timeout(tx.RPCID); err != nil {
+		t.Fatalf("Timeout failed: %v", err)
+	}
+
+	// Verify message is queued in the scheduler
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	msg, err := scheduler.Next(ctx)
+	if err != nil {
+		t.Fatalf("failed to pop timeout response from scheduler: %v", err)
+	}
+
+	var resp contracts.JSONRPCResponse
+	if err := json.Unmarshal(msg.Payload, &resp); err != nil {
+		t.Fatalf("failed to unmarshal JSON-RPC response: %v", err)
+	}
+
+	if resp.Error == nil || resp.Error.Code != contracts.ErrInternal {
+		t.Fatalf("expected ErrInternal (-32603), got %+v", resp.Error)
+	}
+
+	var data map[string]interface{}
+	if err := json.Unmarshal(resp.Error.Data, &data); err != nil {
+		t.Fatalf("failed to unmarshal error data: %v", err)
+	}
+
+	if int(data["application_code"].(float64)) != contracts.ErrTimeout {
+		t.Errorf("expected application_code %d (ErrTimeout), got %v", contracts.ErrTimeout, data["application_code"])
+	}
+}
+
+func TestDefaultRequestManager_TerminalTransitionSingleSend(t *testing.T) {
+	cache := NewTransactionCache()
+	config := CacheTTLConfig{}
+	scheduler := queues.NewPriorityScheduler(10, 10)
+	store := &mockStore{}
+	m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store, 1000, 15*time.Minute, 100)
+
+	cloudRPCID := json.RawMessage(`"tx-race"`)
+	tx, err := m.CreateTransaction("sess-race", cloudRPCID, true, "configure", 10*time.Second, true)
+	if err != nil {
+		t.Fatalf("failed to create tx: %v", err)
+	}
+
+	_ = m.MarkPreparingDispatch(tx.RPCID)
+	_ = m.MarkPendingPublish(tx.RPCID)
+	_ = m.MarkInFlight(tx.RPCID)
+
+	var wg sync.WaitGroup
+	startCh := make(chan struct{})
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		<-startCh
+		_ = m.Complete(tx.RPCID, []byte(`{"jsonrpc":"2.0","result":{"status":0},"id":"tx-race"}`))
+	}()
+
+	go func() {
+		defer wg.Done()
+		<-startCh
+		_ = m.Fail(tx.RPCID, []byte(`{"jsonrpc":"2.0","error":{"code":-32603},"id":"tx-race"}`))
+	}()
+
+	close(startCh)
+	wg.Wait()
+
+	// Exactly one response must be in the scheduler
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	msg1, err := scheduler.Next(ctx)
+	if err != nil {
+		t.Fatalf("expected at least 1 message in scheduler, got error: %v", err)
+	}
+	if len(msg1.Payload) == 0 {
+		t.Fatalf("expected non-empty payload")
+	}
+
+	// Second pop must time out (queue must be empty)
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel2()
+	msg2, err := scheduler.Next(ctx2)
+	if err == nil {
+		t.Fatalf("expected no second message in scheduler, got: %s", string(msg2.Payload))
+	}
+}
+
+func TestDefaultRequestManager_CompleteTimeoutRace(t *testing.T) {
+	cache := NewTransactionCache()
+	config := CacheTTLConfig{}
+	scheduler := queues.NewPriorityScheduler(10, 10)
+	store := &mockStore{}
+	m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store, 1000, 15*time.Minute, 100)
+
+	cloudRPCID := json.RawMessage(`"tx-race-timeout"`)
+	tx, err := m.CreateTransaction("sess-race-timeout", cloudRPCID, true, "configure", 10*time.Second, true)
+	if err != nil {
+		t.Fatalf("failed to create tx: %v", err)
+	}
+
+	_ = m.MarkPreparingDispatch(tx.RPCID)
+	_ = m.MarkPendingPublish(tx.RPCID)
+	_ = m.MarkInFlight(tx.RPCID)
+
+	var wg sync.WaitGroup
+	startCh := make(chan struct{})
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		<-startCh
+		_ = m.Complete(tx.RPCID, []byte(`{"jsonrpc":"2.0","result":{"status":0},"id":"tx-race-timeout"}`))
+	}()
+
+	go func() {
+		defer wg.Done()
+		<-startCh
+		_ = m.Timeout(tx.RPCID)
+	}()
+
+	close(startCh)
+	wg.Wait()
+
+	// Exactly one response must be in the scheduler
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	msg1, err := scheduler.Next(ctx)
+	if err != nil {
+		t.Fatalf("expected at least 1 message in scheduler, got error: %v", err)
+	}
+	if len(msg1.Payload) == 0 {
+		t.Fatalf("expected non-empty payload")
+	}
+
+	// Second pop must time out (queue must be empty)
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel2()
+	msg2, err := scheduler.Next(ctx2)
+	if err == nil {
+		t.Fatalf("expected no second message in scheduler, got: %s", string(msg2.Payload))
+	}
+}
+
+func TestDefaultRequestManager_NotificationTimeoutNoResponse(t *testing.T) {
+	cache := NewTransactionCache()
+	config := CacheTTLConfig{}
+	scheduler := queues.NewPriorityScheduler(10, 10)
+	store := &mockStore{}
+	m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store, 1000, 15*time.Minute, 100)
+
+	tx, err := m.CreateTransaction("sess-notif", json.RawMessage(`null`), false, "status.get", 10*time.Second, false)
+	if err != nil {
+		t.Fatalf("failed to create notification tx: %v", err)
+	}
+
+	_ = m.MarkPreparingDispatch(tx.RPCID)
+	_ = m.MarkPendingPublish(tx.RPCID)
+	_ = m.MarkInFlight(tx.RPCID)
+
+	if err := m.Timeout(tx.RPCID); err != nil {
+		t.Fatalf("Timeout failed: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if msg, err := scheduler.Next(ctx); err == nil {
+		t.Fatalf("expected no response queued for notification timeout, got: %s", string(msg.Payload))
+	}
+}
+
+func TestDefaultRequestManager_SchedulerFullHandling(t *testing.T) {
+	cache := NewTransactionCache()
+	config := CacheTTLConfig{}
+	// Scheduler with capacity 1, emergencyCap 1
+	scheduler := queues.NewPriorityScheduler(1, 1)
+	// Fill priority 0 queue to simulate saturated outbound queue
+	_ = scheduler.Push(queues.OutboundMessage{SessionID: "dummy", Priority: queues.PriorityHighest, Payload: []byte("blocking")})
+	store := &mockStore{}
+	m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store, 1000, 15*time.Minute, 100)
+
+	tx, err := m.CreateTransaction("sess-full", json.RawMessage(`1`), true, "configure", 10*time.Second, true)
+	if err != nil {
+		t.Fatalf("failed to create tx: %v", err)
+	}
+
+	_ = m.MarkPreparingDispatch(tx.RPCID)
+	_ = m.MarkPendingPublish(tx.RPCID)
+	_ = m.MarkInFlight(tx.RPCID)
+
+	// Complete should not panic or deadlock even if scheduler Push fails
+	err = m.Complete(tx.RPCID, []byte(`{"jsonrpc":"2.0","result":{"status":0},"id":1}`))
+	if err != nil {
+		t.Fatalf("expected Complete to succeed locally despite full scheduler, got: %v", err)
+	}
+
+	// Transaction should be cleaned up from memory
+	m.mu.Lock()
+	_, exists := m.transactionsByRPCID[tx.RPCID]
+	m.mu.Unlock()
+	if exists {
+		t.Fatalf("expected transaction to be deleted from active map")
 	}
 }

@@ -334,11 +334,10 @@ func handleNATSResult(ctx context.Context, res agentcore.ResultEnvelope, resultQ
 			}
 
 			// Complete and cache the transaction in RequestManager so it is resolved and cleaned up from memory.
-			// We do not push it to the scheduler to avoid further congestion.
 			if tx.Method == string(contracts.ActionUpgrade) {
 				if res.Result != string(contracts.ResultSuccess) || (res.ErrorCode != "" && res.ErrorCode != "0") {
 					log.Printf("[NATS RESULT OVERFLOW] WARNING: Upgrade request rejected by device. Aborting persistent operation for RPCID %s\n", res.RPCID)
-					_ = components.ReqManager.Fail(res.RPCID, respBytes) // Ignore error since we don't push overflow failures anyway
+					_ = components.ReqManager.Fail(res.RPCID, respBytes)
 					return
 				}
 				_, err := components.ReqManager.RespondAndRetain(ctx, res.RPCID, respBytes)
@@ -350,7 +349,7 @@ func handleNATSResult(ctx context.Context, res agentcore.ResultEnvelope, resultQ
 					return
 				default:
 					log.Printf("[NATS RESULT OVERFLOW] ERROR: RespondAndRetain failed for upgrade RPCID %s: %v\n", res.RPCID, err)
-					_ = components.ReqManager.Fail(res.RPCID, nil) // Ignore error since we don't push overflow failures anyway
+					_ = components.ReqManager.Fail(res.RPCID, nil)
 					return
 				}
 			} else {
@@ -359,7 +358,7 @@ func handleNATSResult(ctx context.Context, res agentcore.ResultEnvelope, resultQ
 					return
 				}
 			}
-			log.Printf("[NATS RESULT OVERFLOW] Warning: Completed/cached transaction rpc_id=%s, but omitted outbound WebSocket scheduler enqueue to avoid congestion.\n", res.RPCID)
+			log.Printf("[NATS RESULT OVERFLOW] Resolved and cached transaction rpc_id=%s directly upon resultQueue capacity overflow.\n", res.RPCID)
 		}
 	}
 }

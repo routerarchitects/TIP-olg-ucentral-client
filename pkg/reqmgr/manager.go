@@ -656,8 +656,6 @@ func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState Tran
 
 	// Single central place that pushes responses to the cloud scheduler
 	if tx.RespondToCloud && len(payload) > 0 && m.scheduler != nil {
-		log.Printf("[RequestManager] Pushing terminal response to cloud (Session=%s, RPCID=%s, State=%v, Size=%d, Payload=%s)\n",
-			tx.CloudSessionID, rpcID, finalState, len(payload), string(payload))
 		_ = m.scheduler.Push(queues.OutboundMessage{
 			SessionID: tx.CloudSessionID,
 			Priority:  queues.PriorityHighest,

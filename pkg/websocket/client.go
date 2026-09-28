@@ -413,7 +413,7 @@ func (c *WSClient) performConnectHandshake(ctx context.Context, conn *gws.Conn) 
 		return HandshakeRetryableFailure
 	}
 
-	log.Printf("[CLOUD HANDSHAKE] Connect frame sent (Size=%d): %s", len(payload), string(payload))
+	log.Printf("ws: connect handshake frame sent")
 	return HandshakeAccepted
 }
 
@@ -498,8 +498,6 @@ func (c *WSClient) startReaderLoop(ctx context.Context, conn *gws.Conn, handler 
 		if int64(len(payload)) > maxFrameSize {
 			return fmt.Errorf("decompressed websocket message exceeds limit")
 		}
-
-		log.Printf("[CLOUD INBOUND WS] Session=%s, MsgType=%d, Size=%d, Payload=%s", sessID, msgType, len(payload), string(payload))
 
 		frame := InboundFrame{
 			SessionID: sessID,
@@ -676,8 +674,6 @@ func (c *WSClient) startWriterLoop(ctx context.Context, conn *gws.Conn) error {
 			} else {
 				conn.EnableWriteCompression(false)
 			}
-
-			log.Printf("[CLOUD OUTBOUND WS] Session=%s, Priority=%d, Size=%d, Payload=%s", sessID, msg.Priority, len(msg.Payload), string(msg.Payload))
 
 			err := conn.WriteMessage(gws.TextMessage, []byte(msg.Payload))
 			c.writeMu.Unlock()

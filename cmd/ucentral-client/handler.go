@@ -190,7 +190,7 @@ func (h *frameHandler) pushResponse(sessionID string, id json.RawMessage, result
 	if errObj != nil {
 		errCode = errObj.Code
 	}
-	log.Printf("[CLOUD RESPONSE OUT] Session=%s, ID=%s, ErrorCode=%d, Size=%d, Payload=%s\n", sessionID, contracts.FormatLogID(id), errCode, len(respBytes), string(respBytes))
+	log.Printf("[FrameHandler] Pushing response to cloud (Session=%s, ID=%s, ErrorCode=%d, Size=%d)\n", sessionID, contracts.FormatLogID(id), errCode, len(respBytes))
 	if err := h.scheduler.Push(queues.OutboundMessage{
 		SessionID: sessionID,
 		Priority:  queues.PriorityHighest,
@@ -207,7 +207,8 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 		return websocket.FrameRejectedKeepConnection, nil
 	}
 
-	log.Printf("[CLOUD REQUEST IN] Session=%s, Type=%d, Size=%d, Payload=%s\n", frame.SessionID, frame.Type, len(frame.Payload), string(frame.Payload))
+	// Log frame metadata only. Avoid logging raw payload to prevent leaking configuration, certificates, or script contents.
+	log.Printf("[FrameHandler] Received frame: Session=%s, Type=%d, Size=%d\n", frame.SessionID, frame.Type, len(frame.Payload))
 
 	// 2. Extract method and ID using a lightweight, bounded parse to enforce specific limits before full unmarshalling (REQ-020)
 	var metaExtractor struct {

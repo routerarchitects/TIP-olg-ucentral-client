@@ -349,7 +349,21 @@ func handleNATSResult(ctx context.Context, res agentcore.ResultEnvelope, resultQ
 					return
 				default:
 					log.Printf("[NATS RESULT OVERFLOW] ERROR: RespondAndRetain failed for upgrade RPCID %s: %v\n", res.RPCID, err)
-					_ = components.ReqManager.Fail(res.RPCID, nil)
+					if !isNotification {
+						errResp := contracts.JSONRPCResponse{
+							JSONRPC: contracts.JSONRPCVersion,
+							Error: &contracts.JSONRPCError{
+								Code:    -32603,
+								Message: "Internal Error",
+								Data:    json.RawMessage(`"Failed to establish persistent upgrade operation"`),
+							},
+							ID: tx.CloudRPCID,
+						}
+						respBytes, _ = json.Marshal(errResp)
+					}
+					if failErr := components.ReqManager.Fail(res.RPCID, respBytes); failErr != nil {
+						log.Printf("[NATS RESULT OVERFLOW] WARNING: Fail() rejected after RespondAndRetain failure for RPCID %s: %v\n", res.RPCID, failErr)
+					}
 					return
 				}
 			} else {

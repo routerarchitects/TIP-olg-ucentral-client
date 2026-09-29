@@ -114,6 +114,45 @@ func (c *CloudTLSConfig) Validate() error {
 	return nil
 }
 
+// ValidateSerialBinding verifies that the serial number loaded from the interface map
+// cryptographically matches the identity (CommonName or SAN) present in the client certificate.
+func (c *CloudTLSConfig) ValidateSerialBinding(serial string) error {
+	if c.ClientCertFile == "" {
+		return nil
+	}
+	tlsCert, err := tls.LoadX509KeyPair(c.ClientCertFile, c.ClientKeyFile)
+	if err != nil {
+		return fmt.Errorf("failed to load client certificate for serial binding validation: %w", err)
+	}
+	if len(tlsCert.Certificate) == 0 {
+		return fmt.Errorf("no certificates found in %s", c.ClientCertFile)
+	}
+	leafCert, err := x509.ParseCertificate(tlsCert.Certificate[0])
+	if err != nil {
+		return fmt.Errorf("failed to parse client certificate: %w", err)
+	}
+
+	normSerial := strings.ToLower(strings.TrimSpace(serial))
+	normCN := strings.ToLower(strings.TrimSpace(leafCert.Subject.CommonName))
+
+	if normCN == normSerial && normCN != "" {
+		return nil
+	}
+
+	for _, dns := range leafCert.DNSNames {
+		if strings.ToLower(strings.TrimSpace(dns)) == normSerial {
+			return nil
+		}
+	}
+	for _, uri := range leafCert.URIs {
+		if uri != nil && strings.ToLower(strings.TrimSpace(uri.String())) == normSerial {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("serial mismatch: interface_map serial %q does not match client certificate CN %q", serial, leafCert.Subject.CommonName)
+}
+
 func (c *CloudConfig) Validate() error {
 	if c.URL == "" {
 		return fmt.Errorf("cloud url is required")
@@ -297,6 +336,14 @@ func (c *Config) Validate() error {
 		return err
 	}
 	return nil
+}
+
+// ValidateSerialBinding verifies that the serial configured on Config matches the client certificate.
+func (c *Config) ValidateSerialBinding() error {
+	if c.Serial == "" {
+		return fmt.Errorf("serial cannot be empty for serial binding validation")
+	}
+	return c.Cloud.TLS.ValidateSerialBinding(c.Serial)
 }
 
 type CacheTTLConfig struct {

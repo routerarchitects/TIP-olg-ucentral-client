@@ -446,3 +446,110 @@ func TestLoadSerialFromMapping(t *testing.T) {
 		})
 	}
 }
+
+func TestConfig_ValidateSerialBinding(t *testing.T) {
+	tmpDir := t.TempDir()
+	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+
+	createCert := func(cn string, sans []string) string {
+		template := x509.Certificate{
+			SerialNumber:          big.NewInt(1),
+			Subject:               pkix.Name{CommonName: cn},
+			DNSNames:              sans,
+			NotBefore:             time.Now(),
+			NotAfter:              time.Now().Add(time.Hour),
+			KeyUsage:              x509.KeyUsageDigitalSignature,
+			ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+			BasicConstraintsValid: true,
+		}
+		derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+		if err != nil {
+			t.Fatalf("failed to create cert: %v", err)
+		}
+		certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
+		path := filepath.Join(tmpDir, cn+"_cert.pem")
+		if err := os.WriteFile(path, certPEM, 0644); err != nil {
+			t.Fatalf("failed to write cert: %v", err)
+		}
+		return path
+	}
+
+	keyBytes, _ := x509.MarshalECPrivateKey(priv)
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyBytes})
+	keyPath := filepath.Join(tmpDir, "key.pem")
+	_ = os.WriteFile(keyPath, keyPEM, 0600)
+
+	certMatchingCN := createCert("serial-12345", nil)
+	certMatchingSAN := createCert("", []string{"serial-san-67890"})
+	certMismatch := createCert("serial-99999", nil)
+
+	tests := []struct {
+		name       string
+		serial     string
+		certFile   string
+		keyFile    string
+		expectErr  bool
+		errContain string
+	}{
+		{
+			name:      "exact match with CN",
+			serial:    "serial-12345",
+			certFile:  certMatchingCN,
+			keyFile:   keyPath,
+			expectErr: false,
+		},
+		{
+			name:      "case-insensitive match with CN",
+			serial:    "SERIAL-12345",
+			certFile:  certMatchingCN,
+			keyFile:   keyPath,
+			expectErr: false,
+		},
+		{
+			name:      "match with SAN DNS",
+			serial:    "serial-san-67890",
+			certFile:  certMatchingSAN,
+			keyFile:   keyPath,
+			expectErr: false,
+		},
+		{
+			name:       "mismatch between serial and CN",
+			serial:     "serial-12345",
+			certFile:   certMismatch,
+			keyFile:    keyPath,
+			expectErr:  true,
+			errContain: "serial mismatch",
+		},
+		{
+			name:       "empty serial",
+			serial:     "",
+			certFile:   certMatchingCN,
+			keyFile:    keyPath,
+			expectErr:  true,
+			errContain: "serial cannot be empty",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{
+				Serial: tt.serial,
+				Cloud: CloudConfig{
+					TLS: CloudTLSConfig{
+						ClientCertFile: tt.certFile,
+						ClientKeyFile:  tt.keyFile,
+					},
+				},
+			}
+			err := cfg.ValidateSerialBinding()
+			if (err != nil) != tt.expectErr {
+				t.Fatalf("ValidateSerialBinding() error = %v, expectErr %v", err, tt.expectErr)
+			}
+			if tt.expectErr && tt.errContain != "" {
+				if !strings.Contains(err.Error(), tt.errContain) {
+					t.Errorf("expected error to contain %q, got %v", tt.errContain, err)
+				}
+			}
+		})
+	}
+}

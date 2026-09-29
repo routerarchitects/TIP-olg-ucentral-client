@@ -68,6 +68,9 @@ func main() {
 		log.Fatalf("FATAL: Failed to read serial from mapping file: %v", err)
 	}
 	cfg.Serial = serial
+	if err := cfg.ValidateSerialBinding(); err != nil {
+		log.Fatalf("FATAL: %v", err)
+	}
 
 	// 3. Load CacheTTLConfig from environment variables
 	cacheTTLConfig, err := config.LoadCacheTTLConfigFromEnv()

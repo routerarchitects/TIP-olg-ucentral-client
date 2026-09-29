@@ -662,11 +662,13 @@ func (m *DefaultRequestManager) terminalTransition(rpcID string, finalState Tran
 
 	// Single central place that pushes responses to the cloud scheduler
 	if tx.RespondToCloud && len(payload) > 0 && m.scheduler != nil {
-		_ = m.scheduler.Push(queues.OutboundMessage{
+		if err := m.scheduler.Push(queues.OutboundMessage{
 			SessionID: tx.CloudSessionID,
 			Priority:  queues.PriorityHighest,
 			Payload:   payload,
-		})
+		}); err != nil {
+			log.Printf("reqmgr: failed to push terminal response to scheduler (rpc_id=%s, session_id=%s, id=%s): %v", rpcID, tx.CloudSessionID, contracts.FormatLogID(tx.CloudRPCID), err)
+		}
 	}
 
 	return nil

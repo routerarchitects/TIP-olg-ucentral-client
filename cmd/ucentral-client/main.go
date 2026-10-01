@@ -409,6 +409,10 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 	if err != nil {
 		return nil, err
 	}
+	operationSweeperTTL, err := parseTimeoutEnv("OLG_OPERATION_SWEEPER_TTL", 15*time.Minute)
+	if err != nil {
+		return nil, err
+	}
 
 	// Parse limit environment variables
 	payloadLimitAbsolute, err := parseLimitEnv("OLG_PAYLOAD_LIMIT_ABSOLUTE", 12*1024*1024)
@@ -536,7 +540,7 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 		scheduler,
 		store,
 		cfg.Queues.MaxConcurrentRequests,
-		15*time.Minute,
+		operationSweeperTTL,
 		1000,
 	)
 	if err != nil {

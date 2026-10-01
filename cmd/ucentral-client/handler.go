@@ -427,7 +427,13 @@ func (h *frameHandler) executeTransaction(ctx context.Context, tx *reqmgr.Transa
 
 	if dispatchErr != nil {
 		log.Printf("[FrameHandler] NATS dispatch failed: %v\n", dispatchErr)
-		h.failTransaction(tx, fmt.Errorf("NATS dispatch failed: %w", dispatchErr))
+		appCode := contracts.ErrAppFailure
+		msg := fmt.Sprintf("NATS dispatch failed: %v", dispatchErr)
+		if errors.Is(dispatchErr, context.DeadlineExceeded) {
+			appCode = contracts.ErrServiceUnavailable
+			msg = "Local NATS dispatch timed out (service unavailable)"
+		}
+		h.failTransactionWithCode(tx, dispatchErr, appCode, msg)
 		return
 	}
 

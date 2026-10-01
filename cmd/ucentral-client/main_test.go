@@ -134,3 +134,51 @@ func TestHandleNATSResultOverflow_UpgradePersistenceFailure(t *testing.T) {
 		t.Fatalf("expected state-changing lock to be released, but got error: %v", err)
 	}
 }
+
+func TestParseTimeoutEnv_OperationSweeperTTL(t *testing.T) {
+	t.Run("Default value when unset", func(t *testing.T) {
+		t.Setenv("OLG_OPERATION_SWEEPER_TTL", "")
+		ttl, err := parseTimeoutEnv("OLG_OPERATION_SWEEPER_TTL", 15*time.Minute)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ttl != 15*time.Minute {
+			t.Errorf("expected 15m, got %v", ttl)
+		}
+	})
+
+	t.Run("Custom valid duration 30m", func(t *testing.T) {
+		t.Setenv("OLG_OPERATION_SWEEPER_TTL", "30m")
+		ttl, err := parseTimeoutEnv("OLG_OPERATION_SWEEPER_TTL", 15*time.Minute)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ttl != 30*time.Minute {
+			t.Errorf("expected 30m, got %v", ttl)
+		}
+	})
+
+	t.Run("Invalid duration string fails", func(t *testing.T) {
+		t.Setenv("OLG_OPERATION_SWEEPER_TTL", "foo")
+		_, err := parseTimeoutEnv("OLG_OPERATION_SWEEPER_TTL", 15*time.Minute)
+		if err == nil {
+			t.Fatal("expected error for invalid duration string 'foo', got nil")
+		}
+	})
+
+	t.Run("Zero duration fails", func(t *testing.T) {
+		t.Setenv("OLG_OPERATION_SWEEPER_TTL", "0s")
+		_, err := parseTimeoutEnv("OLG_OPERATION_SWEEPER_TTL", 15*time.Minute)
+		if err == nil {
+			t.Fatal("expected error for zero duration, got nil")
+		}
+	})
+
+	t.Run("Negative duration fails", func(t *testing.T) {
+		t.Setenv("OLG_OPERATION_SWEEPER_TTL", "-10m")
+		_, err := parseTimeoutEnv("OLG_OPERATION_SWEEPER_TTL", 15*time.Minute)
+		if err == nil {
+			t.Fatal("expected error for negative duration, got nil")
+		}
+	})
+}

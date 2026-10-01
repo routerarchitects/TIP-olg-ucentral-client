@@ -31,9 +31,25 @@ func TestSubmitConfigure_Validation(t *testing.T) {
 	client := &NATSClient{target: "target-123"}
 
 	// Test nil context
-	err := client.SubmitConfigure(context.TODO(), &agentcore.ConfigureCommand{Target: "target-123", Version: contracts.EnvelopeVersion, RPCID: "123", Payload: []byte("{}"), Timestamp: time.Now()})
-	if err == nil {
-		t.Fatal("expected error for nil context")
+	err := client.SubmitConfigure(nil, &agentcore.ConfigureCommand{Target: "target-123", Version: contracts.EnvelopeVersion, RPCID: "123", Payload: []byte("{}"), Timestamp: time.Now()})
+	if err == nil || err.Error() != "context cannot be nil" {
+		t.Fatalf("expected 'context cannot be nil', got: %v", err)
+	}
+
+	// Test canceled/expired context preserves error
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err = client.SubmitConfigure(canceledCtx, &agentcore.ConfigureCommand{Target: "target-123", Version: contracts.EnvelopeVersion, RPCID: "123", Payload: []byte("{}"), Timestamp: time.Now()})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled error wrapping, got: %v", err)
+	}
+
+	expiredCtx, expCancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
+	defer expCancel()
+	time.Sleep(2 * time.Millisecond)
+	err = client.SubmitConfigure(expiredCtx, &agentcore.ConfigureCommand{Target: "target-123", Version: contracts.EnvelopeVersion, RPCID: "123", Payload: []byte("{}"), Timestamp: time.Now()})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded error wrapping, got: %v", err)
 	}
 
 	// Test validation failure
@@ -62,10 +78,33 @@ func TestSubmitConfigure_Validation(t *testing.T) {
 
 func TestExecuteAction_Validation(t *testing.T) {
 	client := &NATSClient{target: "target-123"}
+
+	// Test nil context
+	err := client.ExecuteAction(nil, &agentcore.ActionCommand{})
+	if err == nil || err.Error() != "context cannot be nil" {
+		t.Fatalf("expected 'context cannot be nil', got: %v", err)
+	}
+
+	// Test canceled/expired context preserves error
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err = client.ExecuteAction(canceledCtx, &agentcore.ActionCommand{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled error wrapping, got: %v", err)
+	}
+
+	expiredCtx, expCancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
+	defer expCancel()
+	time.Sleep(2 * time.Millisecond)
+	err = client.ExecuteAction(expiredCtx, &agentcore.ActionCommand{})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded error wrapping, got: %v", err)
+	}
+
 	ctx := context.Background()
 
 	// Test validation failure
-	err := client.ExecuteAction(ctx, &agentcore.ActionCommand{})
+	err = client.ExecuteAction(ctx, &agentcore.ActionCommand{})
 	if err == nil {
 		t.Fatal("expected error for invalid action")
 	}

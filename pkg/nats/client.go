@@ -85,8 +85,11 @@ func NewNATSClient(agentName string, cfg config.NATSConfig, onStateChange func(c
 }
 
 func (n *NATSClient) SubmitConfigure(ctx context.Context, cmd *agentcore.ConfigureCommand) error {
-	if ctx == nil || ctx.Err() != nil {
-		return errors.New("invalid or canceled context")
+	if ctx == nil {
+		return errors.New("context cannot be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("NATS dispatch context expired: %w", err)
 	}
 	if cmd == nil {
 		return errors.New("command cannot be nil")
@@ -142,8 +145,11 @@ func allServersUseTLS(servers []string) bool {
 }
 
 func (n *NATSClient) ExecuteAction(ctx context.Context, cmd *agentcore.ActionCommand) error {
-	if ctx == nil || ctx.Err() != nil {
-		return errors.New("invalid or canceled context")
+	if ctx == nil {
+		return errors.New("context cannot be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("NATS dispatch context expired: %w", err)
 	}
 	if cmd == nil {
 		return errors.New("command cannot be nil")

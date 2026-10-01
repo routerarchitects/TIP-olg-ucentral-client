@@ -540,10 +540,8 @@ func TestFrameHandler_BusyErrorMapping(t *testing.T) {
 func TestFrameHandler_DispatchTimeoutReturnsServiceUnavailable(t *testing.T) {
 	h, _, scheduler, _ := setupTestHandler(t, 10)
 	h.SetNATSClient(&nats.NATSClient{})
-	h.timeoutDispatch = 1 * time.Nanosecond
-
-	// Allow dispatch timeout to expire before executeTransaction dispatches
-	time.Sleep(2 * time.Millisecond)
+	// Negative dispatch duration immediately expires context.WithTimeout deterministically without sleeping
+	h.timeoutDispatch = -1 * time.Second
 
 	frame := websocket.InboundFrame{
 		SessionID: "sess-1",

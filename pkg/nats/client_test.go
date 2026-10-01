@@ -45,9 +45,8 @@ func TestSubmitConfigure_Validation(t *testing.T) {
 		t.Fatalf("expected context.Canceled error wrapping, got: %v", err)
 	}
 
-	expiredCtx, expCancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
+	expiredCtx, expCancel := context.WithDeadline(context.Background(), time.Now().Add(-1*time.Second))
 	defer expCancel()
-	time.Sleep(2 * time.Millisecond)
 	err = client.SubmitConfigure(expiredCtx, &agentcore.ConfigureCommand{Target: "target-123", Version: contracts.EnvelopeVersion, RPCID: "123", Payload: []byte("{}"), Timestamp: time.Now()})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected context.DeadlineExceeded error wrapping, got: %v", err)
@@ -95,9 +94,8 @@ func TestExecuteAction_Validation(t *testing.T) {
 		t.Fatalf("expected context.Canceled error wrapping, got: %v", err)
 	}
 
-	expiredCtx, expCancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
+	expiredCtx, expCancel := context.WithDeadline(context.Background(), time.Now().Add(-1*time.Second))
 	defer expCancel()
-	time.Sleep(2 * time.Millisecond)
 	err = client.ExecuteAction(expiredCtx, &agentcore.ActionCommand{})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected context.DeadlineExceeded error wrapping, got: %v", err)

@@ -31,7 +31,8 @@ func TestSubmitConfigure_Validation(t *testing.T) {
 	client := &NATSClient{target: "target-123"}
 
 	// Test nil context
-	err := client.SubmitConfigure(nil, &agentcore.ConfigureCommand{Target: "target-123", Version: contracts.EnvelopeVersion, RPCID: "123", Payload: []byte("{}"), Timestamp: time.Now()})
+	var nilCtx context.Context
+	err := client.SubmitConfigure(nilCtx, &agentcore.ConfigureCommand{Target: "target-123", Version: contracts.EnvelopeVersion, RPCID: "123", Payload: []byte("{}"), Timestamp: time.Now()})
 	if err == nil || err.Error() != "context cannot be nil" {
 		t.Fatalf("expected 'context cannot be nil', got: %v", err)
 	}
@@ -80,7 +81,8 @@ func TestExecuteAction_Validation(t *testing.T) {
 	client := &NATSClient{target: "target-123"}
 
 	// Test nil context
-	err := client.ExecuteAction(nil, &agentcore.ActionCommand{})
+	var nilCtx context.Context
+	err := client.ExecuteAction(nilCtx, &agentcore.ActionCommand{})
 	if err == nil || err.Error() != "context cannot be nil" {
 		t.Fatalf("expected 'context cannot be nil', got: %v", err)
 	}

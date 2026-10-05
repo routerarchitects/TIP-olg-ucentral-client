@@ -7,6 +7,8 @@ import (
 	"errors"
 	"log"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -1704,6 +1706,18 @@ func (s *inMemoryStore) GetActive(ctx context.Context, limit int) ([]*Persistent
 			list = append(list, op)
 		}
 	}
+	// Contract: sorted by UpdatedAt in descending order (newest first)
+	sort.Slice(list, func(i, j int) bool {
+		tI, errI := time.Parse(time.RFC3339, list[i].UpdatedAt)
+		tJ, errJ := time.Parse(time.RFC3339, list[j].UpdatedAt)
+		if errI != nil || errJ != nil {
+			return list[i].UpdatedAt > list[j].UpdatedAt
+		}
+		return tI.After(tJ)
+	})
+	if limit > 0 && len(list) > limit {
+		list = list[:limit]
+	}
 	return list, nil
 }
 
@@ -1906,7 +1920,14 @@ func TestUpgrade_SuccessfulUpgradeRebootAcceptsCommandsImmediately(t *testing.T)
 	cache := NewTransactionCache()
 	config := CacheTTLConfig{}
 	scheduler := queues.NewPriorityScheduler(10, 10)
-	store := newInMemoryStore()
+
+	// Use real DiskOperationStore rooted in a volatile directory
+	tmpDir := t.TempDir()
+	storeDir := filepath.Join(tmpDir, "operations")
+	store, err := NewDiskOperationStore(storeDir)
+	if err != nil {
+		t.Fatalf("failed to create real disk operation store: %v", err)
+	}
 
 	// 1. Initial process: submit upgrade and perform lock handoff
 	m1, err := NewRequestManager(10*time.Second, config, cache, scheduler, store, 1000, 15*time.Minute, 100)
@@ -1933,7 +1954,7 @@ func TestUpgrade_SuccessfulUpgradeRebootAcceptsCommandsImmediately(t *testing.T)
 		t.Fatalf("RespondAndRetain failed: %v", err)
 	}
 
-	// Verify operation was persisted and lock acquired
+	// Verify operation file was actually written to the real filesystem
 	activeOps, err := store.GetActive(context.Background(), 10)
 	if err != nil {
 		t.Fatalf("GetActive failed: %v", err)
@@ -1944,12 +1965,19 @@ func TestUpgrade_SuccessfulUpgradeRebootAcceptsCommandsImmediately(t *testing.T)
 
 	// 2. Successful flash & host reboot occurs:
 	// Volatile storage (tmpfs / /tmp) is wiped cleanly across reboot.
-	cleanStore := newInMemoryStore()
+	if err := os.RemoveAll(storeDir); err != nil {
+		t.Fatalf("failed to simulate reboot tmpfs wipe: %v", err)
+	}
+
+	// 3. New process starts up on new firmware after reboot with production DiskOperationStore
+	rebootStore, err := NewDiskOperationStore(storeDir)
+	if err != nil {
+		t.Fatalf("failed to initialize disk store after reboot: %v", err)
+	}
 	cleanCache := NewTransactionCache()
 	cleanScheduler := queues.NewPriorityScheduler(10, 10)
 
-	// 3. New process starts up on new firmware after reboot
-	m2, err := NewRequestManager(10*time.Second, config, cleanCache, cleanScheduler, cleanStore, 1000, 15*time.Minute, 100)
+	m2, err := NewRequestManager(10*time.Second, config, cleanCache, cleanScheduler, rebootStore, 1000, 15*time.Minute, 100)
 	if err != nil {
 		t.Fatalf("failed to create manager 2: %v", err)
 	}

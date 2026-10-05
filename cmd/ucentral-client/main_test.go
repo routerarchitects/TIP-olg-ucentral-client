@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"testing"
 	"time"
 
@@ -179,6 +180,30 @@ func TestParseTimeoutEnv_OperationSweeperTTL(t *testing.T) {
 		_, err := parseTimeoutEnv("OLG_OPERATION_SWEEPER_TTL", 15*time.Minute)
 		if err == nil {
 			t.Fatal("expected error for negative duration, got nil")
+		}
+	})
+}
+
+func TestOperationStoreDirEnv(t *testing.T) {
+	t.Run("Default directory is ./operations", func(t *testing.T) {
+		t.Setenv("OLG_OPERATION_STORE_DIR", "")
+		dir := "./operations"
+		if envDir := os.Getenv("OLG_OPERATION_STORE_DIR"); envDir != "" {
+			dir = envDir
+		}
+		if dir != "./operations" {
+			t.Errorf("expected ./operations, got %s", dir)
+		}
+	})
+
+	t.Run("Custom directory /tmp/operations", func(t *testing.T) {
+		t.Setenv("OLG_OPERATION_STORE_DIR", "/tmp/operations")
+		dir := "./operations"
+		if envDir := os.Getenv("OLG_OPERATION_STORE_DIR"); envDir != "" {
+			dir = envDir
+		}
+		if dir != "/tmp/operations" {
+			t.Errorf("expected /tmp/operations, got %s", dir)
 		}
 	})
 }

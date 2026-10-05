@@ -508,9 +508,13 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 
 	// Initialize Storage and Cache components
 	log.Println("Initializing Operation Store...")
-	store, err := reqmgr.NewDiskOperationStore("./operations")
+	operationsDir := "./operations"
+	if envDir := os.Getenv("OLG_OPERATION_STORE_DIR"); envDir != "" {
+		operationsDir = envDir
+	}
+	store, err := reqmgr.NewDiskOperationStore(operationsDir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize operation store: %w", err)
+		return nil, fmt.Errorf("failed to initialize operation store at %s: %w", operationsDir, err)
 	}
 
 	txCache := reqmgr.NewTransactionCache()

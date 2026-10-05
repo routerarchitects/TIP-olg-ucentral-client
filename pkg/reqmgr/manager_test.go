@@ -1715,61 +1715,137 @@ func (s *inMemoryStore) Delete(ctx context.Context, opID string) error {
 }
 
 func TestUpgrade_FailurePostHandoffReleasesLockImmediately(t *testing.T) {
-	cache := NewTransactionCache()
-	config := CacheTTLConfig{}
-	scheduler := queues.NewPriorityScheduler(10, 10)
-	store := newInMemoryStore()
-	m, err := NewRequestManager(10*time.Second, config, cache, scheduler, store, 1000, 15*time.Minute, 100)
-	if err != nil {
-		t.Fatalf("failed to create manager: %v", err)
-	}
+	t.Run("TerminalFailureDuringHandoffReleasesLockImmediately", func(t *testing.T) {
+		cache := NewTransactionCache()
+		config := CacheTTLConfig{}
+		scheduler := queues.NewPriorityScheduler(10, 10)
+		store := &blockingMockStore{
+			entered: make(chan struct{}),
+			release: make(chan struct{}),
+		}
+		m, err := NewRequestManager(10*time.Second, config, cache, scheduler, store, 1000, 15*time.Minute, 100)
+		if err != nil {
+			t.Fatalf("failed to create manager: %v", err)
+		}
 
-	// 1. Initiate upgrade transaction
-	tx, err := m.CreateTransaction("sess-1", json.RawMessage(`"upg-1"`), true, "upgrade", 10*time.Second, true)
-	if err != nil {
-		t.Fatalf("failed to create upgrade tx: %v", err)
-	}
-	_ = m.MarkPreparingDispatch(tx.RPCID)
-	_ = m.MarkPendingPublish(tx.RPCID)
-	_ = m.MarkInFlight(tx.RPCID)
+		// 1. Initiate upgrade transaction
+		tx, err := m.CreateTransaction("sess-1", json.RawMessage(`"upg-1"`), true, "upgrade", 10*time.Second, true)
+		if err != nil {
+			t.Fatalf("failed to create upgrade tx: %v", err)
+		}
+		if err := m.MarkPreparingDispatch(tx.RPCID); err != nil {
+			t.Fatalf("MarkPreparingDispatch failed: %v", err)
+		}
+		if err := m.MarkPendingPublish(tx.RPCID); err != nil {
+			t.Fatalf("MarkPendingPublish failed: %v", err)
+		}
+		if err := m.MarkInFlight(tx.RPCID); err != nil {
+			t.Fatalf("MarkInFlight failed: %v", err)
+		}
 
-	// 2. Perform lock handoff to background operation
-	opID, err := m.RespondAndRetain(context.Background(), tx.RPCID, []byte(`{"status":{"error":0}}`))
-	if err != nil {
-		t.Fatalf("RespondAndRetain failed: %v", err)
-	}
+		// 2. Perform lock handoff in a goroutine
+		errCh := make(chan error)
+		go func() {
+			_, handoffErr := m.RespondAndRetain(context.Background(), tx.RPCID, []byte(`{"status":{"error":0}}`))
+			errCh <- handoffErr
+		}()
 
-	// Verify lock is owned by operation
-	m.mu.Lock()
-	if m.activeStateOwner != LockOwnedByOperation || m.activeStateTx != opID {
-		t.Fatalf("expected lock owned by operation %s, got owner=%v, tx=%s", opID, m.activeStateOwner, m.activeStateTx)
-	}
-	m.mu.Unlock()
+		// Wait deterministically for handoff to enter disk save
+		<-store.entered
 
-	// 3. Downstream reports failure post-handoff -> ReleaseOperationLock called immediately
-	err = m.ReleaseOperationLock(context.Background(), opID)
-	if err != nil {
-		t.Fatalf("ReleaseOperationLock failed: %v", err)
-	}
+		// 3. Production downstream failure arrives while handoff is processing
+		failErr := m.Fail(tx.RPCID, []byte(`{"status":{"error":1,"message":"download failed"}}`))
+		if failErr != nil {
+			t.Fatalf("m.Fail failed: %v", failErr)
+		}
 
-	// 4. Verify lock is released and file is deleted
-	m.mu.Lock()
-	if m.activeStateOwner != LockNone || m.activeStateTx != "" {
-		t.Fatalf("expected lock to be released immediately, got owner=%v, tx=%s", m.activeStateOwner, m.activeStateTx)
-	}
-	m.mu.Unlock()
+		// Unblock disk save to let production RespondAndRetain handle the buffered terminal failure
+		close(store.release)
+		if err := <-errCh; err != nil {
+			t.Fatalf("expected RespondAndRetain to handle buffered failure cleanly: %v", err)
+		}
 
-	activeOps, _ := store.GetActive(context.Background(), 10)
-	if len(activeOps) != 0 {
-		t.Fatalf("expected record to be deleted from store, found %d", len(activeOps))
-	}
+		// 4. Verify lock is released and state reset to LockNone immediately
+		m.mu.Lock()
+		if m.activeStateOwner != LockNone || m.activeStateTx != "" {
+			t.Fatalf("expected lock to be released immediately, got owner=%v, tx=%s", m.activeStateOwner, m.activeStateTx)
+		}
+		m.mu.Unlock()
 
-	// 5. Next configure goes through immediately without waiting for sweeper
-	txConf, err := m.CreateTransaction("sess-2", json.RawMessage(`"conf-1"`), true, "configure", 10*time.Second, true)
-	if err != nil {
-		t.Fatalf("expected configure transaction to succeed immediately, got error: %v", err)
-	}
-	_ = m.Fail(txConf.RPCID, []byte("cleanup"))
+		// 5. Next configure goes through immediately without waiting for sweeper
+		txConf, err := m.CreateTransaction("sess-2", json.RawMessage(`"conf-1"`), true, "configure", 10*time.Second, true)
+		if err != nil {
+			t.Fatalf("expected configure transaction to succeed immediately, got error: %v", err)
+		}
+		if err := m.Fail(txConf.RPCID, []byte("cleanup")); err != nil {
+			t.Fatalf("cleanup failed: %v", err)
+		}
+	})
+
+	t.Run("SweeperReconciliationReleasesExpiredLockImmediately", func(t *testing.T) {
+		cache := NewTransactionCache()
+		config := CacheTTLConfig{}
+		scheduler := queues.NewPriorityScheduler(10, 10)
+		store := newInMemoryStore()
+		sweeperTTL := 100 * time.Millisecond
+		m, err := NewRequestManager(10*time.Second, config, cache, scheduler, store, 1000, sweeperTTL, 100)
+		if err != nil {
+			t.Fatalf("failed to create manager: %v", err)
+		}
+
+		tx, err := m.CreateTransaction("sess-sw", json.RawMessage(`"upg-sw"`), true, "upgrade", 10*time.Second, true)
+		if err != nil {
+			t.Fatalf("failed to create upgrade tx: %v", err)
+		}
+		if err := m.MarkPreparingDispatch(tx.RPCID); err != nil {
+			t.Fatalf("MarkPreparingDispatch failed: %v", err)
+		}
+		if err := m.MarkPendingPublish(tx.RPCID); err != nil {
+			t.Fatalf("MarkPendingPublish failed: %v", err)
+		}
+		if err := m.MarkInFlight(tx.RPCID); err != nil {
+			t.Fatalf("MarkInFlight failed: %v", err)
+		}
+
+		opID, err := m.RespondAndRetain(context.Background(), tx.RPCID, []byte(`{"status":{"error":0}}`))
+		if err != nil {
+			t.Fatalf("RespondAndRetain failed: %v", err)
+		}
+
+		// Seed record as expired beyond sweeper TTL
+		store.mu.Lock()
+		if op, exists := store.ops[opID]; exists {
+			op.UpdatedAt = time.Now().UTC().Add(-1 * time.Minute).Format(time.RFC3339)
+		}
+		store.mu.Unlock()
+
+		// Drive through production sweep reconciliation
+		m.sweepOrphanedOperations(context.Background())
+
+		// Verify lock and store record are released
+		m.mu.Lock()
+		if m.activeStateOwner != LockNone || m.activeStateTx != "" {
+			t.Fatalf("expected lock to be released by sweeper reconciliation, got owner=%v, tx=%s", m.activeStateOwner, m.activeStateTx)
+		}
+		m.mu.Unlock()
+
+		activeOps, err := store.GetActive(context.Background(), 10)
+		if err != nil {
+			t.Fatalf("GetActive failed: %v", err)
+		}
+		if len(activeOps) != 0 {
+			t.Fatalf("expected record to be deleted from store by sweeper, found %d", len(activeOps))
+		}
+
+		// Next configure goes through immediately
+		txConf, err := m.CreateTransaction("sess-sw2", json.RawMessage(`"conf-sw"`), true, "configure", 10*time.Second, true)
+		if err != nil {
+			t.Fatalf("expected configure transaction to succeed immediately, got error: %v", err)
+		}
+		if err := m.Fail(txConf.RPCID, []byte("cleanup")); err != nil {
+			t.Fatalf("cleanup failed: %v", err)
+		}
+	})
 }
 
 func TestUpgrade_RestartWhileRecordUnderTTLRetainsLock(t *testing.T) {
@@ -1781,7 +1857,7 @@ func TestUpgrade_RestartWhileRecordUnderTTLRetainsLock(t *testing.T) {
 	// Seed an unexpired operation record in store (updated 1 minute ago, well under 15m TTL)
 	now := time.Now().UTC()
 	opID := "op-active-flash"
-	_ = store.Save(context.Background(), &PersistentOperation{
+	err := store.Save(context.Background(), &PersistentOperation{
 		OperationID: opID,
 		RPCID:       "rpc-123",
 		CloudRPCID:  json.RawMessage(`"cloud-123"`),
@@ -1793,6 +1869,9 @@ func TestUpgrade_RestartWhileRecordUnderTTLRetainsLock(t *testing.T) {
 		CreatedAt:   now.Add(-1 * time.Minute).Format(time.RFC3339),
 		UpdatedAt:   now.Add(-1 * time.Minute).Format(time.RFC3339),
 	})
+	if err != nil {
+		t.Fatalf("store.Save failed: %v", err)
+	}
 
 	// Start a fresh manager instance (simulating daemon restart during flash)
 	m, err := NewRequestManager(10*time.Second, config, cache, scheduler, store, 1000, 15*time.Minute, 100)
@@ -1818,42 +1897,89 @@ func TestUpgrade_RestartWhileRecordUnderTTLRetainsLock(t *testing.T) {
 	}
 
 	// Clean up
-	_ = m.ReleaseOperationLock(context.Background(), opID)
+	if err := m.ReleaseOperationLock(context.Background(), opID); err != nil {
+		t.Fatalf("ReleaseOperationLock cleanup failed: %v", err)
+	}
 }
 
 func TestUpgrade_SuccessfulUpgradeRebootAcceptsCommandsImmediately(t *testing.T) {
 	cache := NewTransactionCache()
 	config := CacheTTLConfig{}
 	scheduler := queues.NewPriorityScheduler(10, 10)
-	store := newInMemoryStore() // Clean store after host reboot / tmpfs wipe
+	store := newInMemoryStore()
 
-	m, err := NewRequestManager(10*time.Second, config, cache, scheduler, store, 1000, 15*time.Minute, 100)
+	// 1. Initial process: submit upgrade and perform lock handoff
+	m1, err := NewRequestManager(10*time.Second, config, cache, scheduler, store, 1000, 15*time.Minute, 100)
 	if err != nil {
-		t.Fatalf("failed to create manager: %v", err)
+		t.Fatalf("failed to create manager 1: %v", err)
+	}
+
+	txUpg, err := m1.CreateTransaction("sess-init", json.RawMessage(`"upg-boot"`), true, "upgrade", 10*time.Second, true)
+	if err != nil {
+		t.Fatalf("failed to create upgrade tx: %v", err)
+	}
+	if err := m1.MarkPreparingDispatch(txUpg.RPCID); err != nil {
+		t.Fatalf("MarkPreparingDispatch failed: %v", err)
+	}
+	if err := m1.MarkPendingPublish(txUpg.RPCID); err != nil {
+		t.Fatalf("MarkPendingPublish failed: %v", err)
+	}
+	if err := m1.MarkInFlight(txUpg.RPCID); err != nil {
+		t.Fatalf("MarkInFlight failed: %v", err)
+	}
+
+	opID, err := m1.RespondAndRetain(context.Background(), txUpg.RPCID, []byte(`{"status":{"error":0}}`))
+	if err != nil {
+		t.Fatalf("RespondAndRetain failed: %v", err)
+	}
+
+	// Verify operation was persisted and lock acquired
+	activeOps, err := store.GetActive(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("GetActive failed: %v", err)
+	}
+	if len(activeOps) != 1 || activeOps[0].OperationID != opID {
+		t.Fatalf("expected 1 active operation in store before reboot, got %d", len(activeOps))
+	}
+
+	// 2. Successful flash & host reboot occurs:
+	// Volatile storage (tmpfs / /tmp) is wiped cleanly across reboot.
+	cleanStore := newInMemoryStore()
+	cleanCache := NewTransactionCache()
+	cleanScheduler := queues.NewPriorityScheduler(10, 10)
+
+	// 3. New process starts up on new firmware after reboot
+	m2, err := NewRequestManager(10*time.Second, config, cleanCache, cleanScheduler, cleanStore, 1000, 15*time.Minute, 100)
+	if err != nil {
+		t.Fatalf("failed to create manager 2: %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	m.Start(ctx)
+	m2.Start(ctx)
 
-	// Verify no lock is held on clean startup
-	m.mu.Lock()
-	if m.activeStateOwner != LockNone || m.activeStateTx != "" {
-		t.Fatalf("expected no lock held on clean startup, got owner=%v, tx=%s", m.activeStateOwner, m.activeStateTx)
+	// Verify no lock is held on startup after reboot
+	m2.mu.Lock()
+	if m2.activeStateOwner != LockNone || m2.activeStateTx != "" {
+		t.Fatalf("expected no lock held on clean reboot startup, got owner=%v, tx=%s", m2.activeStateOwner, m2.activeStateTx)
 	}
-	m.mu.Unlock()
+	m2.mu.Unlock()
 
 	// Verify configure is accepted straight away
-	txConf, err := m.CreateTransaction("sess-clean-1", json.RawMessage(`"conf-clean"`), true, "configure", 10*time.Second, true)
+	txConf, err := m2.CreateTransaction("sess-clean-1", json.RawMessage(`"conf-clean"`), true, "configure", 10*time.Second, true)
 	if err != nil {
 		t.Fatalf("expected configure transaction to succeed immediately, got: %v", err)
 	}
-	_ = m.Fail(txConf.RPCID, []byte("cleanup"))
+	if err := m2.Fail(txConf.RPCID, []byte("cleanup")); err != nil {
+		t.Fatalf("configure cleanup failed: %v", err)
+	}
 
 	// Verify reboot is accepted straight away
-	txReboot, err := m.CreateTransaction("sess-clean-2", json.RawMessage(`"reboot-clean"`), true, "reboot", 10*time.Second, true)
+	txReboot, err := m2.CreateTransaction("sess-clean-2", json.RawMessage(`"reboot-clean"`), true, "reboot", 10*time.Second, true)
 	if err != nil {
 		t.Fatalf("expected reboot transaction to succeed immediately, got: %v", err)
 	}
-	_ = m.Fail(txReboot.RPCID, []byte("cleanup"))
+	if err := m2.Fail(txReboot.RPCID, []byte("cleanup")); err != nil {
+		t.Fatalf("reboot cleanup failed: %v", err)
+	}
 }

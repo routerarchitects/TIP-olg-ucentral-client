@@ -14,6 +14,7 @@ type PersistentOperation struct {
 	Stage       string          `json:"stage"`
 	Status      string          `json:"status"`
 	Active      bool            `json:"active"`
+	BootID      string          `json:"boot_id,omitempty"`
 	CreatedAt   string          `json:"created_at"`
 	UpdatedAt   string          `json:"updated_at"`
 }

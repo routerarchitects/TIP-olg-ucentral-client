@@ -9,6 +9,8 @@ import (
 	"io"
 	"log"
 	"math/big"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -61,6 +63,31 @@ type DefaultRequestManager struct {
 	maxConcurrentRequests int
 	sweeperTTL            time.Duration
 	activeRecordLimit     int
+	bootID                string
+}
+
+func getSystemBootID() string {
+	if data, err := os.ReadFile("/proc/sys/kernel/random/boot_id"); err == nil {
+		id := strings.TrimSpace(string(data))
+		if id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
+// SetBootID sets the current system boot identifier (used for tests or custom environments).
+func (m *DefaultRequestManager) SetBootID(bootID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.bootID = bootID
+}
+
+// GetBootID returns the active system boot identifier.
+func (m *DefaultRequestManager) GetBootID() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.bootID
 }
 
 func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLConfig, cache *TransactionCache, scheduler *queues.PriorityScheduler, store OperationStore, maxConcurrentRequests int, sweeperTTL time.Duration, activeRecordLimit int) (*DefaultRequestManager, error) {
@@ -83,6 +110,7 @@ func NewRequestManager(dispatchTimeout time.Duration, cacheTTLConfig CacheTTLCon
 		maxConcurrentRequests: maxConcurrentRequests,
 		sweeperTTL:            sweeperTTL,
 		activeRecordLimit:     activeRecordLimit,
+		bootID:                getSystemBootID(),
 	}, nil
 }
 
@@ -421,6 +449,7 @@ func (m *DefaultRequestManager) RespondAndRetain(ctx context.Context, rpcID stri
 		Stage:       "started",
 		Status:      "started",
 		Active:      true,
+		BootID:      m.GetBootID(),
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
@@ -681,7 +710,18 @@ func (m *DefaultRequestManager) Start(ctx context.Context) {
 	if ops, err := m.store.GetActive(ctx, m.activeRecordLimit); err == nil {
 		m.mu.Lock()
 		now := time.Now().UTC()
+		currentBootID := m.bootID
+		var staleBootOps []string
+
 		for _, op := range ops {
+			// If the operation was created under a previous host boot, the device has rebooted
+			// (e.g. into the newly flashed firmware). Discard the record and do not take the lock.
+			if currentBootID != "" && op.BootID != "" && op.BootID != currentBootID {
+				log.Printf("reqmgr: Start() discarding operation %s created under previous boot (op_boot=%s, current_boot=%s)", op.OperationID, op.BootID, currentBootID)
+				staleBootOps = append(staleBootOps, op.OperationID)
+				continue
+			}
+
 			updatedAt, errTime := time.Parse(time.RFC3339, op.UpdatedAt)
 
 			// If the timestamp is missing/malformed, treat it as expired to avoid deadlocks.
@@ -694,7 +734,7 @@ func (m *DefaultRequestManager) Start(ctx context.Context) {
 
 			if m.activeStateTx == "" {
 				if !isExpired {
-					// A background operation was running when we crashed.
+					// A background operation was running when we crashed on the SAME boot.
 					// Re-acquire the memory lock to protect the device until it finishes!
 					if m.stateLock.TryLock() {
 						m.activeStateTx = op.OperationID
@@ -704,6 +744,13 @@ func (m *DefaultRequestManager) Start(ctx context.Context) {
 			}
 		}
 		m.mu.Unlock()
+
+		// Asynchronously delete operations belonging to prior boots
+		for _, staleID := range staleBootOps {
+			if err := m.store.Delete(ctx, staleID); err != nil {
+				log.Printf("reqmgr: Start() failed to delete stale previous-boot operation %s: %v", staleID, err)
+			}
+		}
 	} else {
 		log.Printf("reqmgr: Start() failed to load active operations from store: %v", err)
 	}
@@ -735,8 +782,17 @@ func (m *DefaultRequestManager) sweepOrphanedOperations(ctx context.Context) {
 	}
 
 	now := time.Now().UTC()
+	currentBootID := m.GetBootID()
 
 	for _, op := range ops {
+		// Clean up operations from previous boots
+		if currentBootID != "" && op.BootID != "" && op.BootID != currentBootID {
+			if err := m.store.Delete(ctx, op.OperationID); err != nil {
+				log.Printf("reqmgr: sweeper failed to delete previous-boot operation %s: %v", op.OperationID, err)
+			}
+			continue
+		}
+
 		updatedAt, errTime := time.Parse(time.RFC3339, op.UpdatedAt)
 
 		// If the timestamp is missing/malformed, treat it as expired to avoid deadlocks.

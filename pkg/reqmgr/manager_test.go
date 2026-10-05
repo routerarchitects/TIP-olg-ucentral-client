@@ -1967,19 +1967,20 @@ func TestUpgrade_SuccessfulUpgradeRebootAcceptsCommandsImmediately(t *testing.T)
 	config := CacheTTLConfig{}
 	scheduler := queues.NewPriorityScheduler(10, 10)
 
-	// Use real DiskOperationStore rooted in a volatile directory
-	tmpDir := t.TempDir()
-	storeDir := filepath.Join(tmpDir, "operations")
+	// Use real DiskOperationStore with a temporary directory
+	storeDir := filepath.Join(t.TempDir(), "operations")
 	store, err := NewDiskOperationStore(storeDir)
 	if err != nil {
 		t.Fatalf("failed to create real disk operation store: %v", err)
 	}
 
-	// 1. Initial process: submit upgrade and perform lock handoff
+	// 1. Initial process under Boot ID A: submit upgrade and perform lock handoff
 	m1, err := NewRequestManager(10*time.Second, config, cache, scheduler, store, 1000, 15*time.Minute, 100)
 	if err != nil {
 		t.Fatalf("failed to create manager 1: %v", err)
 	}
+	bootIDA := "boot-id-initial-firmware-1111"
+	m1.SetBootID(bootIDA)
 
 	txUpg, err := m1.CreateTransaction("sess-init", json.RawMessage(`"upg-boot"`), true, "upgrade", 10*time.Second, true)
 	if err != nil {
@@ -2000,50 +2001,38 @@ func TestUpgrade_SuccessfulUpgradeRebootAcceptsCommandsImmediately(t *testing.T)
 		t.Fatalf("RespondAndRetain failed: %v", err)
 	}
 
-	// Verify operation file was actually written to the real filesystem
+	// Verify operation file was written to disk with Boot ID A
 	activeOps, err := store.GetActive(context.Background(), 10)
 	if err != nil {
 		t.Fatalf("GetActive failed: %v", err)
 	}
-	if len(activeOps) != 1 || activeOps[0].OperationID != opID {
-		t.Fatalf("expected 1 active operation in store before reboot, got %d", len(activeOps))
+	if len(activeOps) != 1 || activeOps[0].OperationID != opID || activeOps[0].BootID != bootIDA {
+		t.Fatalf("expected 1 active operation in store with bootID %s before reboot, got %+v", bootIDA, activeOps)
 	}
 
 	// 2. Successful flash & host reboot occurs:
-	// NOTE ON PHYSICAL VS TEST LIFECYCLE:
-	// In production deployments, the OperationStore path (./operations) is backed by volatile
-	// RAM storage (tmpfs under /tmp or /run). When an upgrade succeeds and the device physically
-	// reboots into the new firmware partition, physical RAM power-cycles and the tmpfs mount
-	// is cleanly wiped by the operating system kernel.
-	//
-	// In a user-space Go unit test, we cannot issue a kernel/hardware reboot. Therefore,
-	// os.RemoveAll(storeDir) is used to faithfully model the post-reboot state of the volatile
-	// tmpfs mount before launching the post-reboot daemon process.
-	if err := os.RemoveAll(storeDir); err != nil {
-		t.Fatalf("failed to simulate reboot tmpfs wipe: %v", err)
-	}
+	// Even if storage persists across reboot (non-tmpfs storage), the host kernel assigns a new Boot ID B.
+	// NOTE: We do NOT delete storeDir manually here; we verify the production BootID reconciliation mechanism!
+	bootIDB := "boot-id-new-firmware-2222"
 
-	// 3. New process starts up on new firmware after reboot with production DiskOperationStore
-	rebootStore, err := NewDiskOperationStore(storeDir)
-	if err != nil {
-		t.Fatalf("failed to initialize disk store after reboot: %v", err)
-	}
+	// 3. New process starts up on new firmware after reboot with Boot ID B reading the same disk store
 	cleanCache := NewTransactionCache()
 	cleanScheduler := queues.NewPriorityScheduler(10, 10)
 
-	m2, err := NewRequestManager(10*time.Second, config, cleanCache, cleanScheduler, rebootStore, 1000, 15*time.Minute, 100)
+	m2, err := NewRequestManager(10*time.Second, config, cleanCache, cleanScheduler, store, 1000, 15*time.Minute, 100)
 	if err != nil {
 		t.Fatalf("failed to create manager 2: %v", err)
 	}
+	m2.SetBootID(bootIDB)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	m2.Start(ctx)
 
-	// Verify no lock is held on startup after reboot
+	// Verify no lock is held on startup because the record belonged to the previous boot
 	m2.mu.Lock()
 	if m2.activeStateOwner != LockNone || m2.activeStateTx != "" {
-		t.Fatalf("expected no lock held on clean reboot startup, got owner=%v, tx=%s", m2.activeStateOwner, m2.activeStateTx)
+		t.Fatalf("expected no lock held on reboot startup, got owner=%v, tx=%s", m2.activeStateOwner, m2.activeStateTx)
 	}
 	m2.mu.Unlock()
 

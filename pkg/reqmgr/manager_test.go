@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/contracts"
 	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/queues"
 )
@@ -1728,15 +1729,40 @@ func (s *inMemoryStore) Delete(ctx context.Context, opID string) error {
 	return nil
 }
 
+type blockingInMemoryStore struct {
+	inMemoryStore
+	entered chan struct{}
+	release chan struct{}
+}
+
+func newBlockingInMemoryStore() *blockingInMemoryStore {
+	return &blockingInMemoryStore{
+		inMemoryStore: inMemoryStore{ops: make(map[string]*PersistentOperation)},
+		entered:       make(chan struct{}),
+		release:       make(chan struct{}),
+	}
+}
+
+func (s *blockingInMemoryStore) Save(ctx context.Context, op *PersistentOperation) error {
+	s.mu.Lock()
+	s.ops[op.OperationID] = op
+	s.mu.Unlock()
+
+	close(s.entered)
+	select {
+	case <-s.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func TestUpgrade_FailurePostHandoffReleasesLockImmediately(t *testing.T) {
 	t.Run("TerminalFailureDuringHandoffReleasesLockImmediately", func(t *testing.T) {
 		cache := NewTransactionCache()
 		config := CacheTTLConfig{}
 		scheduler := queues.NewPriorityScheduler(10, 10)
-		store := &blockingMockStore{
-			entered: make(chan struct{}),
-			release: make(chan struct{}),
-		}
+		store := newBlockingInMemoryStore()
 		m, err := NewRequestManager(10*time.Second, config, cache, scheduler, store, 1000, 15*time.Minute, 100)
 		if err != nil {
 			t.Fatalf("failed to create manager: %v", err)
@@ -1786,7 +1812,16 @@ func TestUpgrade_FailurePostHandoffReleasesLockImmediately(t *testing.T) {
 		}
 		m.mu.Unlock()
 
-		// 5. Next configure goes through immediately without waiting for sweeper
+		// 5. Explicitly assert that the persisted operation record was deleted
+		activeOps, err := store.GetActive(context.Background(), 10)
+		if err != nil {
+			t.Fatalf("GetActive failed: %v", err)
+		}
+		if len(activeOps) != 0 {
+			t.Fatalf("expected operation record to be deleted from store, found %d records", len(activeOps))
+		}
+
+		// 6. Next configure goes through immediately without waiting for sweeper
 		txConf, err := m.CreateTransaction("sess-2", json.RawMessage(`"conf-1"`), true, "configure", 10*time.Second, true)
 		if err != nil {
 			t.Fatalf("expected configure transaction to succeed immediately, got error: %v", err)
@@ -1866,12 +1901,18 @@ func TestUpgrade_RestartWhileRecordUnderTTLRetainsLock(t *testing.T) {
 	cache := NewTransactionCache()
 	config := CacheTTLConfig{}
 	scheduler := queues.NewPriorityScheduler(10, 10)
-	store := newInMemoryStore()
 
-	// Seed an unexpired operation record in store (updated 1 minute ago, well under 15m TTL)
+	// Use real DiskOperationStore with a temporary directory
+	storeDir := filepath.Join(t.TempDir(), "operations")
+	store1, err := NewDiskOperationStore(storeDir)
+	if err != nil {
+		t.Fatalf("failed to create disk operation store: %v", err)
+	}
+
+	// Seed an unexpired operation record on disk (updated 1 minute ago, well under 15m TTL)
 	now := time.Now().UTC()
-	opID := "op-active-flash"
-	err := store.Save(context.Background(), &PersistentOperation{
+	opID := uuid.New().String()
+	err = store1.Save(context.Background(), &PersistentOperation{
 		OperationID: opID,
 		RPCID:       "rpc-123",
 		CloudRPCID:  json.RawMessage(`"cloud-123"`),
@@ -1887,8 +1928,13 @@ func TestUpgrade_RestartWhileRecordUnderTTLRetainsLock(t *testing.T) {
 		t.Fatalf("store.Save failed: %v", err)
 	}
 
-	// Start a fresh manager instance (simulating daemon restart during flash)
-	m, err := NewRequestManager(10*time.Second, config, cache, scheduler, store, 1000, 15*time.Minute, 100)
+	// Simulate daemon restart: create a new DiskOperationStore instance reading from the same disk path
+	store2, err := NewDiskOperationStore(storeDir)
+	if err != nil {
+		t.Fatalf("failed to initialize disk store on restart: %v", err)
+	}
+
+	m, err := NewRequestManager(10*time.Second, config, cache, scheduler, store2, 1000, 15*time.Minute, 100)
 	if err != nil {
 		t.Fatalf("failed to create manager: %v", err)
 	}
@@ -1897,7 +1943,7 @@ func TestUpgrade_RestartWhileRecordUnderTTLRetainsLock(t *testing.T) {
 	defer cancel()
 	m.Start(ctx)
 
-	// Verify lock was re-acquired on startup to protect in-progress flash
+	// Verify lock was re-acquired on startup from disk to protect in-progress flash
 	m.mu.Lock()
 	if m.activeStateOwner != LockOwnedByOperation || m.activeStateTx != opID {
 		t.Fatalf("expected lock to be re-acquired on restart, got owner=%v, tx=%s", m.activeStateOwner, m.activeStateTx)

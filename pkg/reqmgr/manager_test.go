@@ -2010,7 +2010,15 @@ func TestUpgrade_SuccessfulUpgradeRebootAcceptsCommandsImmediately(t *testing.T)
 	}
 
 	// 2. Successful flash & host reboot occurs:
-	// Volatile storage (tmpfs / /tmp) is wiped cleanly across reboot.
+	// NOTE ON PHYSICAL VS TEST LIFECYCLE:
+	// In production deployments, the OperationStore path (./operations) is backed by volatile
+	// RAM storage (tmpfs under /tmp or /run). When an upgrade succeeds and the device physically
+	// reboots into the new firmware partition, physical RAM power-cycles and the tmpfs mount
+	// is cleanly wiped by the operating system kernel.
+	//
+	// In a user-space Go unit test, we cannot issue a kernel/hardware reboot. Therefore,
+	// os.RemoveAll(storeDir) is used to faithfully model the post-reboot state of the volatile
+	// tmpfs mount before launching the post-reboot daemon process.
 	if err := os.RemoveAll(storeDir); err != nil {
 		t.Fatalf("failed to simulate reboot tmpfs wipe: %v", err)
 	}

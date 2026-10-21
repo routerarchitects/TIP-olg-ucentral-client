@@ -2054,3 +2054,311 @@ func TestUpgrade_SuccessfulUpgradeRebootAcceptsCommandsImmediately(t *testing.T)
 		t.Fatalf("reboot cleanup failed: %v", err)
 	}
 }
+
+func TestDefaultRequestManager_AcknowledgeConfigure_HappyPath(t *testing.T) {
+	cache := NewTransactionCache()
+	config := CacheTTLConfig{DefaultTTL: 10 * time.Minute}
+	scheduler := queues.NewPriorityScheduler(10, 10)
+	store := &mockStore{}
+	m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store, 1000, 15*time.Minute, 100)
+
+	cloudRPCID := json.RawMessage(`42`)
+	tx, err := m.CreateTransaction("session-1", cloudRPCID, true, "configure", 10*time.Second, true)
+	if err != nil {
+		t.Fatalf("failed to create transaction: %v", err)
+	}
+
+	_ = m.MarkPreparingDispatch(tx.RPCID)
+	_ = m.MarkPendingPublish(tx.RPCID)
+
+	ackResp := []byte(`{"jsonrpc":"2.0","result":{"status":{"error":0,"text":"Success"},"uuid":100},"id":42}`)
+	err = m.AcknowledgeConfigure(tx.RPCID, "100", ackResp)
+	if err != nil {
+		t.Fatalf("AcknowledgeConfigure failed: %v", err)
+	}
+
+	// 1. Verify response was queued to scheduler
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	msg, err := scheduler.Next(ctx)
+	if err != nil {
+		t.Fatalf("expected queued ack in scheduler: %v", err)
+	}
+	if string(msg.Payload) != string(ackResp) {
+		t.Fatalf("unexpected ack payload: got %s, want %s", string(msg.Payload), string(ackResp))
+	}
+
+	// 2. Verify stateLock is still held (conflicting configure rejected with busy)
+	_, err = m.CreateTransaction("session-1", json.RawMessage(`43`), true, "configure", 10*time.Second, true)
+	if !errors.Is(err, ErrStateLockBusy) {
+		t.Fatalf("expected ErrStateLockBusy while downstream configure is in flight, got: %v", err)
+	}
+
+	// 3. Verify duplicate request with same ID is answered from cache
+	_, err = m.CreateTransaction("session-1", cloudRPCID, true, "configure", 10*time.Second, true)
+	var cacheErr *CachedResponseError
+	if !errors.As(err, &cacheErr) {
+		t.Fatalf("expected CachedResponseError for duplicate request, got: %v", err)
+	}
+	if string(cacheErr.Payload) != string(ackResp) {
+		t.Fatalf("expected cached payload %s, got %s", string(ackResp), string(cacheErr.Payload))
+	}
+
+	// 4. Downstream reports completion
+	err = m.Complete(tx.RPCID, nil)
+	if err != nil {
+		t.Fatalf("Complete failed: %v", err)
+	}
+
+	// 5. Verify NO second response queued to scheduler
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel2()
+	if extraMsg, err := scheduler.Next(ctx2); err == nil {
+		t.Fatalf("expected NO second response queued for configure completion, got: %s", string(extraMsg.Payload))
+	}
+
+	// 6. Verify stateLock was released (new configure now accepted)
+	txNext, err := m.CreateTransaction("session-1", json.RawMessage(`44`), true, "configure", 10*time.Second, true)
+	if err != nil {
+		t.Fatalf("expected new configure transaction to succeed after lock release, got: %v", err)
+	}
+	_ = m.Fail(txNext.RPCID, []byte("cleanup"))
+}
+
+func TestDefaultRequestManager_AcknowledgeConfigure_TimeoutNoSecondResponse(t *testing.T) {
+	cache := NewTransactionCache()
+	config := CacheTTLConfig{DefaultTTL: 10 * time.Minute}
+	scheduler := queues.NewPriorityScheduler(10, 10)
+	store := &mockStore{}
+	m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store, 1000, 15*time.Minute, 100)
+
+	cloudRPCID := json.RawMessage(`55`)
+	tx, err := m.CreateTransaction("session-1", cloudRPCID, true, "configure", 10*time.Second, true)
+	if err != nil {
+		t.Fatalf("failed to create transaction: %v", err)
+	}
+
+	_ = m.MarkPreparingDispatch(tx.RPCID)
+	_ = m.MarkPendingPublish(tx.RPCID)
+
+	ackResp := []byte(`{"jsonrpc":"2.0","result":{"status":{"error":0,"text":"Success"},"uuid":100},"id":55}`)
+	err = m.AcknowledgeConfigure(tx.RPCID, "100", ackResp)
+	if err != nil {
+		t.Fatalf("AcknowledgeConfigure failed: %v", err)
+	}
+
+	// Drain initial ACK from scheduler
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	_, _ = scheduler.Next(ctx)
+
+	// Trigger downstream timeout
+	err = m.Timeout(tx.RPCID)
+	if err != nil {
+		t.Fatalf("Timeout failed: %v", err)
+	}
+
+	// Verify NO second response queued to scheduler
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel2()
+	if extraMsg, err := scheduler.Next(ctx2); err == nil {
+		t.Fatalf("expected NO second response queued on downstream timeout, got: %s", string(extraMsg.Payload))
+	}
+
+	// Verify stateLock was released
+	txNext, err := m.CreateTransaction("session-1", json.RawMessage(`56`), true, "configure", 10*time.Second, true)
+	if err != nil {
+		t.Fatalf("expected lock release after downstream timeout, got: %v", err)
+	}
+	_ = m.Fail(txNext.RPCID, []byte("cleanup"))
+}
+
+func TestDefaultRequestManager_AcknowledgeConfigure_InvalidMethod(t *testing.T) {
+	cache := NewTransactionCache()
+	config := CacheTTLConfig{}
+	scheduler := queues.NewPriorityScheduler(10, 10)
+	store := &mockStore{}
+	m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store, 1000, 15*time.Minute, 100)
+
+	tx, err := m.CreateTransaction("session-1", json.RawMessage(`1`), true, "reboot", 10*time.Second, true)
+	if err != nil {
+		t.Fatalf("failed to create transaction: %v", err)
+	}
+	_ = m.MarkPreparingDispatch(tx.RPCID)
+	_ = m.MarkPendingPublish(tx.RPCID)
+
+	err = m.AcknowledgeConfigure(tx.RPCID, "100", []byte("ack"))
+	if err == nil || !strings.Contains(err.Error(), "can only be called for configure") {
+		t.Fatalf("expected error for non-configure method, got: %v", err)
+	}
+}
+
+func TestDefaultRequestManager_AcknowledgeConfigure_SchedulerFailure(t *testing.T) {
+	cache := NewTransactionCache()
+	config := CacheTTLConfig{DefaultTTL: 10 * time.Minute}
+	// Create a scheduler with zero/one capacity and fill it so Push fails
+	scheduler := queues.NewPriorityScheduler(1, 1)
+	store := &mockStore{}
+	m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store, 1000, 15*time.Minute, 100)
+
+	// Saturate scheduler queue so subsequent pushes fail
+	_ = scheduler.Push(queues.OutboundMessage{
+		SessionID: "session-1",
+		Priority:  queues.PriorityHighest,
+		Payload:   []byte("blocker"),
+	})
+
+	cloudRPCID := json.RawMessage(`88`)
+	tx, err := m.CreateTransaction("session-1", cloudRPCID, true, "configure", 10*time.Second, true)
+	if err != nil {
+		t.Fatalf("failed to create transaction: %v", err)
+	}
+	_ = m.MarkPreparingDispatch(tx.RPCID)
+	_ = m.MarkPendingPublish(tx.RPCID)
+
+	ackResp := []byte(`{"jsonrpc":"2.0","result":{"status":{"error":0,"text":"Success"},"uuid":88},"id":88}`)
+	// AcknowledgeConfigure should log scheduler failure but gracefully transition to TxInFlight and cache the response
+	err = m.AcknowledgeConfigure(tx.RPCID, "88", ackResp)
+	if err != nil {
+		t.Fatalf("AcknowledgeConfigure should succeed even if scheduler fails: %v", err)
+	}
+
+	// 1. Verify transaction transitioned to TxInFlight
+	m.mu.Lock()
+	activeTx, exists := m.transactionsByRPCID[tx.RPCID]
+	m.mu.Unlock()
+	if !exists || activeTx.State != TxInFlight {
+		t.Fatalf("expected transaction in TxInFlight, exists=%v state=%v", exists, activeTx.State)
+	}
+
+	// 2. Verify stateLock is still held
+	_, err = m.CreateTransaction("session-1", json.RawMessage(`89`), true, "configure", 10*time.Second, true)
+	if !errors.Is(err, ErrStateLockBusy) {
+		t.Fatalf("expected ErrStateLockBusy while configure is in flight, got: %v", err)
+	}
+
+	// 3. Verify duplicate request is serviced from cache even if initial scheduler push failed
+	_, err = m.CreateTransaction("session-1", cloudRPCID, true, "configure", 10*time.Second, true)
+	var cacheErr *CachedResponseError
+	if !errors.As(err, &cacheErr) {
+		t.Fatalf("expected CachedResponseError for duplicate request, got: %v", err)
+	}
+	if string(cacheErr.Payload) != string(ackResp) {
+		t.Fatalf("unexpected cached payload: got %s, want %s", string(cacheErr.Payload), string(ackResp))
+	}
+
+	// 4. Downstream completes and releases lock cleanly
+	err = m.Complete(tx.RPCID, nil)
+	if err != nil {
+		t.Fatalf("Complete failed: %v", err)
+	}
+}
+
+func TestDefaultRequestManager_AcknowledgeConfigure_FastReplyRace(t *testing.T) {
+	cache := NewTransactionCache()
+	config := CacheTTLConfig{DefaultTTL: 10 * time.Minute}
+	scheduler := queues.NewPriorityScheduler(10, 10)
+	store := &mockStore{}
+	m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store, 1000, 15*time.Minute, 100)
+
+	cloudRPCID := json.RawMessage(`99`)
+	tx, err := m.CreateTransaction("session-1", cloudRPCID, true, "configure", 10*time.Second, true)
+	if err != nil {
+		t.Fatalf("failed to create transaction: %v", err)
+	}
+	_ = m.MarkPreparingDispatch(tx.RPCID)
+	_ = m.MarkPendingPublish(tx.RPCID)
+
+	// Simulate ultra-fast downstream result arriving BEFORE AcknowledgeConfigure executes
+	err = m.Complete(tx.RPCID, []byte(`{"status":"fast-downstream-complete"}`))
+	if err != nil {
+		t.Fatalf("Complete buffering failed: %v", err)
+	}
+
+	// Verify reply was buffered in pendingReplies
+	m.mu.Lock()
+	pending, hasPending := m.pendingReplies[tx.RPCID]
+	m.mu.Unlock()
+	if !hasPending || pending.State != TxCompleted {
+		t.Fatalf("expected pending reply buffered with TxCompleted, got hasPending=%v state=%v", hasPending, pending.State)
+	}
+
+	// Now AcknowledgeConfigure executes
+	ackResp := []byte(`{"jsonrpc":"2.0","result":{"status":{"error":0,"text":"Success"},"uuid":99},"id":99}`)
+	err = m.AcknowledgeConfigure(tx.RPCID, "99", ackResp)
+	if err != nil {
+		t.Fatalf("AcknowledgeConfigure with pending fast-reply failed: %v", err)
+	}
+
+	// Transaction should have consumed the fast-reply and completed immediately
+	m.mu.Lock()
+	_, stillActive := m.transactionsByRPCID[tx.RPCID]
+	m.mu.Unlock()
+	if stillActive {
+		t.Fatalf("expected transaction to be completed and removed by consuming fast reply")
+	}
+
+	// Verify only the initial ACK was sent to Cloud (no second response)
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	msg, err := scheduler.Next(ctx)
+	if err != nil {
+		t.Fatalf("expected queued ack in scheduler: %v", err)
+	}
+	if string(msg.Payload) != string(ackResp) {
+		t.Fatalf("unexpected ack payload: got %s, want %s", string(msg.Payload), string(ackResp))
+	}
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel2()
+	if extraMsg, err := scheduler.Next(ctx2); err == nil {
+		t.Fatalf("expected NO second response queued for fast reply, got: %s", string(extraMsg.Payload))
+	}
+
+	// Verify state lock is released
+	txNext, err := m.CreateTransaction("session-1", json.RawMessage(`100`), true, "configure", 10*time.Second, true)
+	if err != nil {
+		t.Fatalf("expected state lock to be released after fast-reply completion, got: %v", err)
+	}
+	_ = m.Fail(txNext.RPCID, nil)
+}
+
+func TestDefaultRequestManager_AcknowledgeConfigure_DisconnectAndDuplicateReplay(t *testing.T) {
+	cache := NewTransactionCache()
+	config := CacheTTLConfig{DefaultTTL: 10 * time.Minute}
+	scheduler := queues.NewPriorityScheduler(10, 10)
+	store := &mockStore{}
+	m, _ := NewRequestManager(10*time.Second, config, cache, scheduler, store, 1000, 15*time.Minute, 100)
+
+	cloudRPCID := json.RawMessage(`777`)
+	tx, err := m.CreateTransaction("session-1", cloudRPCID, true, "configure", 10*time.Second, true)
+	if err != nil {
+		t.Fatalf("failed to create transaction: %v", err)
+	}
+	_ = m.MarkPreparingDispatch(tx.RPCID)
+	_ = m.MarkPendingPublish(tx.RPCID)
+
+	ackResp := []byte(`{"jsonrpc":"2.0","result":{"status":{"error":0,"text":"Success"},"uuid":777},"id":777}`)
+	_ = m.AcknowledgeConfigure(tx.RPCID, "777", ackResp)
+
+	// Simulate Cloud disconnecting and reconnecting in new session (or same session replay)
+	// While transaction is in flight downstream:
+	// A new configure with different ID is rejected because stateLock is held
+	_, err = m.CreateTransaction("session-2", json.RawMessage(`778`), true, "configure", 10*time.Second, true)
+	if !errors.Is(err, ErrStateLockBusy) {
+		t.Fatalf("expected ErrStateLockBusy from reconnected session, got: %v", err)
+	}
+
+	// Replay of the exact same request on same session returns cached response
+	_, err = m.CreateTransaction("session-1", cloudRPCID, true, "configure", 10*time.Second, true)
+	var cacheErr *CachedResponseError
+	if !errors.As(err, &cacheErr) {
+		t.Fatalf("expected CachedResponseError on duplicate replay, got: %v", err)
+	}
+	if string(cacheErr.Payload) != string(ackResp) {
+		t.Fatalf("expected cached ack on duplicate replay, got: %s", string(cacheErr.Payload))
+	}
+
+	// Clean up downstream
+	_ = m.Complete(tx.RPCID, nil)
+}

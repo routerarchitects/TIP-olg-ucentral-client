@@ -164,7 +164,7 @@ sequenceDiagram
     *   If the received UUID is less than or equal to the last applied UUID, the agent **aborts the stale trigger**. This prevents applying configs whose trigger publishes failed mid-sequence.
 *   **Failure Handling:**
     *   *KV write succeeds but publish fails:* The client returns an error to the cloud. The updated configuration exists in KV but remains unapplied. The cloud control plane is responsible for recovering from this failure state.
-    *   *Publish succeeds but downstream agent cannot read KV:* The agent returns a NATS error payload. The Request Manager maps this to a configuration error response back to the cloud.
+    *   *Publish succeeds but downstream agent execution fails / times out:* Because the client acknowledges configuration to Cloud immediately upon successful submission (`agentcore.SubmitConfigure()`), downstream execution failures, rejections, or timeouts do not emit a second Cloud response. Instead, the Request Manager logs the downstream outcome with full correlation details, cleans up the transaction, and safely releases the state lock.
 
 ---
 
@@ -201,7 +201,8 @@ stateDiagram-v2
 *   **PreparingDispatch:** The transaction is actively performing local setup work (e.g., writing to JetStream KV for `configure`, or building the `ActionCommand` envelope).
 *   **PendingPublish:** The payload is fully assembled and is either waiting in the dispatch buffer or in the process of being sent over the wire.
 *   **InFlight:** The message is published to NATS. The downstream response timeout starts when the transaction enters this state. The Request Manager listens for the matching `rpc_id` reply.
-*   **Completed / Failed / TimedOut:** Terminal states. Once reached, the client replies to all registered cloud streams, updates metrics, caches the result, and cleans up transaction memory.
+*   **Completed / Failed / TimedOut:** Terminal states. Once reached, the client replies to all registered cloud streams (if `RespondToCloud` is true), updates metrics, caches the result, and cleans up transaction memory.
+*   **Asynchronous Configure Submission:** For `configure` commands, following successful submission via `agentcore.SubmitConfigure()` (KV write and notification publish), the client immediately sends the successful JSON-RPC response to Cloud, caches the acknowledgment for same-session replays, and transitions the transaction to `InFlight` with `RespondToCloud = false`. The downstream response timer starts and the state-changing lock remains held. When the downstream agent responds on `result.<target>` (or the downstream timer expires), the transaction transitions to `Completed`/`Failed`/`TimedOut` to log the result, clean up memory, and release the state-changing lock, without emitting any further response to Cloud.
 
 ### 3.2 Concurrency & Serialization Rules
 To protect device integrity, the client divides requests into two execution classes:
@@ -247,8 +248,8 @@ To prevent hanging operations, the Request Manager enforces strict timeout thres
 *   **Dispatch / NATS Publish Timeout (`OLG_TIMEOUT_DISPATCH`):** **5 seconds** default. Bounds the local preparation and buffer dispatch phases.
 
 
-### 3.7 Configuration Validation & Application Flow
-The validation pipeline splits structural checks from semantic checks:
+### 3.7 Configuration Validation & Asynchronous Application Flow
+The validation and submission pipeline operates asynchronously with respect to downstream execution:
 
 ```mermaid
 sequenceDiagram
@@ -270,36 +271,42 @@ sequenceDiagram
         GoClient-->>Cloud: JSON-RPC Error (Validation Error)
     end
     
-    GoClient->>GoClient: Write config to JetStream KV
-    GoClient->>NATS: Request 'config.apply' (UUID, KV details)
-    NATS->>VyOS: Deliver config trigger
+    GoClient->>GoClient: SubmitConfigure: Write config to JetStream KV
+    GoClient->>NATS: Publish trigger to 'cmd.configure.<target>'
     
+    alt KV Write or Publish Fails
+        GoClient-->>Cloud: JSON-RPC Error (Submission Failure)
+    else Submission Succeeds
+        GoClient-->>Cloud: Immediate JSON-RPC Success (error: 0, text: "Success")
+        Note over GoClient: stateLock retained; RespondToCloud = false
+    end
+
+    NATS->>VyOS: Deliver config trigger
     VyOS->>VyOS: Retrieve config from JetStream KV
     VyOS->>VyOS: Perform Local Platform-Specific Validation
     
-    alt Local Validation Fails
-        VyOS-->>NATS: Reply (Result: fail, error: "Unsupported Config Options")
-        NATS-->>GoClient: Deliver Failure Result
-        GoClient-->>Cloud: JSON-RPC Response (Error)
-    else Local Validation Succeeds
-        VyOS->>VyOS: Apply & Commit configuration
-        
-        alt Apply Fails -> Trigger Rollback
+    alt Local Validation / Apply Fails
+        opt Rollback
             VyOS->>VyOS: Execute local rollback
-            VyOS-->>NATS: Reply (Result: rolled_back, active: <good_uuid>)
-        else Apply Succeeds
-            VyOS-->>NATS: Reply (Result: success)
         end
-        
-        NATS-->>GoClient: Deliver Result
-        GoClient-->>Cloud: JSON-RPC Response
+        VyOS-->>NATS: Publish result.<target> (Result: fail/rolled_back)
+        NATS-->>GoClient: Deliver Downstream Result
+        GoClient->>GoClient: Correlate (rpc_id, UUID), Log Failure, Release Lock
+        Note over GoClient: No second response sent to Cloud
+    else Local Validation & Apply Succeed
+        VyOS-->>NATS: Publish result.<target> (Result: success)
+        NATS-->>GoClient: Deliver Downstream Result
+        GoClient->>GoClient: Correlate (rpc_id, UUID), Log Success, Release Lock
+        Note over GoClient: No second response sent to Cloud
     end
 ```
 
-#### 3.7.1 Configuration Rollback Reporting
-When the downstream agent fails to apply a configuration and triggers a rollback, the status is propagated to the cloud as follows:
-*   The downstream agent returns a result containing `result: rolled_back`, the failure details, and the `active` config UUID (the last known good configuration).
-*   The uCentral Client translates this into a JSON-RPC response containing error code `-32603` (Internal Error) with `application_code` equal to `5` (Rollback Completed) in the `error.data` object, a message stating `"Configuration apply failed. Rolled back to active configuration UUID <uuid>"`, and lists any offending rejected configuration keys.
+#### 3.7.1 Downstream Execution Outcome & Rollback Handling
+Downstream execution occurs asynchronously after the Cloud has received the initial submission success response:
+*   The downstream agent publishes its final execution result envelope on `result.<target>` containing `result: "success"`, `result: "fail"`, or `result: "rolled_back"`, alongside error or rollback details and configuration UUID.
+*   Because the Cloud JSON-RPC response was already issued upon successful submission, the uCentral Client **does not send another JSON-RPC response to Cloud**.
+*   The Request Manager correlates the downstream result by `rpc_id` and configuration UUID, logs structured execution details (`[CONFIG DOWNSTREAM SUCCESS]` or `[CONFIG DOWNSTREAM FAILURE]`), cleans up the transaction, and releases the state-changing lock.
+*   If the downstream agent fails to respond within the configured timeout (`OLG_TIMEOUT_CONFIGURE`), the Request Manager logs a timeout warning, cleans up the transaction, and safely releases the state lock without sending a second Cloud response.
 
 ### 3.8 Startup & Reconnect Dependency Handling
 The client boots and connects to the Cloud and NATS **concurrently and independently** using separate background execution threads. Cloud connectivity does **not** block on NATS. The `DerivedStatus` is continuously derived from the underlying `CloudState` and `NATSState`.

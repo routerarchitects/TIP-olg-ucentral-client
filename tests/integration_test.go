@@ -459,7 +459,7 @@ func TestComponent_ConfigurePositive(t *testing.T) {
 	}
 }
 
-func TestComponent_ConfigureNegative_Failed(t *testing.T) {
+func TestComponent_Configure_DownstreamFailure_ReleasesLockWithoutSecondResponse(t *testing.T) {
 	ns := startEmbeddedNATS(t)
 	nc, err := nats.Connect(ns.ClientURL())
 	if err != nil {
@@ -483,15 +483,21 @@ func TestComponent_ConfigureNegative_Failed(t *testing.T) {
 		t.Fatalf("Expected result object, got %v", resp)
 	}
 	statusObj := resultObj["status"].(map[string]interface{})
-	if int(statusObj["error"].(float64)) != -32603 {
-		t.Errorf("Expected status.error=-32603, got %v", statusObj["error"])
+	if int(statusObj["error"].(float64)) != 0 {
+		t.Errorf("Expected status.error=0 on immediate submission ack, got %v", statusObj["error"])
 	}
-	if statusObj["text"].(string) != "commit failed" {
-		t.Errorf("Expected status.text='commit failed', got %v", statusObj["text"])
+
+	// Verify no second response is sent to Cloud for ID 20 after downstream failure arrives
+	time.Sleep(500 * time.Millisecond)
+	mc.mu.Lock()
+	count := len(mc.messages)
+	mc.mu.Unlock()
+	if count != 0 {
+		t.Fatalf("Expected NO second response for ID 20, but found %d unconsumed messages", count)
 	}
 }
 
-func TestComponent_ConfigureNegative_Rejected(t *testing.T) {
+func TestComponent_Configure_DownstreamRejected_ReleasesLockWithoutSecondResponse(t *testing.T) {
 	ns := startEmbeddedNATS(t)
 	nc, err := nats.Connect(ns.ClientURL())
 	if err != nil {
@@ -510,13 +516,22 @@ func TestComponent_ConfigureNegative_Rejected(t *testing.T) {
 
 	_, resp := mc.WaitForResponseWithID(t, 21, 10*time.Second)
 
-	resultObj := resp["result"].(map[string]interface{})
-	statusObj := resultObj["status"].(map[string]interface{})
-	if int(statusObj["error"].(float64)) != -32602 {
-		t.Errorf("Expected status.error=-32602, got %v", statusObj["error"])
+	resultObj, ok := resp["result"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("Expected result object, got %v", resp)
 	}
-	if statusObj["text"].(string) != "schema validation error" {
-		t.Errorf("Expected status.text='schema validation error', got %v", statusObj["text"])
+	statusObj := resultObj["status"].(map[string]interface{})
+	if int(statusObj["error"].(float64)) != 0 {
+		t.Errorf("Expected status.error=0 on immediate submission ack, got %v", statusObj["error"])
+	}
+
+	// Verify no second response is sent to Cloud for ID 21 after downstream rejection arrives
+	time.Sleep(500 * time.Millisecond)
+	mc.mu.Lock()
+	count := len(mc.messages)
+	mc.mu.Unlock()
+	if count != 0 {
+		t.Fatalf("Expected NO second response for ID 21, but found %d unconsumed messages", count)
 	}
 }
 
@@ -867,7 +882,7 @@ func TestComponent_ConcurrentImmediateResult(t *testing.T) {
 	}
 }
 
-func TestComponent_ConfigureNegative_EmptyErrorCode(t *testing.T) {
+func TestComponent_Configure_DownstreamEmptyErrorCode_ReleasesLock(t *testing.T) {
 	ns := startEmbeddedNATS(t)
 	nc, err := nats.Connect(ns.ClientURL())
 	if err != nil {
@@ -876,7 +891,7 @@ func TestComponent_ConfigureNegative_EmptyErrorCode(t *testing.T) {
 	defer nc.Close()
 	mc := startMockCloud(t)
 
-	// Mock an empty error code
+	// Mock an empty error code on downstream failure
 	mockNATSResult(t, nc, "cmd.configure.vyos", "configure", "failure", "image validation failed", "")
 
 	cfg := getTestConfig(t, mc, ns)
@@ -892,11 +907,16 @@ func TestComponent_ConfigureNegative_EmptyErrorCode(t *testing.T) {
 		t.Fatalf("Expected result object, got %v", resp)
 	}
 	statusObj := resultObj["status"].(map[string]interface{})
-	if int(statusObj["error"].(float64)) != 1 {
-		t.Errorf("Expected status.error=1 for empty NATS error_code, got %v", statusObj["error"])
+	if int(statusObj["error"].(float64)) != 0 {
+		t.Errorf("Expected status.error=0 for immediate submission, got %v", statusObj["error"])
 	}
-	if statusObj["text"].(string) != "image validation failed" {
-		t.Errorf("Expected text 'image validation failed', got %v", statusObj["text"])
+
+	time.Sleep(500 * time.Millisecond)
+	mc.mu.Lock()
+	count := len(mc.messages)
+	mc.mu.Unlock()
+	if count != 0 {
+		t.Fatalf("Expected exactly 0 unconsumed responses for ID 99, got %d", count)
 	}
 }
 
@@ -1017,7 +1037,7 @@ func TestComponent_UpgradeLockRelease_OnRejectedEmptyErrorCode(t *testing.T) {
 	t.Fatalf("Timed out waiting for upgrade lock to release on rejected. Last error: %v", lastErr)
 }
 
-func TestComponent_ConfigureNegative_ZeroErrorCode(t *testing.T) {
+func TestComponent_Configure_DownstreamZeroErrorCode_ReleasesLock(t *testing.T) {
 	ns := startEmbeddedNATS(t)
 	nc, err := nats.Connect(ns.ClientURL())
 	if err != nil {
@@ -1042,11 +1062,16 @@ func TestComponent_ConfigureNegative_ZeroErrorCode(t *testing.T) {
 		t.Fatalf("Expected result object, got %v", resp)
 	}
 	statusObj := resultObj["status"].(map[string]interface{})
-	if int(statusObj["error"].(float64)) != 1 {
-		t.Errorf("Expected status.error=1 for failure with error_code=0, got %v", statusObj["error"])
+	if int(statusObj["error"].(float64)) != 0 {
+		t.Errorf("Expected status.error=0 for immediate submission, got %v", statusObj["error"])
 	}
-	if statusObj["text"].(string) != "commit failed but sent zero" {
-		t.Errorf("Expected text 'commit failed but sent zero', got %v", statusObj["text"])
+
+	time.Sleep(500 * time.Millisecond)
+	mc.mu.Lock()
+	count := len(mc.messages)
+	mc.mu.Unlock()
+	if count != 0 {
+		t.Fatalf("Expected exactly 0 unconsumed responses for ID 99, got %d", count)
 	}
 }
 
@@ -1059,8 +1084,8 @@ func TestComponent_ConfigureNegative_SuccessWithErrorCode(t *testing.T) {
 	defer nc.Close()
 	mc := startMockCloud(t)
 
-	// Mock an inconsistent envelope: result=success but error_code=-32603
-	mockNATSResult(t, nc, "cmd.configure.vyos", "configure", "success", "commit successful", "-32603")
+	// Mock an inconsistent envelope for an action command: result=success but error_code=-32603
+	mockNATSResult(t, nc, "cmd.action.vyos.ping", "action", "success", "ping ok", "-32603")
 
 	// Mock a valid reboot response to act as a synchronization barrier
 	mockNATSResult(t, nc, "cmd.action.vyos.reboot", "action", "success", "rebooting", "")
@@ -1068,7 +1093,7 @@ func TestComponent_ConfigureNegative_SuccessWithErrorCode(t *testing.T) {
 	cfg := getTestConfig(t, mc, ns)
 	startClientProcess(t, mc, cfg)
 
-	req1 := `{"jsonrpc":"2.0","method":"configure","id":102,"params":{"serial":"001122334455","uuid":790,"config":{"interfaces":[]}}}`
+	req1 := `{"jsonrpc":"2.0","method":"ping","id":102,"params":{"serial":"001122334455","host":"1.1.1.1"}}`
 	mc.SendMessage(t, req1)
 
 	// Send a subsequent valid request as a barrier

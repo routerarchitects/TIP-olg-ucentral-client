@@ -240,6 +240,7 @@ type AppComponents struct {
 	PayloadLimitScript     int
 	PayloadLimitCertUpdate int
 	PayloadLimitDefault    int
+	Target                 string
 }
 
 func processNATSResult(ctx context.Context, res agentcore.ResultEnvelope, components *AppComponents, serial string) {
@@ -253,6 +254,36 @@ func processNATSResult(ctx context.Context, res agentcore.ResultEnvelope, compon
 	}
 	rawCloudID := tx.CloudRPCID
 	isNotification := !tx.RespondToCloud
+
+	if tx.Method == string(contracts.CommandConfigure) {
+		// 1. Enforce matching CommandType
+		if res.CommandType != string(contracts.CommandConfigure) {
+			log.Printf("[CONFIG DOWNSTREAM WARNING] Command type mismatch for rpc_id=%s: expected configure, got %q (dropping mismatched downstream result)\n",
+				res.RPCID, res.CommandType)
+			return
+		}
+
+		// 2. Enforce matching non-empty Target if configured
+		if components.Target != "" && (res.Target == "" || res.Target != components.Target) {
+			log.Printf("[CONFIG DOWNSTREAM WARNING] Target mismatch or empty for rpc_id=%s: expected %q, got %q (dropping mismatched downstream result)\n",
+				res.RPCID, components.Target, res.Target)
+			return
+		}
+
+		// 3. Enforce non-empty UUID strictly matching tx.ConfigUUID
+		if res.UUID == "" || tx.ConfigUUID == "" || tx.ConfigUUID != res.UUID {
+			log.Printf("[CONFIG DOWNSTREAM WARNING] UUID mismatch or empty for rpc_id=%s: expected %s, got %q (dropping mismatched downstream result)\n",
+				res.RPCID, tx.ConfigUUID, res.UUID)
+			return
+		}
+		if res.Result == string(contracts.ResultSuccess) {
+			log.Printf("[CONFIG DOWNSTREAM SUCCESS] target=%s rpc_id=%s uuid=%s: %s\n",
+				res.Target, res.RPCID, res.UUID, res.Message)
+		} else {
+			log.Printf("[CONFIG DOWNSTREAM FAILURE] target=%s rpc_id=%s uuid=%s code=%s: %s\n",
+				res.Target, res.RPCID, res.UUID, res.ErrorCode, res.Message)
+		}
+	}
 
 	// Build standard device result object containing "status", "serial", and "uuid"
 	formattedResult := contracts.BuildDeviceResultObject(
@@ -328,6 +359,37 @@ func handleNATSResult(ctx context.Context, res agentcore.ResultEnvelope, resultQ
 		// Proactively complete and cache the transaction inside RequestManager using the NATS result payload
 		if tx, exists := components.ReqManager.GetTransaction(res.RPCID); exists {
 			isNotification := !tx.RespondToCloud
+
+			if tx.Method == string(contracts.CommandConfigure) {
+				// 1. Enforce matching CommandType
+				if res.CommandType != string(contracts.CommandConfigure) {
+					log.Printf("[CONFIG OVERFLOW WARNING] Command type mismatch for rpc_id=%s: expected configure, got %q (dropping mismatched downstream result)\n",
+						res.RPCID, res.CommandType)
+					return
+				}
+
+				// 2. Enforce matching non-empty Target if configured
+				if components.Target != "" && (res.Target == "" || res.Target != components.Target) {
+					log.Printf("[CONFIG OVERFLOW WARNING] Target mismatch or empty for rpc_id=%s: expected %q, got %q (dropping mismatched downstream result)\n",
+						res.RPCID, components.Target, res.Target)
+					return
+				}
+
+				// 3. Enforce non-empty UUID strictly matching tx.ConfigUUID
+				if res.UUID == "" || tx.ConfigUUID == "" || tx.ConfigUUID != res.UUID {
+					log.Printf("[CONFIG OVERFLOW WARNING] UUID mismatch or empty for rpc_id=%s: expected %s, got %q (dropping mismatched downstream result)\n",
+						res.RPCID, tx.ConfigUUID, res.UUID)
+					return
+				}
+				if res.Result == string(contracts.ResultSuccess) {
+					log.Printf("[CONFIG DOWNSTREAM SUCCESS] target=%s rpc_id=%s uuid=%s: %s\n",
+						res.Target, res.RPCID, res.UUID, res.Message)
+				} else {
+					log.Printf("[CONFIG DOWNSTREAM FAILURE] target=%s rpc_id=%s uuid=%s code=%s: %s\n",
+						res.Target, res.RPCID, res.UUID, res.ErrorCode, res.Message)
+				}
+			}
+
 			formattedResult := contracts.BuildDeviceResultObject(
 				serial,
 				res.UUID,
@@ -592,6 +654,7 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 		PayloadLimitScript:     payloadLimitScript,
 		PayloadLimitCertUpdate: payloadLimitCertUpdate,
 		PayloadLimitDefault:    payloadLimitDefault,
+		Target:                 cfg.NATS.Target,
 	}, nil
 }
 

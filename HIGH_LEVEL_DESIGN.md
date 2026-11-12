@@ -424,6 +424,285 @@ The uCentral client sends requests to this subject when it needs current device/
 
 The uCentral client must not subscribe to or respond on this subject. Its own daemon liveness/readiness, Cloud connectivity, NATS connectivity, queue depths, uptime, and local metrics are internal daemon state and are reported to the Cloud through the WebSocket control path, not through the device-owned NATS status subject.
 
+### 6.3 Device State Reporting (OpenWiFi State Messages)
+
+The uCentral client bridges downstream router operational state (harvested by the VyOS NATS agent) to the OpenWiFi Cloud Gateway (`ra-wlan-cloud-ucentralgw`) over the mTLS WebSocket connection.
+
+#### 6.3.1 Architectural Flow
+
+```mermaid
+flowchart TD
+    subgraph VyOS [VyOS Router / Downstream Agent]
+        A["Linux Host Metrics (/proc, sysfs, iproute2)"] --> B["State Collector Service"]
+        B -->|Periodic state snapshot via agentcore.PublishState| C["NATS: state.<target> (agentcore.StateEnvelope)"]
+    end
+
+    subgraph Client [uCentral Client Daemon]
+        C -->|SubscribeState / agentcore.RegisterStateHandler| D["pkg/nats Client"]
+        D -->|Decode StateEnvelope.Payload -> DeviceState| E["StateCoalescer (pkg/queues)"]
+        F["Periodic Flush Timer (e.g. 60s)"] -->|Peek()| E
+        G["Cloud 'request' Handler"] -->|Peek() with request_uuid| E
+        E -->|Wrap JSON-RPC 'state' notification| H["PriorityScheduler (Priority 2 / Medium)"]
+        H -->|Next()| I["WebSocket Writer Loop (pkg/websocket)"]
+        H -->|If ErrQueueFull| J["Retain in Coalescer (Retry next tick)"]
+        I -->|Commit(generation)| E
+    end
+
+    subgraph Gateway [OpenWiFi Cloud Gateway]
+        I -->|mTLS WebSocket 'method': 'state'| K["AP_Process_state.cpp"]
+        K --> L["Database: Statistics Table"]
+        K --> M["Kafka: state topic"]
+        K --> N["Resolve command if request_uuid present"]
+    end
+```
+
+**Subject Routing & Separation Rules:**
+* **Exclusive `state.<target>` Routing:** Periodic operational state MUST be routed exclusively over `state.<target>`.
+* **Separation from `status.<target>`:** The existing `status.<target>` subject is strictly reserved for lifecycle events and configure/action execution progress. These message types have distinct schemas and purposes; publishing full device-state payloads on `status.<target>` would cause consumers to interpret them as progress/status messages or reject them as invalid.
+* **Agentcore Prerequisite:** Support for the dedicated `state.<target>` subject pattern in `agentcore` (`DefaultStatePattern = "state.%s"`, `PublishState`, and `RegisterStateHandler`) must be implemented or verified before state subscription is activated.
+
+#### 6.3.2 Wire Envelope Formats
+
+##### 6.3.2.1 Downstream NATS Wire Format (`agentcore.StateEnvelope`)
+
+On the local NATS bus, the downstream agent publishes state messages exclusively on `state.<target>` wrapped in a standard `agentcore.StateEnvelope`:
+
+```json
+{
+  "version": "1.0",
+  "target": "vyos",
+  "uuid": "1793880893",
+  "payload": {
+    "version": 1,
+    "unit": {
+      "load": [ 0.43, 0.34, 0.35 ],
+      "cpu_load": [ 10, 11, 13, 10, 7 ],
+      "localtime": 1793968533,
+      "memory": {
+        "total": 255991808,
+        "free": 147640320,
+        "cached": 26488832,
+        "buffered": 0
+      },
+      "uptime": 119483
+    },
+    "interfaces": [
+      {
+        "name": "eth0",
+        "location": "/interfaces/0",
+        "uptime": 23061,
+        "ipv4": {
+          "addresses": [ "172.16.1.228/21" ],
+          "dhcp_server": "172.16.0.1",
+          "leasetime": 43200
+        },
+        "dns_servers": [ "96.45.45.45", "96.45.46.46" ],
+        "counters": {
+          "rx_bytes": 1051992836,
+          "rx_packets": 5440208,
+          "tx_bytes": 4403888,
+          "tx_packets": 27885,
+          "rx_dropped": 206212,
+          "rx_errors": 0,
+          "tx_dropped": 0,
+          "tx_errors": 0,
+          "multicast": 884271,
+          "collisions": 0
+        },
+        "delta_counters": {
+          "rx_bytes": 659383,
+          "rx_packets": 3852,
+          "tx_bytes": 4141,
+          "tx_packets": 17
+        },
+        "clients": [
+          {
+            "mac": "00:09:0f:09:80:04",
+            "ipv4_addresses": [ "172.16.0.1" ],
+            "ports": [ "eth0" ],
+            "last_seen": 0
+          }
+        ]
+      }
+    ],
+    "link-state": {
+      "upstream": {
+        "eth0": { "carrier": 1, "speed": 1000, "duplex": "full" }
+      },
+      "downstream": {
+        "eth1": { "carrier": 0, "speed": 0, "duplex": "unknown" }
+      }
+    },
+    "lldp-peers": {
+      "upstream": {
+        "eth0": [
+          {
+            "name": "LabSwitch-1",
+            "description": "US-16-150W Switch",
+            "mac": "fc:ec:da:7c:d8:8a",
+            "capability": [ "Bridge" ],
+            "management_ips": [ "172.16.0.2" ],
+            "port": "eth1"
+          }
+        ]
+      },
+      "downstream": {}
+    },
+    "radios": []
+  },
+  "timestamp": "2026-05-12T10:30:00Z"
+}
+```
+
+##### 6.3.2.2 Upstream Cloud WebSocket Wire Format (JSON-RPC 2.0 Notification)
+
+The uCentral client extracts `payload` as `DeviceState`, correlates the applied UUID, and packages periodic reports into standard JSON-RPC 2.0 notifications sent to the Gateway:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "state",
+  "params": {
+    "serial": "60cf84f22290",
+    "uuid": 1793880893,
+    "state": {
+      "version": 1,
+      "unit": {
+        "load": [ 0.43, 0.34, 0.35 ],
+        "cpu_load": [ 10, 11, 13, 10, 7 ],
+        "localtime": 1793968533,
+        "memory": {
+          "total": 255991808,
+          "free": 147640320,
+          "cached": 26488832,
+          "buffered": 0
+        },
+        "uptime": 119483
+      },
+      "interfaces": [
+        {
+          "name": "eth0",
+          "location": "/interfaces/0",
+          "uptime": 23061,
+          "ipv4": {
+            "addresses": [ "172.16.1.228/21" ],
+            "dhcp_server": "172.16.0.1",
+            "leasetime": 43200
+          },
+          "dns_servers": [ "96.45.45.45", "96.45.46.46" ],
+          "counters": {
+            "rx_bytes": 1051992836,
+            "rx_packets": 5440208,
+            "tx_bytes": 4403888,
+            "tx_packets": 27885,
+            "rx_dropped": 206212,
+            "rx_errors": 0,
+            "tx_dropped": 0,
+            "tx_errors": 0,
+            "multicast": 884271,
+            "collisions": 0
+          },
+          "delta_counters": {
+            "rx_bytes": 659383,
+            "rx_packets": 3852,
+            "tx_bytes": 4141,
+            "tx_packets": 17
+          },
+          "clients": [
+            {
+              "mac": "00:09:0f:09:80:04",
+              "ipv4_addresses": [ "172.16.0.1" ],
+              "ports": [ "eth0" ],
+              "last_seen": 0
+            }
+          ]
+        }
+      ],
+      "link-state": {
+        "upstream": {
+          "eth0": { "carrier": 1, "speed": 1000, "duplex": "full" }
+        },
+        "downstream": {
+          "eth1": { "carrier": 0, "speed": 0, "duplex": "unknown" }
+        }
+      },
+      "lldp-peers": {
+        "upstream": {
+          "eth0": [
+            {
+              "name": "LabSwitch-1",
+              "description": "US-16-150W Switch",
+              "mac": "fc:ec:da:7c:d8:8a",
+              "capability": [ "Bridge" ],
+              "management_ips": [ "172.16.0.2" ],
+              "port": "eth1"
+            }
+          ]
+        },
+        "downstream": {}
+      },
+      "radios": []
+    },
+    "request_uuid": "optional-request-uuid-when-answering-cloud-query"
+  }
+}
+```
+
+#### 6.3.3 Schema Alignment & Router Profile Rules
+
+The state payload adheres strictly to `TIP-olg-ucentral-schema` (`ucentral.state.pretty.json`). For a wired router (such as VyOS), the following profile rules apply:
+
+1. **`radios: []` (Empty Array):** Always populated as an empty array `[]` rather than omitted or null. This ensures that the Gateway's `StateUtils::ComputeAssociations()` check (`if (RawObject->isArray("radios") && RawObject->isArray("interfaces"))`) executes safely, registering 0 Wi-Fi associations without warnings.
+2. **`unit.uptime`:** Must always be provided as an integer (seconds since boot). This field is actively monitored by the Cloud Gateway for device online status.
+3. **`interfaces[].ssids` & `interfaces[].mesh-path`:** Omitted or left empty since Ethernet interfaces have no Wi-Fi SSIDs or 802.11s mesh paths.
+4. **`clients`:** Populated from the router's ARP / NDP neighbor cache (`ip neigh` or `/proc/net/arp`).
+5. **No `null` Objects or Arrays:** Fields must not serialize as `null`; empty collections must be serialized as `[]` or omitted entirely with `omitempty`.
+
+#### 6.3.4 Coalescing & Rate Limiting (Priority 2 Rules)
+
+State messages are buffered and scheduled through the dedicated rate-limiting and priority mechanisms defined in this architecture:
+
+* **Last-Write-Wins Generation Tracking:** The `StateCoalescer` maintains an in-memory copy of the latest state payload and an incrementing `generation` counter. Rapid state bursts from the downstream agent overwrite older uncommitted state without memory growth.
+* **Non-Blocking Scheduler Push:** Every 60 seconds (or on cloud trigger), the flusher calls `coalescer.Peek()`, constructs the JSON-RPC frame, and attempts to push to `PriorityScheduler` at `PriorityMedium` (Priority 2).
+* **Backpressure Policy:** If the Priority 2 scheduler queue is full (`ErrQueueFull`), the flusher does not drop the state or treat the connection as broken. The state remains intact inside `StateCoalescer` and is re-attempted on the next tick with any newer metrics naturally merged.
+* **Commit Generation:** Only after `Push()` succeeds does the flusher call `coalescer.Commit(generation)`.
+
+#### 6.3.5 Handling On-Demand Cloud Requests (`request` Method)
+
+The OpenWiFi Cloud Gateway REST API allows operators to request an immediate, on-demand device state report via:
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1042,
+  "method": "request",
+  "params": {
+    "serial": "60cf84f22290",
+    "when": 0,
+    "message": "state",
+    "request_uuid": "d820572e-3c74-4b47-bcfc-5bbf2f07d2f9"
+  }
+}
+```
+
+When received by `cmd/ucentral-client/handler.go`:
+1. The client recognizes `method == "request"` and `params.message == "state"`.
+2. It peeks the latest snapshot from `StateCoalescer`.
+3. It constructs a `state` notification with `request_uuid: params.request_uuid` attached.
+4. It enqueues the state notification to the scheduler to be sent upstream immediately.
+5. It responds to the JSON-RPC request with standard success:
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "id": 1042,
+     "result": {
+       "status": "success",
+       "serial": "60cf84f22290",
+       "uuid": 1793880893
+     }
+   }
+   ```
+6. When the Gateway receives the `state` notification with `request_uuid`, `AP_Process_state.cpp` unblocks the REST API caller by saving the state result via `StorageService()->SetCommandResult(request_uuid, StateStr)`.
+
 ---
 
 ## 7. Version Compatibility & Negotiation

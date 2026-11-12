@@ -371,6 +371,104 @@ TIP-olg-ucentral-client/
     	Serial string            `json:"serial"`
     	Status CloudScriptStatus `json:"status"`
     }
+
+    // State Message Contracts (OpenWiFi State Schema)
+    type UnitMemory struct {
+    	Total    uint64 `json:"total"`
+    	Free     uint64 `json:"free"`
+    	Cached   uint64 `json:"cached"`
+    	Buffered uint64 `json:"buffered"`
+    }
+
+    type UnitState struct {
+    	Load        []float64  `json:"load,omitempty"`
+    	CPULoad     []int      `json:"cpu_load,omitempty"`
+    	Memory      UnitMemory `json:"memory"`
+    	Uptime      uint64     `json:"uptime"`
+    	Localtime   uint64     `json:"localtime"`
+    	Boottime    uint64     `json:"boottime,omitempty"`
+    	Temperature []float64  `json:"temperature,omitempty"`
+    }
+
+    type InterfaceCounters struct {
+    	Collisions  uint64 `json:"collisions"`
+    	Multicast   uint64 `json:"multicast"`
+    	RxBytes     uint64 `json:"rx_bytes"`
+    	RxPackets   uint64 `json:"rx_packets"`
+    	RxErrors    uint64 `json:"rx_errors"`
+    	RxDropped   uint64 `json:"rx_dropped"`
+    	TxBytes     uint64 `json:"tx_bytes"`
+    	TxPackets   uint64 `json:"tx_packets"`
+    	TxErrors    uint64 `json:"tx_errors"`
+    	TxDropped   uint64 `json:"tx_dropped"`
+    }
+
+    type InterfaceIPv4 struct {
+    	Addresses  []string `json:"addresses"`
+    	DHCPServer string   `json:"dhcp_server,omitempty"`
+    	Leasetime  uint64   `json:"leasetime,omitempty"`
+    }
+
+    type InterfaceClient struct {
+    	MAC           string   `json:"mac"`
+    	IPv4Addresses []string `json:"ipv4_addresses,omitempty"`
+    	IPv6Addresses []string `json:"ipv6_addresses,omitempty"`
+    	Ports         []string `json:"ports,omitempty"`
+    	LastSeen      uint64   `json:"last_seen,omitempty"`
+    }
+
+    type InterfaceState struct {
+    	Name          string            `json:"name"`
+    	Location      string            `json:"location,omitempty"`
+    	Uptime        uint64            `json:"uptime,omitempty"`
+    	IPv4          *InterfaceIPv4    `json:"ipv4,omitempty"`
+    	DNSServers    []string          `json:"dns_servers,omitempty"`
+    	Counters      InterfaceCounters `json:"counters"`
+    	DeltaCounters InterfaceCounters `json:"delta_counters"`
+    	Clients       []InterfaceClient `json:"clients,omitempty"`
+    }
+
+    type PortLinkState struct {
+    	Carrier bool   `json:"carrier"`
+    	Speed   int    `json:"speed,omitempty"`
+    	Duplex  string `json:"duplex,omitempty"`
+    }
+
+    type LinkStateSection struct {
+    	Upstream   map[string]PortLinkState `json:"upstream"`
+    	Downstream map[string]PortLinkState `json:"downstream"`
+    }
+
+    type DeviceState struct {
+    	Version    int                `json:"version"`
+    	UUID       uint64             `json:"uuid"`
+    	Serial     string             `json:"serial"`
+    	Unit       UnitState          `json:"unit"`
+    	Interfaces []InterfaceState   `json:"interfaces"`
+    	Radios     []json.RawMessage  `json:"radios"` // Initialized to [] for routers without wireless
+    	LinkState  *LinkStateSection  `json:"link-state,omitempty"`
+    	LLDPPeers  json.RawMessage    `json:"lldp-peers,omitempty"`
+    }
+
+    type CloudStateParams struct {
+    	Serial      string      `json:"serial"`
+    	UUID        uint64      `json:"uuid"`
+    	State       DeviceState `json:"state"`
+    	RequestUUID string      `json:"request_uuid,omitempty"`
+    }
+
+    type CloudStateNotification struct {
+    	JSONRPC string           `json:"jsonrpc"`
+    	Method  string           `json:"method"`
+    	Params  CloudStateParams `json:"params"`
+    }
+
+    type CloudRequestCommandRequest struct {
+    	Serial      string `json:"serial"`
+    	When        int64  `json:"when,omitempty"`
+    	Message     string `json:"message"`
+    	RequestUUID string `json:"request_uuid"`
+    }
     ```
 
 *   **NATS Envelope Structures (`pkg/contracts/envelopes.go`):**
@@ -439,6 +537,16 @@ TIP-olg-ucentral-client/
     }
 
     func (r *ResultEnvelope) Validate() error
+
+    type StateEnvelope struct {
+    	Version   string          `json:"version"`
+    	Target    string          `json:"target"`
+    	UUID      string          `json:"uuid,omitempty"`
+    	Payload   json.RawMessage `json:"payload"`
+    	Timestamp string          `json:"timestamp"`
+    }
+
+    func (s *StateEnvelope) Validate() error
 
 
     type CloudDeviceStatusQuery struct {
@@ -1151,8 +1259,11 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     func (n *NATSClient) SubscribeTelemetry(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error)
     func (n *NATSClient) SubscribeLogs(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error)
     func (n *NATSClient) SubscribeHealth(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error)
-    func (n *NATSClient) SubscribeState(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error)
-    // State Management (Stubbed due to agentcore limitations)
+    // SubscribeState registers a handler for periodic router state updates from the downstream agent exclusively on subject: state.<target>.
+    // Delegates under the hood to agentcore.Client.RegisterStateHandler(target, handler).
+    // Support for this dedicated state subject pattern in agentcore must be verified/implemented prior to activation.
+    // Incoming payloads are decoded into contracts.DeviceState and passed directly to StateCoalescer.Update().
+    func (n *NATSClient) SubscribeState(ctx context.Context, target string, handler func(env agentcore.StateEnvelope)) error
     func (n *NATSClient) GetDesiredConfigMetadata(ctx context.Context) (uint64, string, error)
 
 
@@ -1214,7 +1325,16 @@ The uCentral client must not register a NATS responder for `status.get.<target>`
     *   Instantiates Queues, Request Manager, WebSocket client, NATS wrapper.
         * `NewPriorityScheduler(queues.ws_writer_capacity, queues.emergency_capacity)`
         * `NewTelemetryRingBuffer(queues.telemetry_capacity)`
+        * `NewStateCoalescer()`
         * `NewRequestManager(dispatchTimeout, cacheTTLConfig, cache, scheduler, store)`
+    *   Subscribes to downstream state via `nc.SubscribeState(ctx, cfg.NATS.Target, handler)`, validating `StateEnvelope`, decoding `Payload` into `contracts.DeviceState`, and streaming into `StateCoalescer.Update()`.
+    *   Launches periodic state flusher (configurable interval, default 60s):
+        * Peeks current state snapshot from `StateCoalescer`.
+        * Wraps into JSON-RPC `method: "state"` notification (`CloudStateNotification`).
+        * Pushes to `PriorityScheduler` at `PriorityMedium` (Priority 2).
+        * If push returns `ErrQueueFull`, state remains in coalescer for the next flush attempt.
+        * If push succeeds, commits the snapshot generation via `coalescer.Commit(generation)`.
+    *   Dispatches cloud on-demand `"request"` commands (`message: "state"`) through `frameHandler`, attaching `request_uuid` to satisfy the Cloud REST API waiter.
     *   Launches parallel reconnection threads.
     *   Listens for `SIGINT` / `SIGTERM` to perform graceful resource teardowns.
 

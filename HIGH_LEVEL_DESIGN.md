@@ -527,10 +527,10 @@ On the local NATS bus, the downstream agent publishes state messages exclusively
     ],
     "link-state": {
       "upstream": {
-        "eth0": { "carrier": 1, "speed": 1000, "duplex": "full" }
+        "eth0": { "carrier": true, "speed": 1000, "duplex": "full" }
       },
       "downstream": {
-        "eth1": { "carrier": 0, "speed": 0, "duplex": "unknown" }
+        "eth1": { "carrier": false, "speed": 0 }
       }
     },
     "lldp-peers": {
@@ -620,10 +620,10 @@ The uCentral client extracts `payload` as `DeviceState`, correlates the applied 
       ],
       "link-state": {
         "upstream": {
-          "eth0": { "carrier": 1, "speed": 1000, "duplex": "full" }
+          "eth0": { "carrier": true, "speed": 1000, "duplex": "full" }
         },
         "downstream": {
-          "eth1": { "carrier": 0, "speed": 0, "duplex": "unknown" }
+          "eth1": { "carrier": false, "speed": 0 }
         }
       },
       "lldp-peers": {

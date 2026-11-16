@@ -1267,7 +1267,7 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     // Delegates under the hood to agentcore.Client.RegisterStateHandler(target, handler).
     // Support for this dedicated state subject pattern in agentcore must be verified/implemented prior to activation.
     // Incoming payloads are decoded into contracts.DeviceState and passed directly to StateCoalescer.Update().
-    func (n *NATSClient) SubscribeState(ctx context.Context, target string, handler func(env agentcore.StateEnvelope)) error
+    func (n *NATSClient) SubscribeState(ctx context.Context, target string, handler func(ctx context.Context, env agentcore.StateEnvelope) error) error
     // RequestState queries the downstream agent for live, on-demand operational state via request-reply on subject: state.get.<target>.
     // Returns a fresh StateEnvelope or an error if timeout/failure occurs.
     func (n *NATSClient) RequestState(ctx context.Context, target string) (agentcore.StateEnvelope, error)

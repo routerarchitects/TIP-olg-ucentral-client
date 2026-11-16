@@ -366,7 +366,7 @@ Queue sizes are configurable via daemon configuration file parameters.
 | :--- | :--- | :--- | :--- |
 | **Command Dispatch Buffer** | Short-lived NATS handoff buffer (Not durable). | Default: 100 messages | If full or NATS is disconnected, fails fast and rejects the Cloud request with `local_service_unavailable` (JSON-RPC code -32603, application_code 3). |
 | **Command Result Priority Queue** | Handles NATS replies for config/action processing. | Default: 50 messages | High priority and bounded. Because state-changing commands are serialized per device, this queue is not expected to fill during normal operation. Command results must not be silently dropped. If overflow occurs, the client records the overflow metric and logs the `rpc_id`, command type, and subject. The exact correlated downstream result is passed directly to the Request Manager and finalized according to the true downstream outcome. The exact final Cloud response is stored in the TransactionCache. If the response cannot be delivered through the Priority-0 WebSocket queue, the client treats the WebSocket delivery path as unhealthy and triggers path recovery. After reconnection, the Cloud must use explicit state retrieval because cached responses from the dead session will not be replayed automatically upon a simple JSON-RPC ID retry. |
-| **State Coalescer** | Keeps only the latest state report (last-write-wins). | 1 Slot per Serial | Overwrites previous un-flushed stats with newer state reports. Dispatched event-driven on NATS arrival (rate-limited to max 1 send per 10s). |
+| **State Coalescer** | Keeps only the latest state report (last-write-wins). | 1 Slot per Serial | Overwrites previous un-flushed stats with newer state reports. Dispatched event-driven on NATS arrival as governed by the device configuration (`metrics.statistics.interval`). |
 | **Telemetry/Log Ring Buffer** | Bounded FIFO queue for logs and events. | Default: 500 messages | Bounded FIFO. Drops oldest low-priority events on overflow (FIFO drop). Excludes high-severity audit logs. |
 
 ### 4.2 WebSocket Outbound Scheduler
@@ -380,7 +380,7 @@ Exposes a priority-aware message dispatch queue writing to the WebSocket connect
 
 **Non-Blocking Safety on Priority 1:** To prevent deadlocking the core NATS handler loop during critical downstream operations, pushes to the Priority 1 queue must be strictly non-blocking. If the queue reaches capacity (e.g., due to a stalled WebSocket), it must return a fast error and record an `audit_delivery_failure` metric instead of blocking the caller.
 ### 4.3 Rate Limiting & Sizing Constraints
-*   State updates (statistics) are rate-limited to a maximum of **one message per 10 seconds** per device.
+*   State updates (statistics) reporting frequency is governed by the Cloud device configuration (`metrics.statistics.interval`, schema minimum 60 seconds).
 *   Telemetry events are rate-limited to **50 events per second**.
 *   **Max payload sizes:** Configuration: 10MB; State: 1MB; Telemetry events: 256KB; Log events: 64KB. If no valid JSON-RPC request and ID can be parsed before exceeding limits, the connection must be closed/rejected and a metric recorded. If a valid request and ID are parseable but the payload exceeds the limit, return JSON-RPC error -32602 with application code 4.
 
@@ -459,7 +459,7 @@ The uCentral client bridges downstream router operational state (harvested by th
 |         │                                                 ▼                                       |
 |  [ NATS State Event Callback ] ──(Trigger Peek)───> [ Build JSON-RPC 'state' Notification ]       |
 |  [ Cloud 'request' Handler ]   ──(Trigger Peek)───>               │                               |
-|                                                                   ▼ (Rate-limited, min 10s gap)   |
+|                                                                   ▼ (Configured Interval)         |
 |  +---------------------------------------------------------------------------------------------+  |
 |  | PriorityScheduler (Priority 2 / Medium)                                                     |  |
 |  +---------------------------------------------------------------------------------------------+  |
@@ -682,12 +682,12 @@ The state payload adheres strictly to `TIP-olg-ucentral-schema` (`ucentral.state
 4. **`clients`:** Populated from the router's ARP / NDP neighbor cache (`ip neigh` or `/proc/net/arp`).
 5. **No `null` Objects or Arrays:** Fields must not serialize as `null`; empty collections must be serialized as `[]` or omitted entirely with `omitempty`.
 
-#### 6.3.4 Coalescing & Rate Limiting (Priority 2 Rules)
+#### 6.3.4 Coalescing & Priority Scheduling (Priority 2 Rules)
 
-State messages are buffered and scheduled through the dedicated rate-limiting and priority mechanisms defined in this architecture:
+State messages are buffered and scheduled through the priority mechanisms defined in this architecture:
 
 * **Last-Write-Wins Generation Tracking:** The `StateCoalescer` maintains an in-memory copy of the latest state payload and an incrementing `generation` counter. Rapid state bursts from the downstream agent overwrite older uncommitted state without memory growth.
-* **Event-Driven Push on NATS Arrival:** Rather than running an independent, unsynchronized polling timer (which causes clock drift and phase lag against downstream collectors), the uCentral client pushes state event-driven on NATS message arrival. When a `StateEnvelope` arrives from NATS, `StateCoalescer.Update()` updates the slot and increments the generation. The client immediately attempts to push the state snapshot to `PriorityScheduler` at `PriorityMedium` (Priority 2), enforced by a minimum rate limit (maximum 1 dispatch per 10 seconds per Section 4.3).
+* **Event-Driven Push on NATS Arrival:** Rather than running an independent, unsynchronized polling timer (which causes clock drift and phase lag against downstream collectors), the uCentral client pushes state event-driven on NATS message arrival. Reporting frequency is determined solely by the device configuration (`metrics.statistics.interval`). When a `StateEnvelope` arrives from NATS, `StateCoalescer.Update()` updates the slot and increments the generation, and the client attempts to push the state snapshot directly to `PriorityScheduler` at `PriorityMedium` (Priority 2).
 * **Backpressure & Reconnection Policy:** If the Priority 2 scheduler queue is full (`ErrQueueFull`) or the WebSocket connection is down, the client does not drop the state or discard the update. The uncommitted state remains safely buffered in `StateCoalescer`. When the WebSocket reconnects or scheduler backpressure clears, any pending snapshot in the coalescer is drained and transmitted.
 * **Commit Generation:** Only after `Push()` succeeds does the client call `coalescer.Commit(generation)`.
 

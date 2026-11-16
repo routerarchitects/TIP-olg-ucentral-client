@@ -1328,7 +1328,7 @@ The uCentral client must not register a NATS responder for `status.get.<target>`
         * `NewStateCoalescer()`
         * `NewRequestManager(dispatchTimeout, cacheTTLConfig, cache, scheduler, store)`
     *   Subscribes to downstream state via `nc.SubscribeState(ctx, cfg.NATS.Target, handler)`, validating `StateEnvelope`, decoding `Payload` into `contracts.DeviceState`, and streaming into `StateCoalescer.Update()`.
-    *   Dispatches state event-driven on NATS message arrival (rate-limited to max 1 dispatch per 10s):
+    *   Dispatches state event-driven on NATS message arrival (as governed by configured `metrics.statistics.interval`):
         * Peeks current state snapshot from `StateCoalescer`.
         * Wraps into JSON-RPC `method: "state"` notification (`CloudStateNotification`).
         * Pushes to `PriorityScheduler` at `PriorityMedium` (Priority 2).

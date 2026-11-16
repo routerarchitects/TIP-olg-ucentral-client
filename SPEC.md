@@ -409,6 +409,8 @@ TIP-olg-ucentral-client/
     	Leasetime  uint64   `json:"leasetime,omitempty"`
     }
 
+    // InterfaceClient models observed L3 network neighbors deduplicated by MAC.
+    // Filtered to exclude FAILED/INCOMPLETE states from ip -j neigh.
     type InterfaceClient struct {
     	MAC           string   `json:"mac"`
     	IPv4Addresses []string `json:"ipv4_addresses,omitempty"`
@@ -439,10 +441,12 @@ TIP-olg-ucentral-client/
     	Downstream map[string]PortLinkState `json:"downstream"`
     }
 
+    // DeviceState models the inner OpenWiFi router telemetry payload (params.state).
+    // Device identity (serial) and active configuration version (uuid) reside strictly in the outer
+    // wrapper (CloudStateParams on WebSocket, StateEnvelope on NATS) to prevent inner/outer identity
+    // mismatches and spurious zero/empty values (uuid: 0, serial: "").
     type DeviceState struct {
     	Version    int                `json:"version"`
-    	UUID       uint64             `json:"uuid"`
-    	Serial     string             `json:"serial"`
     	Unit       UnitState          `json:"unit"`
     	Interfaces []InterfaceState   `json:"interfaces"`
     	Radios     []json.RawMessage  `json:"radios"` // Initialized to [] for routers without wireless
@@ -1264,6 +1268,9 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     // Support for this dedicated state subject pattern in agentcore must be verified/implemented prior to activation.
     // Incoming payloads are decoded into contracts.DeviceState and passed directly to StateCoalescer.Update().
     func (n *NATSClient) SubscribeState(ctx context.Context, target string, handler func(env agentcore.StateEnvelope)) error
+    // RequestState queries the downstream agent for live, on-demand operational state via request-reply on subject: state.get.<target>.
+    // Returns a fresh StateEnvelope or an error if timeout/failure occurs.
+    func (n *NATSClient) RequestState(ctx context.Context, target string) (agentcore.StateEnvelope, error)
     func (n *NATSClient) GetDesiredConfigMetadata(ctx context.Context) (uint64, string, error)
 
 
@@ -1327,14 +1334,17 @@ The uCentral client must not register a NATS responder for `status.get.<target>`
         * `NewTelemetryRingBuffer(queues.telemetry_capacity)`
         * `NewStateCoalescer()`
         * `NewRequestManager(dispatchTimeout, cacheTTLConfig, cache, scheduler, store)`
-    *   Subscribes to downstream state via `nc.SubscribeState(ctx, cfg.NATS.Target, handler)`, validating `StateEnvelope`, decoding `Payload` into `contracts.DeviceState`, and streaming into `StateCoalescer.Update()`.
+    *   Subscribes to downstream state via `nc.SubscribeState(ctx, cfg.NATS.Target, handler)`, validating `StateEnvelope` (verifying `Target == cfg.NATS.Target`), decoding `Payload` into `contracts.DeviceState`, and streaming into `StateCoalescer.Update()`.
     *   Dispatches state event-driven on NATS message arrival (as governed by configured `metrics.statistics.interval`):
         * Peeks current state snapshot from `StateCoalescer`.
-        * Wraps into JSON-RPC `method: "state"` notification (`CloudStateNotification`).
+        * Wraps into JSON-RPC `method: "state"` notification (`CloudStateNotification`) using canonical outer identity:
+          * `params.serial`: populated from `cfg.Cloud.Serial`.
+          * `params.uuid`: converted from `StateEnvelope.UUID` string -> `uint64` (valid decimal integer -> parsed `uint64`; empty/`"0"` unapplied config -> `0`; invalid non-numeric -> active config UUID fallback or `0`).
+          * `params.state`: decoded `DeviceState` telemetry (contains no inner `serial` or `uuid`).
         * Pushes to `PriorityScheduler` at `PriorityMedium` (Priority 2).
         * If push returns `ErrQueueFull` or WebSocket is disconnected, state remains in coalescer until backpressure clears or link reconnects.
         * If push succeeds, commits the snapshot generation via `coalescer.Commit(generation)`.
-    *   Dispatches cloud on-demand `"request"` commands (`message: "state"`) through `frameHandler`, attaching `request_uuid` to satisfy the Cloud REST API waiter.
+    *   Dispatches cloud on-demand `"request"` commands (`message: "state"`) through `frameHandler`: queries downstream agent via `state.get.<target>` with a 5-second deadline context to fetch live metrics, correlates `request_uuid`, converts `StateEnvelope.UUID` to `params.uuid`, and pushes acknowledgment + state notification to `PriorityScheduler` at Priority 0. If downstream times out or fails, replies with JSON-RPC error `-32603` (application code `3`).
     *   Launches parallel reconnection threads.
     *   Listens for `SIGINT` / `SIGTERM` to perform graceful resource teardowns.
 

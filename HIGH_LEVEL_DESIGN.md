@@ -45,7 +45,7 @@ To decouple message routing from request lifecycles, the uCentral Client include
 *   **Correlation Tracking:** Maps outgoing NATS commands to incoming Cloud JSON-RPC requests using request IDs.
 *   **Deduplication & Cache:** Handles duplicate requests and caches responses.
 *   **Request Timeouts:** Enforces timeouts using non-blocking timers and triggers failure responses if local components do not respond in time.
-*   **Retry Handling:** Automates transaction retries for transient failures. Only idempotent, read-only downstream queries, such as `capabilities.get` and `status.get`, are retryable for transient failures, using a randomized exponential backoff (e.g., base 2s, max 3 attempts). State-changing and security-sensitive actions (`configure`, `reboot`, `factory`, `upgrade`, `certupdate`, `reenroll`, `script`) must fail fast without automatic retries. The `status.get` subject is owned by the downstream device/local agent; the uCentral client publishes requests to it and must not subscribe to or respond on it.
+*   **Retry Handling:** Automates transaction retries for transient failures. Only idempotent, read-only downstream queries, such as `capabilities.get`, `status.get`, and `state.get`, are retryable for transient failures, using a randomized exponential backoff (e.g., base 2s, max 3 attempts). State-changing and security-sensitive actions (`configure`, `reboot`, `factory`, `upgrade`, `certupdate`, `reenroll`, `script`) must fail fast without automatic retries. The `status.get` and `state.get` subjects are owned by the downstream device/local agent; the uCentral client publishes requests to them and must not subscribe to or respond on them.
 *   **Metrics Collection:** Tracks latencies, throughputs, and success/error rates per command.
 
 ---
@@ -392,8 +392,8 @@ Exposes a priority-aware message dispatch queue writing to the WebSocket connect
 *   **Authentication:** Authenticates with the NATS bus using standard **.creds files** containing an NKEY user seed, as specified in the daemon configuration file.
 *   **TLS Requirements:** TLS 1.2+ is enforced on the NATS connection with CA certificates validation.
 *   **Authorization & Access Control (ACLs):** The client acts as a 1-to-N gateway and its NATS credentials must authorize it to route messages to/from specific downstream targets:
-    *   *Publish:* `cmd.configure.<target>`, `cmd.action.<target>.*`, `capabilities.get.<target>`, `status.get.<target>`
-    *   *Subscribe:* `status.<target>`, `telemetry.<target>`, `logs.<target>`, `health.<target>`, `result.<target>`, `_INBOX.>`
+    *   *Publish:* `cmd.configure.<target>`, `cmd.action.<target>.*`, `capabilities.get.<target>`, `status.get.<target>`, `state.get.<target>`
+    *   *Subscribe:* `status.<target>`, `state.<target>`, `telemetry.<target>`, `logs.<target>`, `health.<target>`, `result.<target>`, `_INBOX.>`
     
     *Security Constraint:* NATS credentials MUST explicitly allow publish/subscribe access to the set of authorized downstream targets rather than relying on unrestricted cross-target wildcard access. The daemon delegates target routing decisions to the internal Request Manager and relies on the NATS broker's credentials to physically enforce access boundaries.
 
@@ -432,44 +432,42 @@ The uCentral client bridges downstream router operational state (harvested by th
 
 ```text
 +---------------------------------------------------------------------------------------------------+
-|                                         DOWNSTREAM AGENT                                          |
+|                           DOWNSTREAM ROUTER AGENT (VyOS VM / Appliance)                           |
 |                                                                                                   |
-|  [ Linux Host Metrics (/proc, sysfs, iproute2) ]                                                  |
-|                         │                                                                         |
-|                         ▼                                                                         |
-|  [ State Collector Service (Runs at metrics.statistics.interval) ]                                |
-|                         │                                                                         |
-|                         ▼ (Periodic state snapshot via agentcore.PublishState)                    |
-|  [ NATS: state.<target> (agentcore.StateEnvelope) ]                                               |
-+─────────────────────────┼─────────────────────────────────────────────────────────────────────────+
-                          │
-                          ▼ (SubscribeState / agentcore.RegisterStateHandler)
-+───────────────────────────────────────────────────────────────────────────────────────────────────+
+|  [ VyOS Router Metrics (/proc, sysfs, iproute2) ]                                                 |
+|       │                                           ▲                                               |
+|       ▼ (Periodic collection)                     │ (On-Demand live query)                        |
+|  [ Periodic State Collector ]              [ On-Demand Responder (state.get.<target>) ]           |
+|       │                                           ▲                                               |
+|       ▼                                           │ (Request)                                     |
+|  [ NATS: state.<target> ]                  [ NATS: state.get.<target> ]                           |
+|  (Publish StateEnvelope)                   (Request-Reply / Live State)                           |
++───────┼───────────────────────────────────────────▲───────────────────────────────────────────────+
+        │                                           │
+        ▼ (SubscribeState)                          │ (RequestLiveState)
++───────────────────────────────────────────────────┼───────────────────────────────────────────────+
 |                                      uCENTRAL CLIENT DAEMON                                       |
-|                                                                                                   |
-|  [ pkg/nats Client ]                                                                              |
+|                                                   │                                               |
+|  [ pkg/nats Client ]                              │                                               |
+|         │ (Periodic StateEnvelope)                │                                               |
+|         ▼                                         │                                               |
+|  +-----------------------------------+            │                                               |
+|  | StateCoalescer (pkg/queues)       |            │                                               |
+|  +-----------------------------------+            │                                               |
+|         │                                         │                                               |
+|         ▼ (Peek & Commit)                         │                                               |
+|  [ Periodic State Frame ]                         │ (Live State + request_uuid)                   |
+|         │                                         │                                               |
+|         ▼ (Priority 2 / Medium)                   ▼ (Priority 0 / Emergency)                      |
+|  +---------------------------------------------------------------------------------------------+  |
+|  | PriorityScheduler                                                                           |  |
+|  +---------------------------------------------------------------------------------------------+  |
 |         │                                                                                         |
-|         ▼ (Decode StateEnvelope.Payload -> DeviceState)                                           |
-|  +---------------------------------------------------------------------------------------------+  |
-|  | StateCoalescer (pkg/queues)                                                                 |  |
-|  |  - In-memory single-slot LWW buffer + Generation Counter                                    |  |
-|  +---------------------------------------------------------------------------------------------+  |
-|         ▲                                                 │                                       |
-|         │ (Commit generation)                             │ (Peek state snapshot)                 |
-|         │                                                 ▼                                       |
-|  [ NATS State Event Callback ] ──(Trigger Peek)───> [ Build JSON-RPC 'state' Notification ]       |
-|  [ Cloud 'request' Handler ]   ──(Trigger Peek)───>               │                               |
-|                                                                   ▼ (Configured Interval)         |
-|  +---------------------------------------------------------------------------------------------+  |
-|  | PriorityScheduler (Priority 2 / Medium)                                                     |  |
-|  +---------------------------------------------------------------------------------------------+  |
-|         │                                                 │                                       |
-|         │ (Next)                                          │ (If ErrQueueFull: retain in           |
-|         ▼                                                 │  coalescer, retry on reconnect/drain) |
-|  [ WebSocket Writer Loop (pkg/websocket) ] <──────────────┘                                       |
-+─────────────────────────┼─────────────────────────────────────────────────────────────────────────+
-                          │
-                          ▼ (mTLS WebSocket: {"method": "state", "params": {...}})
+|         ▼                                                                                         |
+|  [ WebSocket Writer Loop (pkg/websocket) ]                                                        |
++─────────┼─────────────────────────────────────────────────────────────────────────────────────────+
+          │
+          ▼ (mTLS WebSocket: {"method": "state", "params": {...}})
 +───────────────────────────────────────────────────────────────────────────────────────────────────+
 |                                     OPENWIFI CLOUD GATEWAY                                        |
 |                                                                                                   |
@@ -480,10 +478,17 @@ The uCentral client bridges downstream router operational state (harvested by th
 +---------------------------------------------------------------------------------------------------+
 ```
 
+##### 6.3.1.1 Execution Environment & Metric Scoping (VyOS VM vs. Ubuntu Host)
+
+In two-tier OLG deployments (Ubuntu host hypervisor + VyOS router VM):
+* **Execution Boundary:** `vyos-nats-agent` runs inside the VyOS VM (having direct access to VyOS configuration APIs), while `ucentral-client` and `nats-server` run on the Ubuntu host.
+* **Metric Scoping:** All collected telemetry reflects the **VyOS Router Appliance** (guest CPU/RAM, router data-plane interfaces, and routed client neighbors), not the underlying Ubuntu bare-metal hypervisor. Host infrastructure monitoring is managed out-of-band and is decoupled from OpenWiFi router state.
+
 **Subject Routing & Separation Rules:**
 * **Exclusive `state.<target>` Routing:** Periodic operational state MUST be routed exclusively over `state.<target>`.
-* **Separation from `status.<target>`:** The existing `status.<target>` subject is strictly reserved for lifecycle events and configure/action execution progress. These message types have distinct schemas and purposes; publishing full device-state payloads on `status.<target>` would cause consumers to interpret them as progress/status messages or reject them as invalid.
-* **Agentcore Prerequisite:** Support for the dedicated `state.<target>` subject pattern in `agentcore` (`DefaultStatePattern = "state.%s"`, `PublishState`, and `RegisterStateHandler`) must be implemented or verified before state subscription is activated.
+* **On-Demand Live Query (`state.get.<target>`):** On-demand state requests from the Cloud Gateway trigger a live NATS request-reply query to `state.get.<target>` for fresh metrics, bypassing the coalescer. The `state.get` subject is owned by the downstream device/local agent; the uCentral client publishes requests to it and must not subscribe to or serve responses on it.
+* **Separation from `status.<target>` and `status.get.<target>`:** The existing `status.<target>` and `status.get.<target>` subjects are strictly reserved for lifecycle events and configure/action execution progress. These message types have distinct schemas and purposes; publishing full device-state payloads on `status.<target>` would cause consumers to interpret them as progress/status messages or reject them as invalid.
+* **Agentcore Prerequisite:** Support for dedicated `state.<target>` and `state.get.<target>` subject patterns in `agentcore` (`DefaultStatePattern = "state.%s"`, `DefaultStateGetPattern = "state.get.%s"`, `PublishState`, `RegisterStateHandler`, `RequestState`) must be implemented or verified before state subscription and on-demand queries are activated.
 
 #### 6.3.2 Wire Envelope Formats
 
@@ -672,15 +677,43 @@ The uCentral client extracts `payload` as `DeviceState`, correlates the applied 
 }
 ```
 
+##### 6.3.2.3 Canonical State Identity Contract & UUID Conversion Rules
+
+To eliminate inner/outer identity ambiguity and prevent default zero/empty values (`uuid: 0`, `serial: ""`):
+
+1. **Outer Identity is Authoritative:**
+   * **Upstream WebSocket:** Device identity (`serial`) and active configuration version (`uuid`) belong strictly to the outer `params` object (`params.serial` as `string`, `params.uuid` as `uint64`).
+   * **Downstream NATS:** Device target identity and active configuration version belong strictly to the outer `StateEnvelope` (`target: string`, `uuid: string`).
+   * **Inner State Payload (`DeviceState` / `payload`):** Represents pure telemetry (`version`, `unit`, `interfaces`, `radios`, `link-state`, `lldp-peers`). It MUST NOT contain inner `uuid` or `serial` fields. Decoding NATS `payload` into `DeviceState` and remarshaling it into `CloudStateParams.State` guarantees clean, standard-compliant OpenWiFi state without redundant or conflicting identity fields.
+
+2. **Identity Population & Validation:**
+   * **`params.serial`:** Populated authoritatively by the uCentral client from its local configuration (`cfg.Cloud.Serial` or detected hardware MAC).
+   * **Target Validation:** When `StateEnvelope` arrives from NATS, the client verifies that `envelope.Target == cfg.NATS.Target`. Messages for unknown targets are discarded with a warning log.
+
+3. **`StateEnvelope.UUID` (string) -> Gateway `params.uuid` (uint64) Conversion Rules:**
+   Because `agentcore.StateEnvelope.UUID` is a string (standard across NATS agent envelopes) while OpenWiFi uCentral Gateway requires `params.uuid` as a `uint64`, the client applies the following conversion and fallback rules:
+
+   | Downstream `StateEnvelope.UUID` | Converted Gateway `params.uuid` | Behavior & Fallback |
+   | :--- | :--- | :--- |
+   | **Valid Numeric String** (e.g. `"1793880893"`) | Parsed `uint64` (`1793880893`) | Parsed via `strconv.ParseUint(envelope.UUID, 10, 64)`. Assigned directly to `params.uuid`. |
+   | **Missing, Empty, or `"0"`** (`""` or `"0"`) | `0` | Indicates initial boot, factory default, or unapplied configuration prior to controller provisioning. `0` is the standard OpenWiFi representation for unconfigured devices. |
+   | **Invalid / Non-Numeric String** (e.g. `"d820572e..."`) | Active config UUID (or `0`) | If `strconv.ParseUint` fails: client falls back to its locally tracked active configuration UUID (from previous confirmed `cmd.configure.<target>` executions). If no configuration has ever been applied, defaults to `0`. A structured warning is logged: `invalid non-numeric downstream state UUID; falling back to active config UUID`. |
+
+4. **Downstream Checkpoint & Concurrency Contract:**
+   * **Last-Applied Only:** The downstream agent reports only the last successfully applied configuration UUID (`state.State{AppliedUUID string}`). Failed or rolled-back configuration attempts never overwrite the active UUID checkpoint.
+   * **Absent vs. `0`:** If the state checkpoint is missing (initial boot) or corrupt, downstream emits empty `UUID: ""`; if the controller configured an explicit factory/baseline, downstream emits `UUID: "0"`. Both map safely to Gateway `params.uuid = 0`.
+   * **Atomic Checkpoint Reads:** Downstream state persistence uses atomic temporary file creation and POSIX rename (`os.Rename`), ensuring telemetry collectors never observe torn or partially written checkpoints during concurrent configuration applications.
+
 #### 6.3.3 Schema Alignment & Router Profile Rules
 
-The state payload adheres strictly to `TIP-olg-ucentral-schema` (`ucentral.state.pretty.json`). For a wired router (such as VyOS), the following profile rules apply:
+The state payload adheres strictly to `TIP-olg-ucentral-schema` (`ucentral.state.pretty.json`). For router and gateway appliances, the following profile rules apply:
 
-1. **`radios: []` (Empty Array):** Always populated as an empty array `[]` rather than omitted or null. This ensures that the Gateway's `StateUtils::ComputeAssociations()` check (`if (RawObject->isArray("radios") && RawObject->isArray("interfaces"))`) executes safely, registering 0 Wi-Fi associations without warnings.
+1. **`radios` Array:** Populated with active Wi-Fi radio metrics (channel, frequency, tx_power, noise) if the gateway appliance contains wireless hardware. For purely wired appliances/VMs with no wireless PHYs, it is populated as an empty array `[]` rather than omitted or null. This ensures that the Gateway's `StateUtils::ComputeAssociations()` check executes safely, registering 0 Wi-Fi associations without warnings.
 2. **`unit.uptime`:** Must always be provided as an integer (seconds since boot). This field is actively monitored by the Cloud Gateway for device online status.
-3. **`interfaces[].ssids` & `interfaces[].mesh-path`:** Omitted or left empty since Ethernet interfaces have no Wi-Fi SSIDs or 802.11s mesh paths.
-4. **`clients`:** Populated from the router's ARP / NDP neighbor cache (`ip neigh` or `/proc/net/arp`).
-5. **No `null` Objects or Arrays:** Fields must not serialize as `null`; empty collections must be serialized as `[]` or omitted entirely with `omitempty`.
+3. **`interfaces[].ssids` & `interfaces[].mesh-path`:** Populated dynamically when wireless interfaces/VAPs exist on the appliance; omitted or left empty for standard wired Ethernet interfaces.
+4. **`clients` (Observed L3 Neighbors):** Represents observed L3 network neighbors rather than an authoritative connected-client inventory. The collector extracts entries from `ip -j neigh`, discarding `FAILED`, `INCOMPLETE`, and `NOARP` states while retaining `REACHABLE`, `PERMANENT`, `STALE`, `DELAY`, and `PROBE`. Neighbors are deduplicated by MAC address, aggregating multiple IPv4/IPv6 addresses into `ipv4_addresses` and `ipv6_addresses`. For bridge interfaces (`br0`), clients are mapped to physical member ports via `bridge -j fdb show` if resolved, or assigned to the logical interface; VLAN interfaces retain their subinterface scoping. `last_seen` reflects current epoch time for `REACHABLE` neighbors or the timestamp of last verified activity for `STALE`/`DELAY`. When an authoritative connected inventory is required, the collector reconciles L2 presence (Bridge FDB / Wi-Fi station dumps), L3 DHCP lease allocations, and L3 neighbor activity.
+5. **`interfaces[].delta_counters`:** Conforms to OpenWiFi AP baseline tracking. On cold boot or initial interface discovery, deltas are zero-initialized against an established baseline sample. If an interface resets or restarts (`current < previous`), the baseline resets to `current` and emits `0` to prevent `uint64` underflow.
+6. **No `null` Objects or Arrays:** Fields must not serialize as `null`; empty collections must be serialized as `[]` or omitted entirely with `omitempty`.
 
 #### 6.3.4 Coalescing & Priority Scheduling (Priority 2 Rules)
 
@@ -693,7 +726,7 @@ State messages are buffered and scheduled through the priority mechanisms define
 
 #### 6.3.5 Handling On-Demand Cloud Requests (`request` Method)
 
-The OpenWiFi Cloud Gateway REST API allows operators to request an immediate, on-demand device state report via:
+The OpenWiFi Cloud Gateway REST API allows operators to request an immediate, on-demand device state report (e.g., via `POST /api/v1/device/{serial}/request` with `message: "state"`):
 ```json
 {
   "jsonrpc": "2.0",
@@ -708,24 +741,57 @@ The OpenWiFi Cloud Gateway REST API allows operators to request an immediate, on
 }
 ```
 
-When received by `cmd/ucentral-client/handler.go`:
-1. The client recognizes `method == "request"` and `params.message == "state"`.
-2. It peeks the latest snapshot from `StateCoalescer`.
-3. It constructs a `state` notification with `request_uuid: params.request_uuid` attached.
-4. It enqueues the state notification to the scheduler to be sent upstream immediately.
-5. It responds to the JSON-RPC request with standard success:
-   ```json
-   {
-     "jsonrpc": "2.0",
-     "id": 1042,
-     "result": {
-       "status": "success",
-       "serial": "60cf84f22290",
-       "uuid": 1793880893
+To guarantee that operators receive **100% live, fresh metrics** (rather than a potentially stale snapshot from the previous periodic interval), on-demand requests bypass `StateCoalescer` and query the downstream agent directly:
+
+1. **Detection:** When `cmd/ucentral-client/handler.go` receives `method == "request"` and `params.message == "state"`.
+2. **Live Downstream Query (`state.get.<target>`):**
+   - The uCentral client issues a NATS request-reply to `state.get.<target>` with an ephemeral reply inbox (`_INBOX.>`) and a 5-second deadline context (`OLG_TIMEOUT_DISPATCH`).
+   - The downstream agent (VyOS NATS agent) receives `state.get.<target>`, gathers live router metrics (`/proc`, `sysfs`, Netlink) from the VyOS environment at that exact millisecond, and replies with an `agentcore.StateEnvelope`.
+3. **Dual Priority 0 Dispatch:**
+   - The client immediately pushes the command acknowledgment to the Cloud:
+     ```json
+     {
+       "jsonrpc": "2.0",
+       "id": 1042,
+       "result": {
+         "status": "success",
+         "serial": "60cf84f22290",
+         "uuid": 1793880893
+       }
      }
-   }
-   ```
-6. When the Gateway receives the `state` notification with `request_uuid`, `AP_Process_state.cpp` unblocks the REST API caller by saving the state result via `StorageService()->SetCommandResult(request_uuid, StateStr)`.
+     ```
+   - It formats the live state notification with `request_uuid: params.request_uuid` embedded in `params`:
+     ```json
+     {
+       "jsonrpc": "2.0",
+       "method": "state",
+       "params": {
+         "serial": "60cf84f22290",
+         "uuid": 1793880893,
+         "request_uuid": "d820572e-3c74-4b47-bcfc-5bbf2f07d2f9",
+         "state": { ... }
+       }
+     }
+     ```
+   - Both messages are enqueued into **Priority 0 (Highest / Emergency queue)**, completely bypassing periodic queues to guarantee zero scheduling delay.
+4. **Cloud Gateway Unblocking:** When the Gateway receives the `state` notification with `request_uuid`, `AP_Process_state.cpp` saves the state result via `StorageService()->SetCommandResult(request_uuid, StateStr)`, immediately unblocking the synchronous HTTP REST caller.
+5. **Timeout and Error Handling:**
+   - If the downstream agent does not respond within the 5-second deadline (e.g., downstream service is stopped or unresponsive), the client does not hang. It immediately returns a JSON-RPC error response at Priority 0:
+     ```json
+     {
+       "jsonrpc": "2.0",
+       "id": 1042,
+       "error": {
+         "code": -32603,
+         "message": "Internal error",
+         "data": {
+           "application_code": 3,
+           "details": "downstream state collection timed out or unavailable"
+         }
+       }
+     }
+     ```
+   - This cleanly unblocks the Cloud REST API with HTTP 400/503 instead of waiting for a 120-second gateway timeout.
 
 ---
 

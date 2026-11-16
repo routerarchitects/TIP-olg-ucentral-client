@@ -1328,11 +1328,11 @@ The uCentral client must not register a NATS responder for `status.get.<target>`
         * `NewStateCoalescer()`
         * `NewRequestManager(dispatchTimeout, cacheTTLConfig, cache, scheduler, store)`
     *   Subscribes to downstream state via `nc.SubscribeState(ctx, cfg.NATS.Target, handler)`, validating `StateEnvelope`, decoding `Payload` into `contracts.DeviceState`, and streaming into `StateCoalescer.Update()`.
-    *   Launches periodic state flusher (configurable interval, default 60s):
+    *   Dispatches state event-driven on NATS message arrival (rate-limited to max 1 dispatch per 10s):
         * Peeks current state snapshot from `StateCoalescer`.
         * Wraps into JSON-RPC `method: "state"` notification (`CloudStateNotification`).
         * Pushes to `PriorityScheduler` at `PriorityMedium` (Priority 2).
-        * If push returns `ErrQueueFull`, state remains in coalescer for the next flush attempt.
+        * If push returns `ErrQueueFull` or WebSocket is disconnected, state remains in coalescer until backpressure clears or link reconnects.
         * If push succeeds, commits the snapshot generation via `coalescer.Commit(generation)`.
     *   Dispatches cloud on-demand `"request"` commands (`message: "state"`) through `frameHandler`, attaching `request_uuid` to satisfy the Cloud REST API waiter.
     *   Launches parallel reconnection threads.

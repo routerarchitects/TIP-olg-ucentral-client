@@ -45,7 +45,7 @@ To decouple message routing from request lifecycles, the uCentral Client include
 *   **Correlation Tracking:** Maps outgoing NATS commands to incoming Cloud JSON-RPC requests using request IDs.
 *   **Deduplication & Cache:** Handles duplicate requests and caches responses.
 *   **Request Timeouts:** Enforces timeouts using non-blocking timers and triggers failure responses if local components do not respond in time.
-*   **Retry Handling:** Automates transaction retries for transient failures. Only idempotent, read-only downstream queries, such as `capabilities.get`, `status.get`, and `state.get`, are retryable for transient failures, using a randomized exponential backoff (e.g., base 2s, max 3 attempts). State-changing and security-sensitive actions (`configure`, `reboot`, `factory`, `upgrade`, `certupdate`, `reenroll`, `script`) must fail fast without automatic retries. The `status.get` and `state.get` subjects are owned by the downstream device/local agent; the uCentral client publishes requests to them and must not subscribe to or respond on them.
+*   **Retry Handling:** Automates transaction retries for transient failures. Only idempotent, background startup discovery queries, such as `capabilities.get` and `status.get`, are retryable for transient failures, using a randomized exponential backoff (e.g., base 2s, max 3 attempts). In contrast, on-demand live telemetry queries (`state.get`) are strictly bounded by a single request attempt (`OLG_TIMEOUT_DISPATCH`, default 5s) with **zero retries** and fail fast on `service_busy` or timeout to respect caller deadlines and prevent overload amplification. State-changing and security-sensitive actions (`configure`, `reboot`, `factory`, `upgrade`, `certupdate`, `reenroll`, `script`) must also fail fast without automatic retries. The `status.get` and `state.get` subjects are owned by the downstream device/local agent; the uCentral client publishes requests to them and must not subscribe to or respond on them.
 *   **Metrics Collection:** Tracks latencies, throughputs, and success/error rates per command.
 
 ---
@@ -747,67 +747,99 @@ The OpenWiFi Cloud Gateway REST API allows operators to request an immediate, on
 To guarantee that operators receive **100% live, fresh metrics** (rather than a potentially stale snapshot from the previous periodic interval), on-demand requests bypass `StateCoalescer` and query the downstream agent directly:
 
 1. **Detection:** When `cmd/ucentral-client/handler.go` receives `method == "request"` and `params.message == "state"`.
-2. **Live Downstream Query (`state.get.<target>`):**
-   - The uCentral client issues a NATS request-reply to `state.get.<target>` with an ephemeral reply inbox (`_INBOX.>`) and a 5-second deadline context (`OLG_TIMEOUT_DISPATCH`).
+2. **Live Downstream Query (`state.get.<target>`) — Single Bounded Attempt (No Retries):**
+   - The uCentral client issues a single bounded NATS request-reply to `state.get.<target>` with an ephemeral reply inbox (`_INBOX.>`) and a strict 5-second deadline context (`OLG_TIMEOUT_DISPATCH`).
+   - **Zero Retries Policy:** To respect caller HTTP deadlines, prevent exceeding the 5-second budget, and avoid retry storms or overload amplification on an active router, on-demand live state queries execute strictly as a **single attempt with zero retries**. If downstream state collection times out, fails, or returns `service_busy`, the client immediately fails fast without retrying.
    - The downstream agent (VyOS NATS agent) receives `state.get.<target>`, gathers live router metrics (`/proc`, `sysfs`, Netlink) from the VyOS environment at that exact millisecond, and replies with an `agentcore.StateEnvelope`.
-3. **Dual Priority 0 Dispatch:**
-   - The client immediately pushes the command acknowledgment to the Cloud:
-     ```json
-     {
-       "jsonrpc": "2.0",
-       "id": 1042,
-       "result": {
-         "status": "success",
-         "serial": "60cf84f22290",
-         "uuid": 1793880893
-       }
-     }
-     ```
-   - It formats the live state notification with `request_uuid: params.request_uuid` embedded in `params`:
-     ```json
-     {
-       "jsonrpc": "2.0",
-       "method": "state",
-       "params": {
-         "serial": "60cf84f22290",
-         "uuid": 1793880893,
-         "request_uuid": "d820572e-3c74-4b47-bcfc-5bbf2f07d2f9",
-         "state": { ... }
-       }
-     }
-     ```
-   - Both messages are enqueued into **Priority 0 (Highest / Emergency queue)**, completely bypassing periodic queues to guarantee zero scheduling delay.
-4. **Cloud Gateway Completion & Unblocking (Success Path):**
-   - When the Gateway receives the correlated `state` notification containing `request_uuid`, `AP_Process_state.cpp` intercepts it, extracts `params.request_uuid`, and invokes `StorageService()->SetCommandResult(request_uuid, StateStr)`.
-   - This marks the command record as `status: "completed"`, immediately satisfying and unblocking the synchronous HTTP REST caller with the live state payload.
+3. **Dual Priority 0 Dispatch & Strict Transmission Ordering:**
+   - When downstream state collection succeeds, the client dispatches two sequential frames at Priority 0 with strict FIFO ordering:
+     1. **Frame 1 — JSON-RPC Acknowledgment (Transmitted First):** Transmitted immediately to unblock `RESTAPI_RPC::WaitForCommand()`, matching the Gateway's contract (`result.status` object with `error: 0`):
+        ```json
+        {
+          "jsonrpc": "2.0",
+          "id": 1042,
+          "result": {
+            "serial": "60cf84f22290",
+            "uuid": 1793880893,
+            "status": {
+              "error": 0,
+              "text": "Success"
+            }
+          }
+        }
+        ```
+     2. **Frame 2 — Asynchronous State Notification (Transmitted Second):** Transmitted immediately following the acknowledgment frame, embedding `request_uuid: params.request_uuid` in `params`:
+        ```json
+        {
+          "jsonrpc": "2.0",
+          "method": "state",
+          "params": {
+            "serial": "60cf84f22290",
+            "uuid": 1793880893,
+            "request_uuid": "d820572e-3c74-4b47-bcfc-5bbf2f07d2f9",
+            "state": { ... }
+          }
+        }
+        ```
+   - **Ordering Guarantee:** Both messages are queued into **Priority 0 (Highest / Emergency queue)** in strict order (Frame 1 then Frame 2). Because the WebSocket connection is a single ordered TCP stream, the Gateway's socket reader receives and processes the RPC acknowledgment before the state notification. This prevents race conditions where an exceptionally fast state notification could arrive before the command record is established or acknowledged.
+4. **Cloud Gateway Completion Semantics (Acknowledgment vs. Asynchronous Result):**
+   - **Synchronous REST Completion (The Acknowledgment):** In OpenWiFi Cloud Gateway, `RESTAPI_RPC::WaitForCommand()` specifically waits for the JSON-RPC acknowledgment matching `id: 1042`. When Frame 1 arrives, `AP_WS_Connection::ProcessWSFrame()` dispatches the frame by `id`. Confirming `result.status.error == 0`, `WaitForCommand()` fulfills its promise, immediately unblocking the synchronous HTTP `POST /api/v1/device/{serial}/request` caller with HTTP 200 and the command metadata.
+   - **Asynchronous State-Result Storage (The State Notification):** When Frame 2 arrives, `AP_Process_state.cpp` intercepts the `state` notification and extracts `params.request_uuid`. It invokes `StorageService()->SetCommandResult(request_uuid, StateStr)` to persist the telemetry snapshot into the database record for `request_uuid`. **The state notification does not unblock `WaitForCommand()` directly;** it independently updates command storage for subsequent REST polling (`GET /api/v1/device/{serial}/commands/{request_uuid}`).
 5. **Periodic Baseline Isolation:** Servicing an on-demand live query on `state.get.<target>` gathers live interface metrics but MUST NOT mutate or advance the downstream agent's periodic delta baseline (`periodic_counters`). The scheduled periodic reporting cadence and its delta counter calculations remain completely undisturbed by on-demand requests.
 6. **Gateway-Side Failure Correlation & Unblocking (Failure Path):**
-   - If downstream state collection times out (5-second deadline) or fails:
-     - The client **MUST NOT** send a `result: { status: "success" }` acknowledgment, as doing so would cause the Gateway to hang waiting for a subsequent `state` notification that will never arrive.
-     - Instead, the client returns a JSON-RPC error frame for `id: 1042` at Priority 0, explicitly embedding `request_uuid` in `error.data`:
+   - **Gateway Frame Contract Constraint:** In the Cloud Gateway, `AP_WS_Connection::ProcessWSFrame()` only dispatches JSON-RPC responses containing `result` and `id` to pending RPC listeners. Responses formatted as bare JSON-RPC `error` objects are NOT routed to `RESTAPI_RPC::WaitForCommand()`. Furthermore, the Gateway correlates commands **exclusively via the integer RPC `id`** in `ProcessWSFrame()` and `WaitForCommand()`; it does not implement payload inspection of `error.data.request_uuid`.
+   - **Compatible Correlated Failure Response:** If downstream state collection times out (5-second deadline) or fails, or if the device is busy, the client transmits **only** the JSON-RPC acknowledgment response for `id: 1042` with non-zero `result.status.error`. **No state notification is emitted on failure.**
+     - **Downstream Timeout / Unavailable:**
        ```json
        {
          "jsonrpc": "2.0",
          "id": 1042,
-         "error": {
-           "code": -32603,
-           "message": "Internal error",
-           "data": {
-             "request_uuid": "d820572e-3c74-4b47-bcfc-5bbf2f07d2f9",
-             "application_code": 3,
-             "details": "downstream state collection timed out or unavailable"
+         "result": {
+           "serial": "60cf84f22290",
+           "uuid": 1793880893,
+           "status": {
+             "error": 1,
+             "text": "downstream state collection timed out or unavailable"
            }
          }
        }
        ```
-   - **Gateway Failure Correlation Mechanism:**
-     - **Dual Identifier Binding:** The Gateway matches the failure through two redundant mechanisms:
-       1. **RPC ID Correlation:** The Gateway WebSocket message dispatcher (`DeviceRegistry.cpp`) maps incoming `id: 1042` to the in-flight `CommandUUID` (`request_uuid`).
-       2. **Payload-Level `request_uuid` Fallback:** Explicitly embedding `request_uuid` in `error.data` ensures unequivocal correlation to the command database record even if WebSocket session reconnects disrupted in-memory RPC mapping.
-     - **Database Command Termination:** The Gateway updates the command record in database storage via `StorageService()->SetCommandResult(request_uuid, ErrorJson)`, setting `status = "failed"`, `errorCode = -32603`, and `completed = now`.
-     - **Caller Unblocking:**
-       - **Synchronous REST Callers:** The waiting HTTP handler thread (blocked on the pending command future in `RESTAPI_device_commandHandler.cpp`) immediately unblocks and returns HTTP 400/503 with the failure details.
-       - **Asynchronous Polling Callers:** Clients polling `GET /api/v1/device/{serial}/commands/{request_uuid}` immediately observe the terminal failure state without hanging for the 120-second Gateway timeout.
+     - **Service Busy (`service_busy`):**
+       ```json
+       {
+         "jsonrpc": "2.0",
+         "id": 1042,
+         "result": {
+           "serial": "60cf84f22290",
+           "uuid": 1793880893,
+           "status": {
+             "error": 2,
+             "text": "service busy: concurrent operation in progress"
+           }
+         }
+       }
+       ```
+   - **Gateway Failure Handling & Unblocking:**
+     1. **Dispatch:** `AP_WS_Connection::ProcessWSFrame()` inspects the frame. Because it contains `result` and `id`, it matches `id: 1042` in `DeviceRegistry` and dispatches the payload to `RESTAPI_RPC::WaitForCommand()`.
+     2. **Evaluation:** `RESTAPI_RPC::WaitForCommand()` evaluates `result.status.error` (which is non-zero) and `result.status.text`.
+     3. **Database Command Termination:** The Gateway records the failure in `StorageService` for `request_uuid`, setting `status = "failed"`, `errorCode = result.status.error`, and saving the error text.
+     4. **Immediate Unblocking:** The synchronous HTTP caller waiting in `RESTAPI_device_commandHandler.cpp` is immediately unblocked and returns an HTTP 400/500 error response with the failure details, without hanging for the 120-second Gateway timeout.
+
+##### 6.3.5.1 Admission Control & Priority 0 Scheduling Invariants
+
+To maintain predictable resource utilization across upstream and downstream boundaries:
+
+1. **Execution Capacity Exclusivity (No Mirroring in uCentral):**
+   * The downstream VyOS agent alone owns and enforces the configurable 5-worker state-request capacity limit.
+   * The uCentral Client does NOT define or mirror a `max_outstanding_state_requests` configuration setting or separate 5-worker semaphore.
+2. **Global Request Admission:**
+   * The uCentral Client forwards incoming `state.get` requests under its existing global Request Manager admission limit (default: 100 concurrent transactions).
+   * If downstream VyOS capacity is saturated (5 active collections), VyOS returns an explicit, correlated `service_busy` error reply over NATS.
+   * The uCentral Client translates this downstream `service_busy` response directly into the Cloud Gateway JSON-RPC failure response (`result.status: {"error": 2, "text": "service busy: maximum concurrent state requests reached"}`).
+3. **Priority Preservation & Scheduling Invariants:**
+   * **Periodic Telemetry:** Delivered exclusively via best-effort Priority 2 (`PriorityMedium`), buffered and deduplicated by `StateCoalescer` with last-write-wins generation tracking.
+   * **On-Demand Telemetry:** Correlated command acknowledgments and live state notifications are scheduled in Priority 0 (`PriorityHigh`) to ensure immediate dispatch.
+   * **Unchanged Priority 0 Overflow Policy:** The existing bounded Priority 0 queue capacity and overflow policy remain unchanged. No state-specific reservations or new priority classes are introduced. The generic Priority 0 limit remains essential because rapid downstream failures and unrelated command results can still create transient message bursts.
 
 ---
 

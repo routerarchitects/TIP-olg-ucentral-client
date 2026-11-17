@@ -777,25 +777,37 @@ To guarantee that operators receive **100% live, fresh metrics** (rather than a 
      }
      ```
    - Both messages are enqueued into **Priority 0 (Highest / Emergency queue)**, completely bypassing periodic queues to guarantee zero scheduling delay.
-4. **Cloud Gateway Unblocking:** When the Gateway receives the `state` notification with `request_uuid`, `AP_Process_state.cpp` saves the state result via `StorageService()->SetCommandResult(request_uuid, StateStr)`, immediately unblocking the synchronous HTTP REST caller.
+4. **Cloud Gateway Completion & Unblocking (Success Path):**
+   - When the Gateway receives the correlated `state` notification containing `request_uuid`, `AP_Process_state.cpp` intercepts it, extracts `params.request_uuid`, and invokes `StorageService()->SetCommandResult(request_uuid, StateStr)`.
+   - This marks the command record as `status: "completed"`, immediately satisfying and unblocking the synchronous HTTP REST caller with the live state payload.
 5. **Periodic Baseline Isolation:** Servicing an on-demand live query on `state.get.<target>` gathers live interface metrics but MUST NOT mutate or advance the downstream agent's periodic delta baseline (`periodic_counters`). The scheduled periodic reporting cadence and its delta counter calculations remain completely undisturbed by on-demand requests.
-6. **Timeout and Error Handling:**
-   - If the downstream agent does not respond within the 5-second deadline (e.g., downstream service is stopped or unresponsive), the client does not hang. It immediately returns a JSON-RPC error response at Priority 0:
-     ```json
-     {
-       "jsonrpc": "2.0",
-       "id": 1042,
-       "error": {
-         "code": -32603,
-         "message": "Internal error",
-         "data": {
-           "application_code": 3,
-           "details": "downstream state collection timed out or unavailable"
+6. **Gateway-Side Failure Correlation & Unblocking (Failure Path):**
+   - If downstream state collection times out (5-second deadline) or fails:
+     - The client **MUST NOT** send a `result: { status: "success" }` acknowledgment, as doing so would cause the Gateway to hang waiting for a subsequent `state` notification that will never arrive.
+     - Instead, the client returns a JSON-RPC error frame for `id: 1042` at Priority 0, explicitly embedding `request_uuid` in `error.data`:
+       ```json
+       {
+         "jsonrpc": "2.0",
+         "id": 1042,
+         "error": {
+           "code": -32603,
+           "message": "Internal error",
+           "data": {
+             "request_uuid": "d820572e-3c74-4b47-bcfc-5bbf2f07d2f9",
+             "application_code": 3,
+             "details": "downstream state collection timed out or unavailable"
+           }
          }
        }
-     }
-     ```
-   - This cleanly unblocks the Cloud REST API with HTTP 400/503 instead of waiting for a 120-second gateway timeout.
+       ```
+   - **Gateway Failure Correlation Mechanism:**
+     - **Dual Identifier Binding:** The Gateway matches the failure through two redundant mechanisms:
+       1. **RPC ID Correlation:** The Gateway WebSocket message dispatcher (`DeviceRegistry.cpp`) maps incoming `id: 1042` to the in-flight `CommandUUID` (`request_uuid`).
+       2. **Payload-Level `request_uuid` Fallback:** Explicitly embedding `request_uuid` in `error.data` ensures unequivocal correlation to the command database record even if WebSocket session reconnects disrupted in-memory RPC mapping.
+     - **Database Command Termination:** The Gateway updates the command record in database storage via `StorageService()->SetCommandResult(request_uuid, ErrorJson)`, setting `status = "failed"`, `errorCode = -32603`, and `completed = now`.
+     - **Caller Unblocking:**
+       - **Synchronous REST Callers:** The waiting HTTP handler thread (blocked on the pending command future in `RESTAPI_device_commandHandler.cpp`) immediately unblocks and returns HTTP 400/503 with the failure details.
+       - **Asynchronous Polling Callers:** Clients polling `GET /api/v1/device/{serial}/commands/{request_uuid}` immediately observe the terminal failure state without hanging for the 120-second Gateway timeout.
 
 ---
 

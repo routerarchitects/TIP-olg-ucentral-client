@@ -443,7 +443,7 @@ TIP-olg-ucentral-client/
 
     // DeviceState models the inner OpenWiFi router telemetry payload (params.state).
     // Device identity (serial) and active configuration version (uuid) reside strictly in the outer
-    // wrapper (CloudStateParams on WebSocket, StateEnvelope on NATS) to prevent inner/outer identity
+    // wrapper (CloudStateParams on WebSocket, agentcore.StateEnvelope on NATS) to prevent inner/outer identity
     // mismatches and spurious zero/empty values (uuid: 0, serial: "").
     type DeviceState struct {
     	Version    int                `json:"version"`
@@ -542,15 +542,9 @@ TIP-olg-ucentral-client/
 
     func (r *ResultEnvelope) Validate() error
 
-    type StateEnvelope struct {
-    	Version   string          `json:"version"`
-    	Target    string          `json:"target"`
-    	UUID      string          `json:"uuid,omitempty"`
-    	Payload   json.RawMessage `json:"payload"`
-    	Timestamp string          `json:"timestamp"`
-    }
-
-    func (s *StateEnvelope) Validate() error
+    // Note: State wire envelopes reuse agentcore.StateEnvelope directly as the canonical type
+    // (with Timestamp time.Time). The client reuses agentcore.StateEnvelope directly and does not define
+    // a competing local envelope structure.
 
 
     type CloudDeviceStatusQuery struct {
@@ -1335,16 +1329,16 @@ The uCentral client must not register a NATS responder for `status.get.<target>`
         * `NewStateCoalescer()`
         * `NewRequestManager(dispatchTimeout, cacheTTLConfig, cache, scheduler, store)`
     *   Subscribes to downstream state via `nc.SubscribeState(ctx, cfg.NATS.Target, handler)`, validating `StateEnvelope` (verifying `Target == cfg.NATS.Target`), decoding `Payload` into `contracts.DeviceState`, and streaming into `StateCoalescer.Update()`.
-    *   Dispatches state event-driven on NATS message arrival (as governed by configured `metrics.statistics.interval`):
+    *   Dispatches state event-driven on NATS message arrival (frequency authoritatively governed by Cloud `metrics.statistics.interval`, propagated downstream via JetStream KV `desired.<target>`):
         * Peeks current state snapshot from `StateCoalescer`.
         * Wraps into JSON-RPC `method: "state"` notification (`CloudStateNotification`) using canonical outer identity:
           * `params.serial`: populated from `cfg.Cloud.Serial`.
-          * `params.uuid`: converted from `StateEnvelope.UUID` string -> `uint64` (valid decimal integer -> parsed `uint64`; empty/`"0"` unapplied config -> `0`; invalid non-numeric -> active config UUID fallback or `0`).
+          * `params.uuid`: converted from `StateEnvelope.UUID` string -> `uint64` (valid decimal integer -> parsed `uint64`; empty/`"0"` unapplied config -> `0`; invalid non-numeric -> `0` with warning log, never guessing from client memory).
           * `params.state`: decoded `DeviceState` telemetry (contains no inner `serial` or `uuid`).
         * Pushes to `PriorityScheduler` at `PriorityMedium` (Priority 2).
         * If push returns `ErrQueueFull` or WebSocket is disconnected, state remains in coalescer until backpressure clears or link reconnects.
         * If push succeeds, commits the snapshot generation via `coalescer.Commit(generation)`.
-    *   Dispatches cloud on-demand `"request"` commands (`message: "state"`) through `frameHandler`: queries downstream agent via `state.get.<target>` with a 5-second deadline context to fetch live metrics, correlates `request_uuid`, converts `StateEnvelope.UUID` to `params.uuid`, and pushes acknowledgment + state notification to `PriorityScheduler` at Priority 0. If downstream times out or fails, replies with JSON-RPC error `-32603` (application code `3`).
+    *   Dispatches cloud on-demand `"request"` commands (`message: "state"`) through `frameHandler`: queries downstream agent via `state.get.<target>` with a 5-second deadline context to fetch live metrics (without mutating the downstream agent's periodic delta baseline), correlates `request_uuid`, converts `StateEnvelope.UUID` to `params.uuid`, and pushes acknowledgment + state notification to `PriorityScheduler` at Priority 0. If downstream times out or fails, replies with JSON-RPC error `-32603` (application code `3`).
     *   Launches parallel reconnection threads.
     *   Listens for `SIGINT` / `SIGTERM` to perform graceful resource teardowns.
 

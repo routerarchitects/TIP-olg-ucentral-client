@@ -1335,9 +1335,7 @@ The uCentral client must not register a NATS responder for `status.get.<target>`
           * `params.serial`: populated from `cfg.Cloud.Serial`.
           * `params.uuid`: converted from `StateEnvelope.UUID` string -> `uint64` (valid decimal integer -> parsed `uint64`; empty/`"0"` unapplied config -> `0`; invalid non-numeric -> `0` with warning log, never guessing from client memory).
           * `params.state`: decoded `DeviceState` telemetry (contains no inner `serial` or `uuid`).
-        * Pushes to `PriorityScheduler` at `PriorityMedium` (Priority 2).
-        * If push returns `ErrQueueFull` or WebSocket is disconnected, state remains in coalescer until backpressure clears or link reconnects.
-        * If push succeeds, commits the snapshot generation via `coalescer.Commit(generation)`.
+        * Pushes to `PriorityScheduler` at `PriorityMedium` (Priority 2). If push returns `ErrQueueFull` or WebSocket is disconnected, the periodic state update is dropped as a natural result of backpressure/disconnection (best-effort delivery); the client does not buffer or replay stale snapshots across reconnections, waiting instead for the next fresh periodic snapshot.
     *   Dispatches cloud on-demand `"request"` commands (`message: "state"`) through `frameHandler`: queries downstream agent via `state.get.<target>` with a single bounded request attempt under a 5-second deadline context (`OLG_TIMEOUT_DISPATCH`, zero retries; failing fast on timeout or `service_busy` without mutating the downstream agent's periodic delta baseline). Operates under the existing global Request Manager admission limit (default: 100) without mirroring VyOS's 5-worker execution limit, and preserves existing bounded Priority 0 queue and overflow semantics.
         * **Success Path:** Correlates `request_uuid`, converts `StateEnvelope.UUID` to `params.uuid`, and enqueues two sequential frames at Priority 0 with strict FIFO ordering:
           1. Frame 1 (Acknowledgment): `result.status: {"error": 0, "text": "Success"}` matching request `id`, which unblocks `RESTAPI_RPC::WaitForCommand()` and fulfills the synchronous REST request.

@@ -585,7 +585,7 @@ On the local NATS bus, the downstream agent publishes state messages exclusively
 
 ##### 6.3.2.2 Upstream Cloud WebSocket Wire Format (JSON-RPC 2.0 Notification)
 
-The uCentral client extracts `payload` as `DeviceState`, correlates the applied UUID, and packages periodic reports into standard JSON-RPC 2.0 notifications sent to the Gateway:
+The uCentral client extracts `payload` from `agentcore.StateEnvelope`, correlates the applied UUID, and packages periodic reports into standard JSON-RPC 2.0 notifications sent to the Gateway via lossless validated JSON forwarding (`params.state: json.RawMessage`):
 
 ```json
 {
@@ -618,6 +618,18 @@ The uCentral client extracts `payload` as `DeviceState`, correlates the applied 
             "dhcp_server": "172.16.0.1",
             "leasetime": 43200
           },
+          "ipv6_addresses": [
+            {
+              "address": "2001:db8::1/64",
+              "valid": 3600
+            }
+          ],
+          "ipv6_leases": [
+            {
+              "addresses": [ "2001:db8::100" ],
+              "hostname": "client-1"
+            }
+          ],
           "dns_servers": [ "96.45.45.45", "96.45.46.46" ],
           "counters": {
             "rx_bytes": 1051992836,
@@ -684,7 +696,7 @@ To eliminate inner/outer identity ambiguity and prevent default zero/empty value
 1. **Outer Identity is Authoritative:**
    * **Upstream WebSocket:** Device identity (`serial`) and active configuration version (`uuid`) belong strictly to the outer `params` object (`params.serial` as `string`, `params.uuid` as `uint64`).
    * **Downstream NATS:** Device target identity and active configuration version belong strictly to the outer `StateEnvelope` (`target: string`, `uuid: string`).
-   * **Inner State Payload & Schema Preservation (`DeviceState` / `payload`):** Represents pure telemetry (`version`, `unit`, `interfaces`, `radios`, `link-state`, `lldp-peers`). It MUST NOT contain inner `uuid` or `serial` fields. All schema-supported interface fields—specifically including dual-stack `interfaces[].ipv6_addresses`, `interfaces[].ipv6_leases`, `ntp_server`, and optional wireless structures—must be fully preserved during NATS-to-WebSocket transformation. The transformation handles identity separately: stripping inner `serial` and `uuid` if present from the state payload, while authoritatively populating outer `params.serial` and `params.uuid` in `CloudStateParams`. Unmodeled or extended OpenWiFi schema fields must never be dropped or silently discarded during conversion.
+   * **Inner State Payload & Schema Preservation (`DeviceState` / `payload`):** Represents pure telemetry (`version`, `unit`, `interfaces`, `radios`, `link-state`, `lldp-peers`). It MUST NOT contain inner `uuid` or `serial` fields. All schema-supported interface fields—specifically including dual-stack `interfaces[].ipv6_addresses` (as `[{"address": "...", "valid": ...}]`), `interfaces[].ipv6_leases` (as `[{"addresses": [...], "hostname": "..."}]`), `ntp_server`, and optional wireless structures—must be fully preserved during NATS-to-WebSocket transformation. To fulfill schema compliance and prevent silent dropping of unmodeled or extended fields, the client performs **lossless validated JSON forwarding**: `StateEnvelope.Payload` is validated as well-formed JSON, sanitized by stripping top-level inner `serial` and `uuid` keys if present, and forwarded verbatim as `json.RawMessage` into `CloudStateParams.State`. Outer identity is authoritatively populated from local client configuration (`params.serial`) and parsed NATS envelope metadata (`params.uuid`).
 
 2. **Identity Population & Validation:**
    * **`params.serial`:** Populated authoritatively by the uCentral client from its local configuration (`cfg.Cloud.Serial` or detected hardware MAC).

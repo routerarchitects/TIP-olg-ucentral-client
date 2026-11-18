@@ -419,20 +419,34 @@ TIP-olg-ucentral-client/
     	LastSeen      *uint64  `json:"last_seen,omitempty"` // Elapsed seconds since last activity was observed; omitted if unmeasurable (never Unix epoch)
     }
 
+    // InterfaceIPv6Address conforms to the OpenWiFi state schema (#/$defs/interface.ipv6-address)
+    // representing an IPv6 address/prefix assigned to the interface and its remaining delegation lifetime.
+    type InterfaceIPv6Address struct {
+    	Address string  `json:"address"`
+    	Valid   *uint64 `json:"valid,omitempty"` // Remaining delegation validity in seconds; omitted if permanent/unbounded
+    }
+
+    // InterfaceIPv6Lease conforms to the OpenWiFi state schema (#/$defs/interface.ipv6-lease)
+    // representing an active DHCPv6/SLAAC lease served by this interface.
+    type InterfaceIPv6Lease struct {
+    	Addresses []string `json:"addresses"`
+    	Hostname  string   `json:"hostname,omitempty"`
+    }
+
     type InterfaceState struct {
-    	Name          string            `json:"name"`
-    	Location      string            `json:"location,omitempty"`
-    	Uptime        uint64            `json:"uptime,omitempty"`
-    	IPv4          *InterfaceIPv4    `json:"ipv4,omitempty"`
-    	IPv6Addresses []string          `json:"ipv6_addresses,omitempty"`
-    	IPv6Leases    json.RawMessage   `json:"ipv6_leases,omitempty"`
-    	DNSServers    []string          `json:"dns_servers,omitempty"`
-    	NTPServer     string            `json:"ntp_server,omitempty"`
-    	Counters      InterfaceCounters `json:"counters"`
-    	DeltaCounters InterfaceCounters `json:"delta_counters"`
-    	Clients       []InterfaceClient `json:"clients,omitempty"`
-    	SSIDs         json.RawMessage   `json:"ssids,omitempty"`
-    	MeshPath      json.RawMessage   `json:"mesh-path,omitempty"`
+    	Name          string                 `json:"name"`
+    	Location      string                 `json:"location,omitempty"`
+    	Uptime        uint64                 `json:"uptime,omitempty"`
+    	IPv4          *InterfaceIPv4         `json:"ipv4,omitempty"`
+    	IPv6Addresses []InterfaceIPv6Address `json:"ipv6_addresses,omitempty"`
+    	IPv6Leases    []InterfaceIPv6Lease   `json:"ipv6_leases,omitempty"`
+    	DNSServers    []string               `json:"dns_servers,omitempty"`
+    	NTPServer     string                 `json:"ntp_server,omitempty"`
+    	Counters      InterfaceCounters      `json:"counters"`
+    	DeltaCounters InterfaceCounters      `json:"delta_counters"`
+    	Clients       []InterfaceClient      `json:"clients,omitempty"`
+    	SSIDs         json.RawMessage        `json:"ssids,omitempty"`
+    	MeshPath      json.RawMessage        `json:"mesh-path,omitempty"`
     }
 
     type PortLinkState struct {
@@ -450,6 +464,7 @@ TIP-olg-ucentral-client/
     // Device identity (serial) and active configuration version (uuid) reside strictly in the outer
     // wrapper (CloudStateParams on WebSocket, agentcore.StateEnvelope on NATS) to prevent inner/outer identity
     // mismatches and spurious zero/empty values (uuid: 0, serial: "").
+    // Used for schema-complete structured modeling, local validation, and test assertions.
     type DeviceState struct {
     	Version    int                `json:"version"`
     	Unit       UnitState          `json:"unit"`
@@ -459,11 +474,16 @@ TIP-olg-ucentral-client/
     	LLDPPeers  json.RawMessage    `json:"lldp-peers,omitempty"`
     }
 
+    // CloudStateParams wraps the telemetry payload for WebSocket transmission to the Cloud Gateway.
+    // State is forwarded as json.RawMessage (lossless validated JSON forwarding) after validating
+    // well-formed JSON and stripping any rogue inner serial/uuid fields. This ensures zero data loss
+    // and full forward-compatibility, preserving all schema-supported properties (e.g. ipv6_addresses objects,
+    // ipv6_leases, ntp_server, wireless SSIDs, and mesh paths) and future schema extensions.
     type CloudStateParams struct {
-    	Serial      string      `json:"serial"`
-    	UUID        uint64      `json:"uuid"`
-    	State       DeviceState `json:"state"`
-    	RequestUUID string      `json:"request_uuid,omitempty"`
+    	Serial      string          `json:"serial"`
+    	UUID        uint64          `json:"uuid"`
+    	State       json.RawMessage `json:"state"`
+    	RequestUUID string          `json:"request_uuid,omitempty"`
     }
 
     type CloudStateNotification struct {
@@ -1265,7 +1285,7 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     // SubscribeState registers a handler for periodic router state updates from the downstream agent exclusively on subject: state.<target>.
     // Delegates under the hood to agentcore.Client.RegisterStateHandler(target, handler).
     // Support for this dedicated state subject pattern in agentcore must be verified/implemented prior to activation.
-    // Incoming payloads are decoded into contracts.DeviceState and passed directly to StateCoalescer.Update().
+    // Incoming payloads are validated as well-formed JSON and passed directly to StateCoalescer.Update().
     func (n *NATSClient) SubscribeState(ctx context.Context, target string, handler func(ctx context.Context, env agentcore.StateEnvelope) error) error
     // RequestState queries the downstream agent for live, on-demand operational state via request-reply on subject: state.get.<target>.
     // Returns a fresh StateEnvelope or an error if timeout/failure occurs.
@@ -1333,13 +1353,13 @@ The uCentral client must not register a NATS responder for `status.get.<target>`
         * `NewTelemetryRingBuffer(queues.telemetry_capacity)`
         * `NewStateCoalescer()`
         * `NewRequestManager(dispatchTimeout, cacheTTLConfig, cache, scheduler, store)`
-    *   Subscribes to downstream state via `nc.SubscribeState(ctx, cfg.NATS.Target, handler)`, validating `StateEnvelope` (verifying `Target == cfg.NATS.Target`), decoding `Payload` into `contracts.DeviceState` (preserving all schema-supported interface fields, specifically including `ipv6_addresses` and `ipv6_leases`), and streaming into `StateCoalescer.Update()`.
+    *   Subscribes to downstream state via `nc.SubscribeState(ctx, cfg.NATS.Target, handler)`, validating `StateEnvelope` (verifying `Target == cfg.NATS.Target`), validating `Payload` as well-formed JSON, and streaming raw validated JSON into `StateCoalescer.Update()`.
     *   Dispatches state event-driven on NATS message arrival (frequency authoritatively governed by Cloud `metrics.statistics.interval`, strictly validated against `TIP-olg-ucentral-schema` integer `minimum: 60`, propagated downstream via JetStream KV `desired.<target>`. Configurations with `interval < 60` or `interval: 0` fail schema validation at ingress and are never written to JetStream KV; downstream uses the last successfully applied Cloud interval as source of truth and local 60s as startup/omission fallback; disablement of periodic telemetry is reserved as a future schema extension, while on-demand queries on `state.get.<target>` remain independent):
         * Peeks current state snapshot from `StateCoalescer`.
         * Wraps into JSON-RPC `method: "state"` notification (`CloudStateNotification`) using canonical outer identity:
           * `params.serial`: populated from `cfg.Cloud.Serial`.
           * `params.uuid`: converted from `StateEnvelope.UUID` string -> `uint64` (valid decimal integer -> parsed `uint64`; empty/`"0"` unapplied config -> `0`; invalid non-numeric -> `0` with warning log, never guessing from client memory).
-          * `params.state`: OpenWiFi telemetry preserving all schema-supported interface fields (including IPv4 and IPv6 addresses and leases; contains no inner `serial` or `uuid`).
+          * `params.state`: forwarded verbatim via lossless validated JSON forwarding (`json.RawMessage`), preserving all schema-supported interface fields (specifically dual-stack `interfaces[].ipv4`, `interfaces[].ipv6_addresses` object array `[{"address":"...","valid":...}]`, `interfaces[].ipv6_leases`, `ntp_server`, and optional wireless structures; sanitized to ensure no top-level inner `serial` or `uuid` exists).
         * Pushes to `PriorityScheduler` at `queues.PriorityMedium` (Priority 2). If push returns `ErrQueueFull` or WebSocket is disconnected, the periodic state update is dropped as a natural result of backpressure/disconnection (best-effort delivery); the client does not buffer or replay stale snapshots across reconnections, waiting instead for the next fresh periodic snapshot.
     *   Dispatches cloud on-demand `"request"` commands (`message: "state"`) through `frameHandler`: invokes `agentcore.RequestState(ctx, cfg.NATS.Target)` with a single bounded request attempt under a 5-second deadline context (`OLG_TIMEOUT_DISPATCH`, zero retries; failing fast on timeout or `service_busy` without mutating the downstream agent's periodic delta baseline). Operates under the existing global Request Manager admission limit (default: 100) without mirroring VyOS's 5-worker execution limit, and preserves existing bounded Priority 0 (`queues.PriorityHighest`) queue and overflow semantics.
         * **Success Path:** Correlates `request_uuid`, converts `StateEnvelope.UUID` to `params.uuid`, and enqueues two sequential frames at Priority 0 (`queues.PriorityHighest`) with strict FIFO ordering:
@@ -1377,4 +1397,4 @@ The uCentral client must not register a NATS responder for `status.get.<target>`
     *   `TestState_SchemaValidation_PortKeys`: Validates that all interface keys in `link-state` and `lldp-peers` match `^(eth|lan|wan)[0-9]*$`, and unmapped/logical interfaces (bridges, VLANs) are omitted from these sections.
     *   `TestState_WiredOnlyRouter`: Validates that purely wired router telemetry emits `radios: []` without schema validation error.
 *   **Dual-Stack Interface Telemetry Tests (IPv4 & IPv6 Preservation):**
-    *   `TestState_DualStack_IPv4_IPv6_Preservation`: Simulates downstream agent publishing dual-stack telemetry over NATS containing both `interfaces[].ipv4` and `interfaces[].ipv6_addresses` (e.g. `["2001:db8::1/64", "fe80::1/64"]`) plus `interfaces[].ipv6_leases`. Verifies that uCentral Client state transformation preserves all IPv4 and IPv6 fields verbatim across NATS-to-WebSocket conversion without silent field loss or schema violation.
+    *   `TestState_DualStack_IPv4_IPv6_Preservation`: Simulates downstream agent publishing dual-stack telemetry over NATS containing both `interfaces[].ipv4` (`addresses: ["192.168.1.1/24"]`, `dhcp_server`, `leases`) and `interfaces[].ipv6_addresses` as schema-compliant objects (`[{"address": "2001:db8::1/64", "valid": 3600}]`), plus `interfaces[].ipv6_leases` (`[{"addresses": ["2001:db8::100"], "hostname": "client-1"}]`). Verifies that uCentral Client state transformation preserves all IPv4 and IPv6 object structures verbatim across NATS-to-WebSocket conversion via lossless validated JSON forwarding without unmarshaling failures, schema violations, or silent field dropping.

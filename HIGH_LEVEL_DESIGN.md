@@ -827,11 +827,12 @@ To guarantee that operators receive **100% live, fresh metrics** (rather than a 
          }
        }
        ```
-   - **Gateway Failure Handling & Unblocking:**
-     1. **Dispatch:** `AP_WS_Connection::ProcessWSFrame()` inspects the frame. Because it contains `result` and `id`, it matches `id: 1042` in `DeviceRegistry` and dispatches the payload to `RESTAPI_RPC::WaitForCommand()`.
-     2. **Evaluation:** `RESTAPI_RPC::WaitForCommand()` evaluates `result.status.error` (which is non-zero) and `result.status.text`.
-     3. **Database Command Termination:** The Gateway records the failure in `StorageService` for `request_uuid`, setting `status = "failed"`, `errorCode = result.status.error`, and saving the error text.
-     4. **Immediate Unblocking:** The synchronous HTTP caller waiting in `RESTAPI_device_commandHandler.cpp` is immediately unblocked and returns an HTTP 400/500 error response with the failure details, without hanging for the 120-second Gateway timeout.
+   - **Gateway Failure Handling, Storage Persistence & Unblocking:**
+     1. **Dispatch:** `AP_WS_Connection::ProcessWSFrame()` inspects the incoming frame. Matching the integer `id: 1042` in `CommandManager::OutStandingRequests_`, it delivers the payload to the waiting promise.
+     2. **Evaluation:** `RESTAPI_RPC::WaitForCommand()` awakes from `rpc_future.wait_for()`, parses `result.status.error` (non-zero) and `result.status.text`, and stores them into `Cmd.ErrorCode` and `Cmd.ErrorText`.
+     3. **Terminal Database Persistence (`StorageService()->AddCommand`):** Because `Cmd.ErrorCode > 0`, `WaitForCommand()` branches directly into `SetCommandStatus(Cmd, Request, Response, Handler, Storage::CommandExecutionType::COMMAND_FAILED, Logger)`. In `RESTAPI_RPC::SetCommandStatus()`, the Gateway calls `StorageService()->AddCommand(Cmd.SerialNumber, Cmd, COMMAND_FAILED)`, which executes an SQL `INSERT INTO CommandList` (or `UPDATE`) persisting the terminal `Status = "failed"`, `ErrorCode`, `ErrorText`, `Results`, `Executed`, and `Completed` timestamps for `Cmd.UUID` (`request_uuid`).
+     4. **No Pending Command Record:** Crucially, for on-demand `request` commands (`message: "state"`), `RESTAPI_device_commandHandler::MakeRequest()` executes with `RetryLater = false` and does not pre-insert any command row prior to `WaitForCommand()`. Therefore, no record ever enters or remains in `COMMAND_PENDING` state. Since no Frame 2 is emitted on failure, `AP_Process_state.cpp` is never invoked, leaving the database record cleanly in its terminal `failed` state.
+     5. **Immediate Synchronous Unblocking:** Within `SetCommandStatus()`, `Handler->ReturnObject(RetObj, HTTP_BAD_REQUEST)` immediately returns HTTP 400 Bad Request with the failed command payload to the synchronous REST caller, terminating without hanging for the 120-second Gateway timeout.
 
 ##### 6.3.5.1 Admission Control & Priority 0 Scheduling Invariants
 

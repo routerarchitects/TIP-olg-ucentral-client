@@ -326,7 +326,7 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 	timeout := h.getTransactionTimeout(rpcReq.Method, rpcReq.Params)
 
 	// Create transaction (REQ-007, REQ-008, REQ-009, REQ-029)
-	tx, err := h.reqMgr.CreateTransaction(frame.SessionID, rpcReq.ID, !isNotification, rpcReq.Method, timeout, isStateChanging)
+	tx, err := h.reqMgr.CreateTransaction(frame.SessionID, rpcReq.ID, !isNotification, rpcReq.Method, timeout, isStateChanging, uuidVal)
 	if err != nil {
 		var cacheErr *reqmgr.CachedResponseError
 		if errors.As(err, &cacheErr) {
@@ -434,6 +434,31 @@ func (h *frameHandler) executeTransaction(ctx context.Context, tx *reqmgr.Transa
 			msg = "Local NATS dispatch timed out (service unavailable)"
 		}
 		h.failTransactionWithCode(tx, dispatchErr, appCode, msg)
+		return
+	}
+
+	if command == contracts.CommandConfigure {
+		// Asynchronous submission model: acknowledge Cloud success immediately
+		// once SubmitConfigure() succeeds (desired config stored in KV and notification published).
+		formattedResult := contracts.BuildDeviceResultObject(
+			h.serial,
+			uuidVal,
+			"success",
+			"0",
+			"Success",
+			nil,
+		)
+		ackResp := contracts.JSONRPCResponse{
+			JSONRPC: contracts.JSONRPCVersion,
+			Result:  formattedResult,
+			ID:      tx.CloudRPCID,
+		}
+		ackBytes, _ := json.Marshal(ackResp)
+
+		if err := h.reqMgr.AcknowledgeConfigure(tx.RPCID, uuidVal, ackBytes); err != nil {
+			log.Printf("[FrameHandler] AcknowledgeConfigure failed: %v\n", err)
+			h.failTransaction(tx, fmt.Errorf("failed to acknowledge configure: %w", err))
+		}
 		return
 	}
 

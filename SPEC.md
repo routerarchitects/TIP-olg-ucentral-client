@@ -879,6 +879,17 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     // If a fast reply was buffered in pendingReplies during TxPendingPublish, MarkInFlight MUST immediately submit it to 
     // the terminal processing sequence after safely entering TxInFlight.
     func (m *DefaultRequestManager) MarkInFlight(rpcID string) error
+    // AcknowledgeConfigure enables asynchronous configure submission.
+    // Following successful submission via SubmitConfigure(), the uCentral client immediately returns
+    // success to Cloud and continues downstream execution asynchronously:
+    // (1) Acquires the Request Manager mutex.
+    // (2) Caches ackResponse in TransactionCache using the method TTL for same-session duplicate replay.
+    // (3) Enqueues ackResponse directly to PriorityScheduler with Priority 0.
+    // (4) Sets RespondToCloud = false, records ConfigUUID, stops/invalidates DispatchTimer,
+    //     starts the downstream response timer, and transitions the transaction to TxInFlight.
+    // (5) The state-changing lock remains held to prevent overlapping state changes until downstream completes or times out.
+    // Subsequent calls to Complete, Fail, or Timeout release the state lock and clean up without sending another Cloud response.
+    func (m *DefaultRequestManager) AcknowledgeConfigure(rpcID string, configUUID string, ackResponse []byte) error
     // Terminal methods (Complete, Fail, Timeout) perform terminal processing as an atomic logical sequence:
     // (1) Acquire the Request Manager mutex. Evaluate transition legality. If already terminal, return ErrAlreadyTerminal (an expected race).
     // (1b) If the transaction is in TxPendingPublish, store the response in pendingReplies, return nil, and DO NOT proceed.

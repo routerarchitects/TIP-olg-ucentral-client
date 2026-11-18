@@ -161,7 +161,7 @@ func CanonicalRequestKey(sessionID string, id json.RawMessage) (string, error) {
 	}
 }
 
-func (m *DefaultRequestManager) CreateTransaction(sessionID string, cloudRPCID json.RawMessage, respondToCloud bool, method string, timeout time.Duration, isStateChanging bool) (*Transaction, error) {
+func (m *DefaultRequestManager) CreateTransaction(sessionID string, cloudRPCID json.RawMessage, respondToCloud bool, method string, timeout time.Duration, isStateChanging bool, configUUID ...string) (*Transaction, error) {
 	isNotification := len(cloudRPCID) == 0 || string(cloudRPCID) == "null"
 	if isNotification && respondToCloud {
 		return nil, errors.New("cannot request response for a notification (null/empty ID)")
@@ -211,6 +211,11 @@ func (m *DefaultRequestManager) CreateTransaction(sessionID string, cloudRPCID j
 		m.activeStateOwner = LockOwnedByRPC
 	}
 
+	var cfgUUID string
+	if len(configUUID) > 0 {
+		cfgUUID = configUUID[0]
+	}
+
 	tx := &Transaction{
 		RPCID:            rpcID,
 		CloudSessionID:   sessionID,
@@ -222,6 +227,7 @@ func (m *DefaultRequestManager) CreateTransaction(sessionID string, cloudRPCID j
 		CreatedAt:        time.Now(),
 		TimeoutDuration:  timeout,
 		DispatchDeadline: time.Now().Add(m.dispatchTimeout),
+		ConfigUUID:       cfgUUID,
 	}
 
 	hasValidID := !isNotification && reqKey != ""
@@ -318,6 +324,70 @@ func (m *DefaultRequestManager) MarkInFlight(rpcID string) error {
 	}
 
 	// Start the downstream response timer
+	tx.ResponseDeadline = time.Now().Add(tx.TimeoutDuration)
+	tx.ResponseTimer = time.AfterFunc(tx.TimeoutDuration, func() {
+		m.Timeout(rpcID)
+	})
+
+	return nil
+}
+
+// AcknowledgeConfigure marks a configure transaction as submitted to NATS, immediately caches
+// and pushes the Cloud success response, and transitions to TxInFlight to await downstream completion.
+// It sets RespondToCloud to false so subsequent downstream terminal events (completion or timeout)
+// release the state lock and clean up without sending a second response to Cloud.
+func (m *DefaultRequestManager) AcknowledgeConfigure(rpcID string, configUUID string, ackResponse []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	tx, exists := m.transactionsByRPCID[rpcID]
+	if !exists {
+		return ErrTransactionNotFound
+	}
+
+	if tx.Method != string(contracts.CommandConfigure) {
+		return errors.New("AcknowledgeConfigure can only be called for configure transactions")
+	}
+
+	if err := validateTransition(tx.State, TxInFlight); err != nil {
+		return err
+	}
+
+	tx.State = TxInFlight
+	tx.ConfigUUID = configUUID
+
+	// 1. Immediately cache the Cloud acknowledgment for same-session duplicate response replay
+	if tx.RequestKey != "" && len(ackResponse) > 0 {
+		ttl := m.cacheTTLConfig.TTLForMethod(tx.Method)
+		m.cache.Set(tx.RequestKey, ackResponse, ttl)
+	}
+
+	// 2. Push the immediate acknowledgment to Cloud scheduler
+	if tx.RespondToCloud && len(ackResponse) > 0 && m.scheduler != nil {
+		if err := m.scheduler.Push(queues.OutboundMessage{
+			SessionID: tx.CloudSessionID,
+			Priority:  queues.PriorityHighest,
+			Payload:   ackResponse,
+		}); err != nil {
+			log.Printf("reqmgr: failed to push configure ack to scheduler (rpc_id=%s): %v", rpcID, err)
+		}
+	}
+
+	// 3. Mark RespondToCloud = false so later downstream terminal transitions do not
+	// send a second response to Cloud or overwrite the cached acknowledgment
+	tx.RespondToCloud = false
+
+	// 4. Process any fast downstream replies that arrived while preparing/publishing
+	if pending, ok := m.pendingReplies[rpcID]; ok {
+		delete(m.pendingReplies, rpcID)
+		return m.terminalTransition(rpcID, pending.State, pending.Payload)
+	}
+
+	if tx.DispatchTimer != nil {
+		tx.DispatchTimer.Stop()
+	}
+
+	// 5. Start the downstream execution timer
 	tx.ResponseDeadline = time.Now().Add(tx.TimeoutDuration)
 	tx.ResponseTimer = time.AfterFunc(tx.TimeoutDuration, func() {
 		m.Timeout(rpcID)
@@ -600,6 +670,10 @@ func (m *DefaultRequestManager) Timeout(rpcID string) error {
 	tx, exists := m.transactionsByRPCID[rpcID]
 	if !exists {
 		return ErrTransactionNotFound
+	}
+
+	if !tx.RespondToCloud && tx.Method == string(contracts.CommandConfigure) {
+		log.Printf("[reqmgr] Downstream execution timed out for configure rpc_id=%s uuid=%s (unknown downstream outcome, lock released)\n", rpcID, tx.ConfigUUID)
 	}
 
 	timeoutResp := m.buildTimeoutResponse(tx)

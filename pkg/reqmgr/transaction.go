@@ -90,6 +90,7 @@ type Transaction struct {
 	CloudRPCID        json.RawMessage
 	RequestKey        string // sessionID:typedCanonicalID, e.g. "session-uuid:n:42"
 	RespondToCloud    bool
+	ConfigUUID        string
 	Method            string
 	State             TransactionState
 	Payload           []byte

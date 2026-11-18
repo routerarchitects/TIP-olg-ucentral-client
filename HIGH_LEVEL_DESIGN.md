@@ -684,7 +684,7 @@ To eliminate inner/outer identity ambiguity and prevent default zero/empty value
 1. **Outer Identity is Authoritative:**
    * **Upstream WebSocket:** Device identity (`serial`) and active configuration version (`uuid`) belong strictly to the outer `params` object (`params.serial` as `string`, `params.uuid` as `uint64`).
    * **Downstream NATS:** Device target identity and active configuration version belong strictly to the outer `StateEnvelope` (`target: string`, `uuid: string`).
-   * **Inner State Payload (`DeviceState` / `payload`):** Represents pure telemetry (`version`, `unit`, `interfaces`, `radios`, `link-state`, `lldp-peers`). It MUST NOT contain inner `uuid` or `serial` fields. Decoding NATS `payload` into `DeviceState` and remarshaling it into `CloudStateParams.State` guarantees clean, standard-compliant OpenWiFi state without redundant or conflicting identity fields.
+   * **Inner State Payload & Schema Preservation (`DeviceState` / `payload`):** Represents pure telemetry (`version`, `unit`, `interfaces`, `radios`, `link-state`, `lldp-peers`). It MUST NOT contain inner `uuid` or `serial` fields. All schema-supported interface fields—specifically including dual-stack `interfaces[].ipv6_addresses`, `interfaces[].ipv6_leases`, `ntp_server`, and optional wireless structures—must be fully preserved during NATS-to-WebSocket transformation. The transformation handles identity separately: stripping inner `serial` and `uuid` if present from the state payload, while authoritatively populating outer `params.serial` and `params.uuid` in `CloudStateParams`. Unmodeled or extended OpenWiFi schema fields must never be dropped or silently discarded during conversion.
 
 2. **Identity Population & Validation:**
    * **`params.serial`:** Populated authoritatively by the uCentral client from its local configuration (`cfg.Cloud.Serial` or detected hardware MAC).
@@ -760,7 +760,7 @@ To guarantee that operators receive **100% live, fresh metrics** (rather than a 
      - **Saturation:** If all 5 worker slots are occupied, returns `StateGetReply` with `error: {"code": "service_busy", "message": "All state collection workers are occupied"}` without queueing.
      - `RequestState()` unwraps successful state or returns typed `*agentcore.StateGetError` (e.g. `CodeServiceBusy`).
 3. **Dual Priority 0 Dispatch & Strict Transmission Ordering:**
-   - When downstream state collection succeeds, the client dispatches two sequential frames at Priority 0 with strict FIFO ordering:
+   - When downstream state collection succeeds, the client dispatches two sequential frames at Priority 0 (`queues.PriorityHighest`) with strict FIFO ordering:
      1. **Frame 1 — JSON-RPC Acknowledgment (Transmitted First):** Transmitted immediately to unblock `RESTAPI_RPC::WaitForCommand()`, matching the Gateway's contract (`result.status` object with `error: 0`):
         ```json
         {
@@ -847,8 +847,8 @@ To maintain predictable resource utilization across upstream and downstream boun
    * The uCentral Client decodes this via `agentcore.RequestState()` into typed `*agentcore.StateGetError` with `Code == agentcore.CodeServiceBusy`, and translates it directly into the Cloud Gateway JSON-RPC failure response (`result.status: {"error": 2, "text": "service busy: maximum concurrent state requests reached"}`).
    * Transport errors, collection errors (`collection_failed`), timeouts (`collection_timeout` / 5s deadline), and `nats.ErrNoResponders` translate to Gateway error code `1` (`result.status: {"error": 1, "text": "downstream state collection timed out or unavailable"}`).
 3. **Priority Preservation & Scheduling Invariants:**
-   * **Periodic Telemetry:** Delivered exclusively via best-effort Priority 2 (`PriorityMedium`), buffered and deduplicated by `StateCoalescer` with last-write-wins generation tracking.
-   * **On-Demand Telemetry:** Correlated command acknowledgments and live state notifications are scheduled in Priority 0 (`PriorityHigh`) to ensure immediate dispatch.
+   * **Periodic Telemetry:** Delivered exclusively via best-effort Priority 2 (`queues.PriorityMedium`), buffered and deduplicated by `StateCoalescer` with last-write-wins generation tracking.
+   * **On-Demand Telemetry:** Correlated command acknowledgments and live state notifications are scheduled in Priority 0 (`queues.PriorityHighest`) to ensure immediate dispatch.
    * **Unchanged Priority 0 Overflow Policy:** The existing bounded Priority 0 queue capacity and overflow policy remain unchanged. No state-specific reservations or new priority classes are introduced. The generic Priority 0 limit remains essential because rapid downstream failures and unrelated command results can still create transient message bursts.
 
 ---

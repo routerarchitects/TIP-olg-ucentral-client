@@ -424,10 +424,15 @@ TIP-olg-ucentral-client/
     	Location      string            `json:"location,omitempty"`
     	Uptime        uint64            `json:"uptime,omitempty"`
     	IPv4          *InterfaceIPv4    `json:"ipv4,omitempty"`
+    	IPv6Addresses []string          `json:"ipv6_addresses,omitempty"`
+    	IPv6Leases    json.RawMessage   `json:"ipv6_leases,omitempty"`
     	DNSServers    []string          `json:"dns_servers,omitempty"`
+    	NTPServer     string            `json:"ntp_server,omitempty"`
     	Counters      InterfaceCounters `json:"counters"`
     	DeltaCounters InterfaceCounters `json:"delta_counters"`
     	Clients       []InterfaceClient `json:"clients,omitempty"`
+    	SSIDs         json.RawMessage   `json:"ssids,omitempty"`
+    	MeshPath      json.RawMessage   `json:"mesh-path,omitempty"`
     }
 
     type PortLinkState struct {
@@ -1328,19 +1333,19 @@ The uCentral client must not register a NATS responder for `status.get.<target>`
         * `NewTelemetryRingBuffer(queues.telemetry_capacity)`
         * `NewStateCoalescer()`
         * `NewRequestManager(dispatchTimeout, cacheTTLConfig, cache, scheduler, store)`
-    *   Subscribes to downstream state via `nc.SubscribeState(ctx, cfg.NATS.Target, handler)`, validating `StateEnvelope` (verifying `Target == cfg.NATS.Target`), decoding `Payload` into `contracts.DeviceState`, and streaming into `StateCoalescer.Update()`.
+    *   Subscribes to downstream state via `nc.SubscribeState(ctx, cfg.NATS.Target, handler)`, validating `StateEnvelope` (verifying `Target == cfg.NATS.Target`), decoding `Payload` into `contracts.DeviceState` (preserving all schema-supported interface fields, specifically including `ipv6_addresses` and `ipv6_leases`), and streaming into `StateCoalescer.Update()`.
     *   Dispatches state event-driven on NATS message arrival (frequency authoritatively governed by Cloud `metrics.statistics.interval`, strictly validated against `TIP-olg-ucentral-schema` integer `minimum: 60`, propagated downstream via JetStream KV `desired.<target>`. Configurations with `interval < 60` or `interval: 0` fail schema validation at ingress and are never written to JetStream KV; downstream uses the last successfully applied Cloud interval as source of truth and local 60s as startup/omission fallback; disablement of periodic telemetry is reserved as a future schema extension, while on-demand queries on `state.get.<target>` remain independent):
         * Peeks current state snapshot from `StateCoalescer`.
         * Wraps into JSON-RPC `method: "state"` notification (`CloudStateNotification`) using canonical outer identity:
           * `params.serial`: populated from `cfg.Cloud.Serial`.
           * `params.uuid`: converted from `StateEnvelope.UUID` string -> `uint64` (valid decimal integer -> parsed `uint64`; empty/`"0"` unapplied config -> `0`; invalid non-numeric -> `0` with warning log, never guessing from client memory).
-          * `params.state`: decoded `DeviceState` telemetry (contains no inner `serial` or `uuid`).
-        * Pushes to `PriorityScheduler` at `PriorityMedium` (Priority 2). If push returns `ErrQueueFull` or WebSocket is disconnected, the periodic state update is dropped as a natural result of backpressure/disconnection (best-effort delivery); the client does not buffer or replay stale snapshots across reconnections, waiting instead for the next fresh periodic snapshot.
-    *   Dispatches cloud on-demand `"request"` commands (`message: "state"`) through `frameHandler`: invokes `agentcore.RequestState(ctx, cfg.NATS.Target)` with a single bounded request attempt under a 5-second deadline context (`OLG_TIMEOUT_DISPATCH`, zero retries; failing fast on timeout or `service_busy` without mutating the downstream agent's periodic delta baseline). Operates under the existing global Request Manager admission limit (default: 100) without mirroring VyOS's 5-worker execution limit, and preserves existing bounded Priority 0 queue and overflow semantics.
-        * **Success Path:** Correlates `request_uuid`, converts `StateEnvelope.UUID` to `params.uuid`, and enqueues two sequential frames at Priority 0 with strict FIFO ordering:
+          * `params.state`: OpenWiFi telemetry preserving all schema-supported interface fields (including IPv4 and IPv6 addresses and leases; contains no inner `serial` or `uuid`).
+        * Pushes to `PriorityScheduler` at `queues.PriorityMedium` (Priority 2). If push returns `ErrQueueFull` or WebSocket is disconnected, the periodic state update is dropped as a natural result of backpressure/disconnection (best-effort delivery); the client does not buffer or replay stale snapshots across reconnections, waiting instead for the next fresh periodic snapshot.
+    *   Dispatches cloud on-demand `"request"` commands (`message: "state"`) through `frameHandler`: invokes `agentcore.RequestState(ctx, cfg.NATS.Target)` with a single bounded request attempt under a 5-second deadline context (`OLG_TIMEOUT_DISPATCH`, zero retries; failing fast on timeout or `service_busy` without mutating the downstream agent's periodic delta baseline). Operates under the existing global Request Manager admission limit (default: 100) without mirroring VyOS's 5-worker execution limit, and preserves existing bounded Priority 0 (`queues.PriorityHighest`) queue and overflow semantics.
+        * **Success Path:** Correlates `request_uuid`, converts `StateEnvelope.UUID` to `params.uuid`, and enqueues two sequential frames at Priority 0 (`queues.PriorityHighest`) with strict FIFO ordering:
           1. Frame 1 (Acknowledgment): `result.status: {"error": 0, "text": "Success"}` matching request `id`, which unblocks `RESTAPI_RPC::WaitForCommand()` and fulfills the synchronous REST request.
           2. Frame 2 (Asynchronous State Notification): `method: "state"` carrying `params.request_uuid`, which `AP_Process_state.cpp` intercepts to asynchronously populate `StorageService()->SetCommandResult(request_uuid, ...)`. Strict ordering guarantees Frame 1 is processed before Frame 2, preventing race conditions against Gateway command registration.
-        * **Failure / Timeout / Service Busy Path:** Because Gateway `AP_WS_Connection::ProcessWSFrame()` only routes responses containing `result` and `id` to `RESTAPI_RPC::WaitForCommand()`, the client maps errors returned by `RequestState()` into a canonical JSON-RPC response with non-zero `result.status.error` at Priority 0:
+        * **Failure / Timeout / Service Busy Path:** Because Gateway `AP_WS_Connection::ProcessWSFrame()` only routes responses containing `result` and `id` to `RESTAPI_RPC::WaitForCommand()`, the client maps errors returned by `RequestState()` into a canonical JSON-RPC response with non-zero `result.status.error` at Priority 0 (`queues.PriorityHighest`):
           - Downstream Saturation: If `RequestState()` returns typed `*agentcore.StateGetError` with `Code == agentcore.CodeServiceBusy` (`"service_busy"`), client maps to `result.status: {"error": 2, "text": "service busy: maximum concurrent state requests reached"}`.
           - Collection Failure / Timeout / Transport: If `RequestState()` returns `collection_failed`, `collection_timeout`, `ErrMalformedStateGetReply`, `nats.ErrNoResponders`, or caller 5s deadline expiration, client maps to `result.status: {"error": 1, "text": "downstream state collection timed out or unavailable"}`.
           No subsequent state notification is emitted on any failure path. In the Cloud Gateway, `RESTAPI_RPC::WaitForCommand()` detects non-zero `result.status.error`, invokes `SetCommandStatus(Cmd, ..., Storage::CommandExecutionType::COMMAND_FAILED)`, and calls `StorageService()->AddCommand()`, directly persisting the command's terminal status (`failed`), error code, error text, and completion timestamp to the `CommandList` database table for `request_uuid`, while immediately returning HTTP 400 Bad Request to the synchronous REST caller. Because `request` commands execute with `RetryLater = false` and are not pre-inserted prior to `WaitForCommand()`, no database record ever remains in a `pending` state. Gateway correlates failures strictly by `id`; it does not implement payload inspection of `error.data.request_uuid`.
@@ -1371,3 +1376,5 @@ The uCentral client must not register a NATS responder for `status.get.<target>`
     *   `TestState_LLDP_PortAttribution`: Validates that LLDP neighbors are grouped under the local receiving physical interface under its assigned WAN/LAN role.
     *   `TestState_SchemaValidation_PortKeys`: Validates that all interface keys in `link-state` and `lldp-peers` match `^(eth|lan|wan)[0-9]*$`, and unmapped/logical interfaces (bridges, VLANs) are omitted from these sections.
     *   `TestState_WiredOnlyRouter`: Validates that purely wired router telemetry emits `radios: []` without schema validation error.
+*   **Dual-Stack Interface Telemetry Tests (IPv4 & IPv6 Preservation):**
+    *   `TestState_DualStack_IPv4_IPv6_Preservation`: Simulates downstream agent publishing dual-stack telemetry over NATS containing both `interfaces[].ipv4` and `interfaces[].ipv6_addresses` (e.g. `["2001:db8::1/64", "fe80::1/64"]`) plus `interfaces[].ipv6_leases`. Verifies that uCentral Client state transformation preserves all IPv4 and IPv6 fields verbatim across NATS-to-WebSocket conversion without silent field loss or schema violation.

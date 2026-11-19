@@ -371,6 +371,133 @@ TIP-olg-ucentral-client/
     	Serial string            `json:"serial"`
     	Status CloudScriptStatus `json:"status"`
     }
+
+    // State Message Contracts (OpenWiFi State Schema)
+    type UnitMemory struct {
+    	Total    uint64 `json:"total"`
+    	Free     uint64 `json:"free"`
+    	Cached   uint64 `json:"cached"`
+    	Buffered uint64 `json:"buffered"`
+    }
+
+    type UnitState struct {
+    	Load        []float64  `json:"load,omitempty"`
+    	CPULoad     []int      `json:"cpu_load,omitempty"`
+    	Memory      UnitMemory `json:"memory"`
+    	Uptime      uint64     `json:"uptime"`
+    	Localtime   uint64     `json:"localtime"`
+    	Boottime    uint64     `json:"boottime,omitempty"`
+    	Temperature []float64  `json:"temperature,omitempty"`
+    }
+
+    type InterfaceCounters struct {
+    	Collisions  uint64 `json:"collisions"`
+    	Multicast   uint64 `json:"multicast"`
+    	RxBytes     uint64 `json:"rx_bytes"`
+    	RxPackets   uint64 `json:"rx_packets"`
+    	RxErrors    uint64 `json:"rx_errors"`
+    	RxDropped   uint64 `json:"rx_dropped"`
+    	TxBytes     uint64 `json:"tx_bytes"`
+    	TxPackets   uint64 `json:"tx_packets"`
+    	TxErrors    uint64 `json:"tx_errors"`
+    	TxDropped   uint64 `json:"tx_dropped"`
+    }
+
+    type InterfaceIPv4 struct {
+    	Addresses  []string `json:"addresses"`
+    	DHCPServer string   `json:"dhcp_server,omitempty"`
+    	Leasetime  uint64   `json:"leasetime,omitempty"`
+    }
+
+    // InterfaceClient models observed L3 network neighbors deduplicated by MAC.
+    // Filtered to exclude FAILED/INCOMPLETE states from ip -j neigh.
+    type InterfaceClient struct {
+    	MAC           string   `json:"mac"`
+    	IPv4Addresses []string `json:"ipv4_addresses,omitempty"`
+    	IPv6Addresses []string `json:"ipv6_addresses,omitempty"`
+    	Ports         []string `json:"ports,omitempty"`
+    	LastSeen      *uint64  `json:"last_seen,omitempty"` // Elapsed seconds since last activity was observed; omitted if unmeasurable (never Unix epoch)
+    }
+
+    // InterfaceIPv6Address conforms to the OpenWiFi state schema (#/$defs/interface.ipv6-address)
+    // representing an IPv6 address/prefix assigned to the interface and its remaining delegation lifetime.
+    type InterfaceIPv6Address struct {
+    	Address string  `json:"address"`
+    	Valid   *uint64 `json:"valid,omitempty"` // Remaining delegation validity in seconds; omitted if permanent/unbounded
+    }
+
+    // InterfaceIPv6Lease conforms to the OpenWiFi state schema (#/$defs/interface.ipv6-lease)
+    // representing an active DHCPv6/SLAAC lease served by this interface.
+    type InterfaceIPv6Lease struct {
+    	Addresses []string `json:"addresses"`
+    	Hostname  string   `json:"hostname,omitempty"`
+    }
+
+    type InterfaceState struct {
+    	Name          string                 `json:"name"`
+    	Location      string                 `json:"location,omitempty"`
+    	Uptime        uint64                 `json:"uptime,omitempty"`
+    	IPv4          *InterfaceIPv4         `json:"ipv4,omitempty"`
+    	IPv6Addresses []InterfaceIPv6Address `json:"ipv6_addresses,omitempty"`
+    	IPv6Leases    []InterfaceIPv6Lease   `json:"ipv6_leases,omitempty"`
+    	DNSServers    []string               `json:"dns_servers,omitempty"`
+    	NTPServer     string                 `json:"ntp_server,omitempty"`
+    	Counters      InterfaceCounters      `json:"counters"`
+    	DeltaCounters InterfaceCounters      `json:"delta_counters"`
+    	Clients       []InterfaceClient      `json:"clients,omitempty"`
+    	SSIDs         json.RawMessage        `json:"ssids,omitempty"`
+    	MeshPath      json.RawMessage        `json:"mesh-path,omitempty"`
+    }
+
+    type PortLinkState struct {
+    	Carrier bool   `json:"carrier"`
+    	Speed   int    `json:"speed,omitempty"`
+    	Duplex  string `json:"duplex,omitempty"`
+    }
+
+    type LinkStateSection struct {
+    	Upstream   map[string]PortLinkState `json:"upstream"`
+    	Downstream map[string]PortLinkState `json:"downstream"`
+    }
+
+    // DeviceState models the inner OpenWiFi router telemetry payload (params.state).
+    // Device identity (serial) and active configuration version (uuid) reside strictly in the outer
+    // wrapper (CloudStateParams on WebSocket, agentcore.StateEnvelope on NATS) to prevent inner/outer identity
+    // mismatches and spurious zero/empty values (uuid: 0, serial: "").
+    // Used for schema-complete structured modeling, local validation, and test assertions.
+    type DeviceState struct {
+    	Version    int                `json:"version"`
+    	Unit       UnitState          `json:"unit"`
+    	Interfaces []InterfaceState   `json:"interfaces"`
+    	Radios     []json.RawMessage  `json:"radios"` // Initialized to [] for routers without wireless
+    	LinkState  *LinkStateSection  `json:"link-state,omitempty"`
+    	LLDPPeers  json.RawMessage    `json:"lldp-peers,omitempty"`
+    }
+
+    // CloudStateParams wraps the telemetry payload for WebSocket transmission to the Cloud Gateway.
+    // State is forwarded as json.RawMessage (lossless validated JSON forwarding) after validating
+    // well-formed JSON and stripping any rogue inner serial/uuid fields. This ensures zero data loss
+    // and full forward-compatibility, preserving all schema-supported properties (e.g. ipv6_addresses objects,
+    // ipv6_leases, ntp_server, wireless SSIDs, and mesh paths) and future schema extensions.
+    type CloudStateParams struct {
+    	Serial      string          `json:"serial"`
+    	UUID        uint64          `json:"uuid"`
+    	State       json.RawMessage `json:"state"`
+    	RequestUUID string          `json:"request_uuid,omitempty"`
+    }
+
+    type CloudStateNotification struct {
+    	JSONRPC string           `json:"jsonrpc"`
+    	Method  string           `json:"method"`
+    	Params  CloudStateParams `json:"params"`
+    }
+
+    type CloudRequestCommandRequest struct {
+    	Serial      string `json:"serial"`
+    	When        int64  `json:"when,omitempty"`
+    	Message     string `json:"message"`
+    	RequestUUID string `json:"request_uuid"`
+    }
     ```
 
 *   **NATS Envelope Structures (`pkg/contracts/envelopes.go`):**
@@ -439,6 +566,10 @@ TIP-olg-ucentral-client/
     }
 
     func (r *ResultEnvelope) Validate() error
+
+    // Note: State wire envelopes reuse agentcore.StateEnvelope directly as the canonical type
+    // (with Timestamp time.Time). The client reuses agentcore.StateEnvelope directly and does not define
+    // a competing local envelope structure.
 
 
     type CloudDeviceStatusQuery struct {
@@ -1162,8 +1293,14 @@ If the result payload cannot be decoded or its `rpc_id` does not match an active
     func (n *NATSClient) SubscribeTelemetry(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error)
     func (n *NATSClient) SubscribeLogs(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error)
     func (n *NATSClient) SubscribeHealth(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error)
-    func (n *NATSClient) SubscribeState(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error)
-    // State Management (Stubbed due to agentcore limitations)
+    // SubscribeState registers a handler for periodic router state updates from the downstream agent exclusively on subject: state.<target>.
+    // Delegates under the hood to agentcore.Client.RegisterStateHandler(target, handler).
+    // Support for this dedicated state subject pattern in agentcore must be verified/implemented prior to activation.
+    // Incoming payloads are validated as well-formed JSON and passed directly to StateCoalescer.Update().
+    func (n *NATSClient) SubscribeState(ctx context.Context, target string, handler func(ctx context.Context, env agentcore.StateEnvelope) error) error
+    // RequestState queries the downstream agent for live, on-demand operational state via request-reply on subject: state.get.<target>.
+    // Returns a fresh StateEnvelope or an error if timeout/failure occurs.
+    func (n *NATSClient) RequestState(ctx context.Context, target string) (agentcore.StateEnvelope, error)
     func (n *NATSClient) GetDesiredConfigMetadata(ctx context.Context) (uint64, string, error)
 
 
@@ -1225,7 +1362,24 @@ The uCentral client must not register a NATS responder for `status.get.<target>`
     *   Instantiates Queues, Request Manager, WebSocket client, NATS wrapper.
         * `NewPriorityScheduler(queues.ws_writer_capacity, queues.emergency_capacity)`
         * `NewTelemetryRingBuffer(queues.telemetry_capacity)`
+        * `NewStateCoalescer()`
         * `NewRequestManager(dispatchTimeout, cacheTTLConfig, cache, scheduler, store)`
+    *   Subscribes to downstream state via `nc.SubscribeState(ctx, cfg.NATS.Target, handler)`, validating `StateEnvelope` (verifying `Target == cfg.NATS.Target`), validating `Payload` as well-formed JSON, and streaming raw validated JSON into `StateCoalescer.Update()`.
+    *   Dispatches state event-driven on NATS message arrival (frequency authoritatively governed by Cloud `metrics.statistics.interval`, strictly validated against `TIP-olg-ucentral-schema` integer `minimum: 60`, propagated downstream via JetStream KV `desired.<target>`. Configurations with `interval < 60` or `interval: 0` fail schema validation at ingress and are never written to JetStream KV; downstream uses the last successfully applied Cloud interval as source of truth and local 60s as startup/omission fallback; disablement of periodic telemetry is reserved as a future schema extension, while on-demand queries on `state.get.<target>` remain independent):
+        * Peeks current state snapshot from `StateCoalescer`.
+        * Wraps into JSON-RPC `method: "state"` notification (`CloudStateNotification`) using canonical outer identity:
+          * `params.serial`: populated from `cfg.Cloud.Serial`.
+          * `params.uuid`: converted from `StateEnvelope.UUID` string -> `uint64` (valid decimal integer -> parsed `uint64`; empty/`"0"` unapplied config -> `0`; invalid non-numeric -> `0` with warning log, never guessing from client memory).
+          * `params.state`: forwarded verbatim via lossless validated JSON forwarding (`json.RawMessage`), preserving all schema-supported interface fields (specifically dual-stack `interfaces[].ipv4`, `interfaces[].ipv6_addresses` object array `[{"address":"...","valid":...}]`, `interfaces[].ipv6_leases`, `ntp_server`, and optional wireless structures; sanitized to ensure no top-level inner `serial` or `uuid` exists).
+        * Pushes to `PriorityScheduler` at `queues.PriorityMedium` (Priority 2). If push returns `ErrQueueFull` or WebSocket is disconnected, the periodic state update is dropped as a natural result of backpressure/disconnection (best-effort delivery); the client does not buffer or replay stale snapshots across reconnections, waiting instead for the next fresh periodic snapshot.
+    *   Dispatches cloud on-demand `"request"` commands (`message: "state"`) through `frameHandler`: invokes `agentcore.RequestState(ctx, cfg.NATS.Target)` with a single bounded request attempt under a 5-second deadline context (`OLG_TIMEOUT_DISPATCH`, zero retries; failing fast on timeout or `service_busy` without mutating the downstream agent's periodic delta baseline). Operates under the existing global Request Manager admission limit (default: 100) without mirroring VyOS's 5-worker execution limit, and preserves existing bounded Priority 0 (`queues.PriorityHighest`) queue and overflow semantics.
+        * **Success Path:** Correlates `request_uuid`, converts `StateEnvelope.UUID` to `params.uuid`, and enqueues two sequential frames at Priority 0 (`queues.PriorityHighest`) with strict FIFO ordering:
+          1. Frame 1 (Acknowledgment): `result.status: {"error": 0, "text": "Success"}` matching request `id`, which unblocks `RESTAPI_RPC::WaitForCommand()` and fulfills the synchronous REST request.
+          2. Frame 2 (Asynchronous State Notification): `method: "state"` carrying `params.request_uuid`, which `AP_Process_state.cpp` intercepts to asynchronously populate `StorageService()->SetCommandResult(request_uuid, ...)`. Strict ordering guarantees Frame 1 is processed before Frame 2, preventing race conditions against Gateway command registration.
+        * **Failure / Timeout / Service Busy Path:** Because Gateway `AP_WS_Connection::ProcessWSFrame()` only routes responses containing `result` and `id` to `RESTAPI_RPC::WaitForCommand()`, the client maps errors returned by `RequestState()` into a canonical JSON-RPC response with non-zero `result.status.error` at Priority 0 (`queues.PriorityHighest`):
+          - Downstream Saturation: If `RequestState()` returns typed `*agentcore.StateGetError` with `Code == agentcore.CodeServiceBusy` (`"service_busy"`), client maps to `result.status: {"error": 2, "text": "service busy: maximum concurrent state requests reached"}`.
+          - Collection Failure / Timeout / Transport: If `RequestState()` returns `collection_failed`, `collection_timeout`, `ErrMalformedStateGetReply`, `nats.ErrNoResponders`, or caller 5s deadline expiration, client maps to `result.status: {"error": 1, "text": "downstream state collection timed out or unavailable"}`.
+          No subsequent state notification is emitted on any failure path. In the Cloud Gateway, `RESTAPI_RPC::WaitForCommand()` detects non-zero `result.status.error`, invokes `SetCommandStatus(Cmd, ..., Storage::CommandExecutionType::COMMAND_FAILED)`, and calls `StorageService()->AddCommand()`, directly persisting the command's terminal status (`failed`), error code, error text, and completion timestamp to the `CommandList` database table for `request_uuid`, while immediately returning HTTP 400 Bad Request to the synchronous REST caller. Because `request` commands execute with `RetryLater = false` and are not pre-inserted prior to `WaitForCommand()`, no database record ever remains in a `pending` state. Gateway correlates failures strictly by `id`; it does not implement payload inspection of `error.data.request_uuid`.
     *   Launches parallel reconnection threads.
     *   Listens for `SIGINT` / `SIGTERM` to perform graceful resource teardowns.
 
@@ -1233,3 +1387,25 @@ The uCentral client must not register a NATS responder for `status.get.<target>`
 *   **Target File:** `tests/integration_test.go`
 *   **NATS Local Broker Setup:**
     *   Verifies end-to-end NATS JetStream KV write, configure triggers, and rollback notifications.
+*   **End-to-End On-Demand State Tests (Gateway Contract Conformance & Ordering):**
+    *   `TestComponent_OnDemandState_Positive_Ordering`: Simulates Cloud Gateway sending `{"jsonrpc":"2.0","id":101,"method":"request","params":{"message":"state","request_uuid":"req-101"}}`. Downstream NATS agent responds on `state.get.<target>`. Verifies strict transmission ordering: Frame 1 (`result.status: {"error": 0, "text": "Success"}` for `id: 101`) arrives FIRST, unblocking `RESTAPI_RPC::WaitForCommand()`, followed by Frame 2 (`method: "state"` with `request_uuid: "req-101"`) arriving SECOND, asynchronously completing `StorageService()->SetCommandResult`.
+    *   `TestComponent_OnDemandState_Timeout_Ordering`: Downstream NATS agent is unresponsive on `state.get.<target>`. Verifies that client executes a single attempt with zero retries under the 5-second deadline context, returns a single JSON-RPC response containing `id: 102` and `result.status: {"error": 1, "text": "downstream state collection timed out or unavailable"}`, verifies zero subsequent `state` notifications are emitted, and verifies that `WaitForCommand()` resolves the failure immediately without hanging.
+    *   `TestComponent_OnDemandState_ServiceBusy`: Simulates downstream VyOS worker capacity saturation returning `StateGetReply` with `error.code: "service_busy"`. Verifies `RequestState()` decodes typed `*agentcore.StateGetError` with `CodeServiceBusy`, which client translates to `id: 103` with `result.status: {"error": 2, "text": "service busy: maximum concurrent state requests reached"}` with zero state notifications, unblocking `WaitForCommand()` immediately.
+    *   `TestComponent_OnDemandState_MalformedReply`: Simulates downstream agent returning malformed `StateGetReply` (empty or dual state+error). Verifies client decodes `ErrMalformedStateGetReply` and translates to `result.status: {"error": 1, "text": "downstream state collection timed out or unavailable"}` without unhandled panic.
+*   **Neighbor Discovery & Client Telemetry Tests (`last_seen` Semantics):**
+    *   `TestNeighbor_KnownAge`: Client telemetry with verified activity age serializes `last_seen` as elapsed seconds ($\ge 0$).
+    *   `TestNeighbor_UnknownAge_Omitted`: Client telemetry where kernel ARP/NDP activity age cannot be measured omits `last_seen` (`omitempty`), asserting no epoch timestamp or fabricated age is emitted.
+    *   `TestNeighbor_SchemaValidation_Omission`: Validates that serializing state notifications with client records omitting `last_seen` complies with OpenWiFi schema validator.
+*   **Statistics Interval Schema Validation & Lifecycle Tests:**
+    *   `TestConfigure_StatisticsInterval_ValidMinimum`: Validates Cloud configure payload containing `metrics.statistics.interval: 60`. Asserts schema validation passes and payload is written to JetStream KV `desired.<target>`.
+    *   `TestConfigure_StatisticsInterval_RejectedZero`: Validates Cloud configure payload containing `metrics.statistics.interval: 0` (or `< 60`). Asserts `validator.Validate()` returns a schema validation error (enforcing integer `minimum: 60`), request is rejected with JSON-RPC error -32602, and invalid payload is never written to JetStream KV.
+    *   `TestConfigure_StatisticsInterval_MissingOmitted`: Validates Cloud configure payload omitting `metrics.statistics.interval` or the entire `metrics.statistics` block. Asserts schema validation passes, payload is forwarded to JetStream KV, and downstream falls back to the local 60s default upon application.
+    *   `TestConfigure_StatisticsInterval_RollbackPreservation`: Simulates a downstream configure failure and rollback notification. Verifies downstream preserves the last successfully applied configuration interval without reverting to an invalid or zero state.
+    *   `TestConfigure_StatisticsInterval_OnDemandIndependence`: Asserts that `state.get.<target>` live queries execute and succeed independently regardless of periodic statistics interval settings or future disablement state.
+*   **Applied Topology & Port Mapping Tests (`link-state` & `lldp-peers`):**
+    *   `TestState_PortMapping_AppliedRoles`: Validates that state notifications attribute physical interfaces to `link-state.upstream` and `link-state.downstream` based on the applied configuration's resolved roles.
+    *   `TestState_LLDP_PortAttribution`: Validates that LLDP neighbors are grouped under the local receiving physical interface under its assigned WAN/LAN role.
+    *   `TestState_SchemaValidation_PortKeys`: Validates that all interface keys in `link-state` and `lldp-peers` match `^(eth|lan|wan)[0-9]*$`, and unmapped/logical interfaces (bridges, VLANs) are omitted from these sections.
+    *   `TestState_WiredOnlyRouter`: Validates that purely wired router telemetry emits `radios: []` without schema validation error.
+*   **Dual-Stack Interface Telemetry Tests (IPv4 & IPv6 Preservation):**
+    *   `TestState_DualStack_IPv4_IPv6_Preservation`: Simulates downstream agent publishing dual-stack telemetry over NATS containing both `interfaces[].ipv4` (`addresses: ["192.168.1.1/24"]`, `dhcp_server`, `leases`) and `interfaces[].ipv6_addresses` as schema-compliant objects (`[{"address": "2001:db8::1/64", "valid": 3600}]`), plus `interfaces[].ipv6_leases` (`[{"addresses": ["2001:db8::100"], "hostname": "client-1"}]`). Verifies that uCentral Client state transformation preserves all IPv4 and IPv6 object structures verbatim across NATS-to-WebSocket conversion via lossless validated JSON forwarding without unmarshaling failures, schema violations, or silent field dropping.

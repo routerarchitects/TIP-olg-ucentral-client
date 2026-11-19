@@ -16,6 +16,9 @@ The default mode relies on strict TLS and NKey validation for production securit
 * Maintains an active state machine lock for heavy actions (like `upgrade` or `reboot`) to prevent conflicting concurrent state changes.
 * Manages request timeouts based on configurable environment variables.
 * Caches completed transaction responses for a configurable TTL so duplicate requests can be safely replayed without re-executing the downstream operation.
+* Subscribes to downstream device operational state exclusively on `state.<target>` via `agentcore.StateEnvelope`, coalesces snapshots via `StateCoalescer`, and pushes periodic JSON-RPC state messages to the Cloud Controller over Priority 2 queues.
+* Serves on-demand live state queries (`state.get.<target>`) and correlated command acknowledgments over Priority 0 queues to ensure zero scheduling delay for Cloud REST callers.
+* Strictly enforces subject separation: `state.<target>` and `state.get.<target>` are used exclusively for periodic and on-demand operational telemetry, while `status.<target>` remains reserved for lifecycle and execution progress.
 * Pushes standard telemetry directly from NATS to the Cloud Controller (To be implemented).
 
 ## Configuration

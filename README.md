@@ -136,6 +136,34 @@ go run ./cmd/ucentral-client -config ./config.json
 | --- | --- |
 | `-config <path>` | Path to the JSON configuration file. |
 
+## Container Packaging (Docker)
+
+A multi-stage `Dockerfile` is provided to package `ucentral-client` as a minimal, statically-linked Alpine container.
+
+> [!NOTE]
+> **Configuration and credentials are not bundled into the image.**
+> In accordance with secure appliance standards, the Docker image contains only the compiled application binary and CA certificates. Runtime configuration (`config.json`), cryptographic keys/certificates, and hardware manifests are externally provisioned and mounted by the appliance orchestrator at startup.
+
+### Building the Image
+
+To build the container image locally:
+
+```bash
+docker build -t ucentral-client:latest .
+```
+
+### Verifying the Image
+
+You can verify that the image built successfully and inspect the binary flags:
+
+```bash
+docker run --rm ucentral-client:latest -h
+```
+
+### Production Appliance Deployment
+
+Runtime container orchestration, network configuration, persistent storage mounts, and credential injection are managed externally by the appliance orchestrator at runtime.
+
 ## Current behavior
 Running the client loads the configuration, initializes the `CapabilityCache`, `PriorityScheduler`, `OperationStore`, and `NATSClient`. It then dials the OpenWiFi Cloud WebSocket.
 

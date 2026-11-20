@@ -59,4 +59,10 @@ jobs:
       - name: Compile Code
         run: go build -v ./...
 
+      - name: Build Docker image
+        run: docker build --platform linux/amd64 -t ucentral-client:ci .
+
+      - name: Smoke-test packaged executable
+        run: docker run --rm ucentral-client:ci -h
+
       # End of CI workflow

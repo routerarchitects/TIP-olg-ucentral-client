@@ -1,0 +1,22 @@
+# Version control & IDE
+.git
+.gitignore
+.github
+.idea
+.vscode
+
+# Secrets & local configuration
+.env
+.env.*
+config.json
+certs/
+
+# Documentation & specifications
+*.md
+docs/
+
+# Local test & debug files
+tests/
+operations/
+tmp/
+*.log

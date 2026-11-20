@@ -162,10 +162,7 @@ docker run --rm ucentral-client:latest -h
 
 ### Production Appliance Deployment
 
-Runtime container orchestration, network topology (`olg-bridge`), volume bind-mounts, and credential injection are managed authoritatively by the OpenLAN Gateway orchestrator.
-
-For production deployment definitions, see the appliance Compose specification:
-* [OLG Orchestrator `config/docker-compose.yml`](https://github.com/RouterArchitects/OLG-ubuntu-setup/blob/main/config/docker-compose.yml)
+Runtime container orchestration, network configuration, persistent storage mounts, and credential injection are managed externally by the appliance orchestrator at runtime.
 
 ## Current behavior
 Running the client loads the configuration, initializes the `CapabilityCache`, `PriorityScheduler`, `OperationStore`, and `NATSClient`. It then dials the OpenWiFi Cloud WebSocket.

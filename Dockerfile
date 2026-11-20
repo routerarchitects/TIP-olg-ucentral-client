@@ -3,7 +3,7 @@
 # ==============================================================================
 
 # Stage 1: Build static Go binary
-FROM golang:alpine AS builder
+FROM golang:1.26-alpine3.24 AS builder
 
 WORKDIR /src
 
@@ -20,7 +20,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /app/ucentral-client ./cmd/ucentral-client
 
 # Stage 2: Minimal Alpine runtime image
-FROM alpine:3.19
+FROM alpine:3.24
 
 RUN apk add --no-cache ca-certificates tzdata
 

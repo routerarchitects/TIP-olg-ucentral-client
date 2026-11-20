@@ -136,63 +136,36 @@ go run ./cmd/ucentral-client -config ./config.json
 | --- | --- |
 | `-config <path>` | Path to the JSON configuration file. |
 
-## Container Deployment (Docker)
+## Container Packaging (Docker)
 
-The provided `Dockerfile` builds a minimal, multi-stage Alpine-based container containing only the compiled static binary and necessary root CA certificates (`ca-certificates`).
+A multi-stage `Dockerfile` is provided to package `ucentral-client` as a minimal, statically-linked Alpine container.
 
-> [!IMPORTANT]
+> [!NOTE]
 > **Configuration and credentials are not bundled into the image.**
-> In accordance with secure appliance deployment standards, the Docker image contains no baked-in credentials, certificates, or environment settings. All runtime configurations, cryptographic keys, and hardware identity manifests must be **externally provisioned** and mounted into the container at startup.
+> In accordance with secure appliance standards, the Docker image contains only the compiled application binary and CA certificates. Runtime configuration (`config.json`), cryptographic keys/certificates, and hardware manifests are externally provisioned and mounted by the appliance orchestrator at startup.
 
-### Running with Docker
+### Building the Image
 
-To run the container, bind-mount the host directories containing your configuration, certificates, and device identity, and supply the corresponding environment variables:
+To build the container image locally:
 
 ```bash
-docker run -d --rm \
-  --name ucentral-client \
-  --network host \
-  -v /etc/olg/client:/etc/olg/client:ro \
-  -v /etc/olg/device-certs:/etc/olg/device-certs:ro \
-  -v /etc/ucentral:/etc/ucentral:ro \
-  -e OW_INTERFACE_MAP_FILE=/etc/ucentral/interface_map.json \
-  -e OW_CAPABILITIES_FILE=/etc/ucentral/capabilities.json \
-  ucentral-client:latest \
-  -config /etc/olg/client/config.json
+docker build -t ucentral-client:latest .
 ```
 
-### Required Mounts & Environment Variables
+### Verifying the Image
 
-| Mount / Variable | Purpose |
-| --- | --- |
-| `-v /etc/olg/client:/etc/olg/client:ro` | Provides `config.json` and client NATS credentials. |
-| `-v /etc/olg/device-certs:/etc/olg/device-certs:ro` | Provides mTLS device certificate (`cert.pem`), private key (`key.pem`), and Cloud CA bundle (`ca.pem`). |
-| `-v /etc/ucentral:/etc/ucentral:ro` | Provides the host hardware mapping and capabilities manifests. |
-| `-e OW_INTERFACE_MAP_FILE=...` | Path to the authoritative hardware interface map containing the device serial number. |
-| `-e OW_CAPABILITIES_FILE=...` | Path to the hardware model capability specification. |
-| `-config /etc/olg/client/config.json` | Explicit path pointing to the mounted JSON configuration. |
+You can verify that the image built successfully and inspect the binary flags:
 
-### Running with Docker Compose
-
-On the appliance host, the container is orchestrated via `docker-compose.yml`:
-
-```yaml
-services:
-  ucentral-client:
-    image: ucentral-client:latest
-    container_name: ucentral-client
-    restart: unless-stopped
-    volumes:
-      - /etc/olg/client:/etc/olg/client:ro
-      - /etc/olg/device-certs:/etc/olg/device-certs:ro
-      - /etc/ucentral:/etc/ucentral:ro
-    environment:
-      - OW_INTERFACE_MAP_FILE=/etc/ucentral/interface_map.json
-      - OW_CAPABILITIES_FILE=/etc/ucentral/capabilities.json
-    command: ["-config", "/etc/olg/client/config.json"]
-    networks:
-      - olg-bridge
+```bash
+docker run --rm ucentral-client:latest -h
 ```
+
+### Production Appliance Deployment
+
+Runtime container orchestration, network topology (`olg-bridge`), volume bind-mounts, and credential injection are managed authoritatively by the OpenLAN Gateway orchestrator.
+
+For production deployment definitions, see the appliance Compose specification:
+* [OLG Orchestrator `config/docker-compose.yml`](https://github.com/RouterArchitects/OLG-ubuntu-setup/blob/main/config/docker-compose.yml)
 
 ## Current behavior
 Running the client loads the configuration, initializes the `CapabilityCache`, `PriorityScheduler`, `OperationStore`, and `NATSClient`. It then dials the OpenWiFi Cloud WebSocket.

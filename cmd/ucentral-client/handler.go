@@ -90,6 +90,7 @@ type frameHandler struct {
 	payloadLimitCertUpdate int
 	payloadLimitDefault    int
 	target                 string
+	requestStateFn         func(ctx context.Context, target string) (agentcore.StateEnvelope, error)
 }
 
 func (h *frameHandler) GetNATSClient() *nats.NATSClient {
@@ -263,6 +264,11 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 	}
 
 	isNotification := len(rpcReq.ID) == 0 || string(rpcReq.ID) == "null"
+
+	// Intercept on-demand state request queries ("method": "request")
+	if rpcReq.Method == "request" {
+		return h.handleStateRequest(ctx, frame.SessionID, rpcReq.ID, isNotification, rpcReq.Params)
+	}
 
 	// Get NATS command/action mappings
 	command, action, isStateChanging := getCommandAction(rpcReq.Method)
@@ -498,4 +504,142 @@ func (h *frameHandler) failTransactionWithCode(tx *reqmgr.Transaction, err error
 		// internal lifecycle error
 		log.Printf("[FrameHandler] Unexpected error from Fail() for tx %s: %v\n", tx.RPCID, failErr)
 	}
+}
+
+func (h *frameHandler) handleStateRequest(ctx context.Context, sessionID string, rpcID json.RawMessage, isNotification bool, params json.RawMessage) (websocket.FrameDisposition, error) {
+	if isNotification {
+		log.Println("[FrameHandler] Rejecting notification for method request: ID is required")
+		return websocket.FrameRejectedKeepConnection, nil
+	}
+
+	var reqParams contracts.CloudRequestCommandRequest
+	if err := json.Unmarshal(params, &reqParams); err != nil {
+		log.Printf("[FrameHandler] Invalid parameters for method request: %v\n", err)
+		errObj := &contracts.JSONRPCError{
+			Code:    contracts.ErrInvalidParams,
+			Message: fmt.Sprintf("Invalid parameters: %v", err),
+		}
+		h.pushResponse(sessionID, rpcID, nil, errObj)
+		return websocket.FrameRejectedKeepConnection, nil
+	}
+	if err := reqParams.Validate(); err != nil {
+		log.Printf("[FrameHandler] Invalid parameters for method request: %v\n", err)
+		errObj := &contracts.JSONRPCError{
+			Code:    contracts.ErrInvalidParams,
+			Message: fmt.Sprintf("Invalid parameters: %v", err),
+		}
+		h.pushResponse(sessionID, rpcID, nil, errObj)
+		return websocket.FrameRejectedKeepConnection, nil
+	}
+
+	if h.stateMgr.GetSystemState() == contracts.StateNATSDegraded {
+		log.Println("[FrameHandler] Rejecting state request: local NATS service is degraded (unavailable)")
+		errObj, _ := contracts.NewInternalJSONRPCError(contracts.ErrServiceUnavailable, "Local NATS service is unavailable")
+		h.pushResponse(sessionID, rpcID, nil, errObj)
+		return websocket.FrameRejectedKeepConnection, nil
+	}
+
+	go h.executeStateRequest(ctx, sessionID, rpcID, reqParams)
+	return websocket.FrameAccepted, nil
+}
+
+func (h *frameHandler) executeStateRequest(ctx context.Context, sessionID string, rpcID json.RawMessage, reqParams contracts.CloudRequestCommandRequest) {
+	select {
+	case h.dispatchBuffer <- struct{}{}:
+		defer func() { <-h.dispatchBuffer }()
+	default:
+		log.Println("[FrameHandler] NATS dispatch buffer is full, rejecting on-demand state request")
+		h.pushStateRequestError(sessionID, rpcID, 2, "service busy: maximum concurrent state requests reached")
+		return
+	}
+
+	dispatchCtx, cancel := context.WithTimeout(ctx, h.timeoutDispatch)
+	defer cancel()
+
+	var env agentcore.StateEnvelope
+	var err error
+
+	if h.requestStateFn != nil {
+		env, err = h.requestStateFn(dispatchCtx, h.target)
+	} else {
+		nClient := h.GetNATSClient()
+		if nClient == nil {
+			h.pushStateRequestError(sessionID, rpcID, 1, "downstream state collection timed out or unavailable")
+			return
+		}
+		env, err = nClient.RequestState(dispatchCtx, h.target)
+	}
+
+	if err != nil {
+		log.Printf("[FrameHandler] On-demand RequestState failed: %v\n", err)
+		var stateErr *agentcore.StateGetError
+		if errors.As(err, &stateErr) && stateErr.Code == agentcore.CodeServiceBusy {
+			h.pushStateRequestError(sessionID, rpcID, 2, "service busy: maximum concurrent state requests reached")
+			return
+		}
+		h.pushStateRequestError(sessionID, rpcID, 1, "downstream state collection timed out or unavailable")
+		return
+	}
+
+	// Build Frame 2 (Asynchronous State Notification) before sending Frame 1 (Acknowledgment)
+	stateNotifBytes, err := contracts.BuildCloudStateNotification(h.serial, env.UUID, env.Payload, reqParams.RequestUUID)
+	if err != nil {
+		log.Printf("[FrameHandler] Failed to build on-demand state notification: %v\n", err)
+		h.pushStateRequestError(sessionID, rpcID, 1, "downstream state collection timed out or unavailable")
+		return
+	}
+
+	// Build Frame 1 (Acknowledgment)
+	ackResp := contracts.JSONRPCResponse{
+		JSONRPC: contracts.JSONRPCVersion,
+		Result:  json.RawMessage(`{"status":{"error":0,"text":"Success"}}`),
+		ID:      rpcID,
+	}
+	ackBytes, err := json.Marshal(ackResp)
+	if err != nil {
+		log.Printf("[FrameHandler] Failed to marshal on-demand state ack: %v\n", err)
+		return
+	}
+
+	// Enqueue strictly in order at Priority 0 (queues.PriorityHighest):
+	// Frame 1 unblocks RESTAPI_RPC::WaitForCommand(), Frame 2 delivers state to StorageService.
+	if err := h.scheduler.Push(queues.OutboundMessage{
+		SessionID: sessionID,
+		Priority:  queues.PriorityHighest,
+		Payload:   ackBytes,
+	}); err != nil {
+		log.Printf("[FrameHandler] Failed to enqueue on-demand state ack: %v\n", err)
+		return
+	}
+	if err := h.scheduler.Push(queues.OutboundMessage{
+		SessionID: sessionID,
+		Priority:  queues.PriorityHighest,
+		Payload:   stateNotifBytes,
+	}); err != nil {
+		log.Printf("[FrameHandler] Failed to enqueue on-demand state notification: %v\n", err)
+	}
+}
+
+func (h *frameHandler) pushStateRequestError(sessionID string, rpcID json.RawMessage, errCode int, errText string) {
+	statusObj := map[string]any{
+		"status": map[string]any{
+			"error": errCode,
+			"text":  errText,
+		},
+	}
+	resultBytes, _ := json.Marshal(statusObj)
+	resp := contracts.JSONRPCResponse{
+		JSONRPC: contracts.JSONRPCVersion,
+		Result:  resultBytes,
+		ID:      rpcID,
+	}
+	respBytes, err := json.Marshal(resp)
+	if err != nil {
+		return
+	}
+	_ = h.scheduler.Push(queues.OutboundMessage{
+		SessionID: sessionID,
+		Priority:  queues.PriorityHighest,
+		Payload:   respBytes,
+	})
 }

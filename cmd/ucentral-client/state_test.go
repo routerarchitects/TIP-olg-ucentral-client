@@ -20,15 +20,15 @@ func newStateTestFrameHandler(t *testing.T, fn func(context.Context, string) (ag
 		wsLink:   contracts.LinkConnected,
 	}
 	h := &frameHandler{
-		stateMgr:        stateMgr,
-		scheduler:       scheduler,
-		serial:          "60cf84f22290",
-		dispatchBuffer:  make(chan struct{}, 10),
+		stateMgr:             stateMgr,
+		scheduler:            scheduler,
+		serial:               "60cf84f22290",
+		dispatchBuffer:       make(chan struct{}, 10),
 		timeoutDispatch:      2 * time.Second,
 		payloadLimitAbsolute: 12 * 1024 * 1024,
 		payloadLimitDefault:  1024 * 1024,
 		target:               "vyos",
-		requestStateFn:  fn,
+		requestStateFn:       fn,
 	}
 	return h, scheduler
 }
@@ -158,11 +158,11 @@ func TestComponent_OnDemandState_Positive_Ordering(t *testing.T) {
 
 func TestComponent_OnDemandState_Errors(t *testing.T) {
 	cases := []struct {
-		name         string
-		rpcID        int
-		reqErr       error
-		wantErrCode  int
-		wantErrText  string
+		name        string
+		rpcID       int
+		reqErr      error
+		wantErrCode int
+		wantErrText string
 	}{
 		{
 			name:        "Timeout",

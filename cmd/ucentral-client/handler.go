@@ -265,51 +265,78 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 
 	isNotification := len(rpcReq.ID) == 0 || string(rpcReq.ID) == "null"
 
-	// Intercept on-demand state request queries ("method": "request")
+	var (
+		command         contracts.CommandType
+		action          contracts.ActionType
+		isStateChanging bool
+		uuidVal         = "0"
+		stateReqParams  contracts.CloudRequestCommandRequest
+	)
+
 	if rpcReq.Method == "request" {
-		return h.handleStateRequest(ctx, frame.SessionID, rpcReq.ID, isNotification, rpcReq.Params)
-	}
-
-	// Get NATS command/action mappings
-	command, action, isStateChanging := getCommandAction(rpcReq.Method)
-	if command == "" {
-		log.Printf("[FrameHandler] Method not found: %s\n", rpcReq.Method)
-		if !isNotification {
-			errObj := &contracts.JSONRPCError{
-				Code:    contracts.ErrMethodNotFound,
-				Message: fmt.Sprintf("Method %s not found", rpcReq.Method),
-			}
-			h.pushResponse(frame.SessionID, rpcReq.ID, nil, errObj)
+		if isNotification {
+			log.Println("[FrameHandler] Rejecting notification for method request: ID is required")
+			return websocket.FrameRejectedKeepConnection, nil
 		}
-		return websocket.FrameRejectedKeepConnection, nil
-	}
-
-	// Validate method-specific parameter payload (Validate incoming API inputs)
-	var uuidVal = "0"
-	var valErr error
-	if command == contracts.CommandConfigure {
-		var cfgReq contracts.CloudConfigureRequest
-		if valErr = json.Unmarshal(rpcReq.Params, &cfgReq); valErr == nil {
-			var effUUID int64
-			effUUID, valErr = cfgReq.ValidateAndGetUUID()
-			if valErr == nil && effUUID > 0 {
-				uuidVal = strconv.FormatInt(effUUID, 10)
-			}
-		}
-	} else {
-		valErr = contracts.ValidateCommandPayload(command, action, rpcReq.Params)
-	}
-
-	if valErr != nil {
-		log.Printf("[FrameHandler] Invalid parameters for method %s: %v\n", rpcReq.Method, valErr)
-		if !isNotification {
+		if err := json.Unmarshal(rpcReq.Params, &stateReqParams); err != nil {
+			log.Printf("[FrameHandler] Invalid parameters for method request: %v\n", err)
 			errObj := &contracts.JSONRPCError{
 				Code:    contracts.ErrInvalidParams,
-				Message: fmt.Sprintf("Invalid parameters: %v", valErr),
+				Message: fmt.Sprintf("Invalid parameters: %v", err),
 			}
 			h.pushResponse(frame.SessionID, rpcReq.ID, nil, errObj)
+			return websocket.FrameRejectedKeepConnection, nil
 		}
-		return websocket.FrameRejectedKeepConnection, nil
+		if err := stateReqParams.Validate(); err != nil {
+			log.Printf("[FrameHandler] Invalid parameters for method request: %v\n", err)
+			errObj := &contracts.JSONRPCError{
+				Code:    contracts.ErrInvalidParams,
+				Message: fmt.Sprintf("Invalid parameters: %v", err),
+			}
+			h.pushResponse(frame.SessionID, rpcReq.ID, nil, errObj)
+			return websocket.FrameRejectedKeepConnection, nil
+		}
+	} else {
+		// Get NATS command/action mappings
+		command, action, isStateChanging = getCommandAction(rpcReq.Method)
+		if command == "" {
+			log.Printf("[FrameHandler] Method not found: %s\n", rpcReq.Method)
+			if !isNotification {
+				errObj := &contracts.JSONRPCError{
+					Code:    contracts.ErrMethodNotFound,
+					Message: fmt.Sprintf("Method %s not found", rpcReq.Method),
+				}
+				h.pushResponse(frame.SessionID, rpcReq.ID, nil, errObj)
+			}
+			return websocket.FrameRejectedKeepConnection, nil
+		}
+
+		// Validate method-specific parameter payload (Validate incoming API inputs)
+		var valErr error
+		if command == contracts.CommandConfigure {
+			var cfgReq contracts.CloudConfigureRequest
+			if valErr = json.Unmarshal(rpcReq.Params, &cfgReq); valErr == nil {
+				var effUUID int64
+				effUUID, valErr = cfgReq.ValidateAndGetUUID()
+				if valErr == nil && effUUID > 0 {
+					uuidVal = strconv.FormatInt(effUUID, 10)
+				}
+			}
+		} else {
+			valErr = contracts.ValidateCommandPayload(command, action, rpcReq.Params)
+		}
+
+		if valErr != nil {
+			log.Printf("[FrameHandler] Invalid parameters for method %s: %v\n", rpcReq.Method, valErr)
+			if !isNotification {
+				errObj := &contracts.JSONRPCError{
+					Code:    contracts.ErrInvalidParams,
+					Message: fmt.Sprintf("Invalid parameters: %v", valErr),
+				}
+				h.pushResponse(frame.SessionID, rpcReq.ID, nil, errObj)
+			}
+			return websocket.FrameRejectedKeepConnection, nil
+		}
 	}
 
 	// State-changing or security-sensitive check for notifications (REQ-029)
@@ -364,7 +391,11 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 	}
 
 	// Handle transaction execution asynchronously (or synchronously for queries)
-	go h.executeTransaction(ctx, tx, command, action, rpcReq.Params, uuidVal)
+	if rpcReq.Method == "request" {
+		go h.executeStateRequest(ctx, tx, stateReqParams)
+	} else {
+		go h.executeTransaction(ctx, tx, command, action, rpcReq.Params, uuidVal)
+	}
 
 	return websocket.FrameAccepted, nil
 }
@@ -506,50 +537,26 @@ func (h *frameHandler) failTransactionWithCode(tx *reqmgr.Transaction, err error
 	}
 }
 
-func (h *frameHandler) handleStateRequest(ctx context.Context, sessionID string, rpcID json.RawMessage, isNotification bool, params json.RawMessage) (websocket.FrameDisposition, error) {
-	if isNotification {
-		log.Println("[FrameHandler] Rejecting notification for method request: ID is required")
-		return websocket.FrameRejectedKeepConnection, nil
-	}
-
-	var reqParams contracts.CloudRequestCommandRequest
-	if err := json.Unmarshal(params, &reqParams); err != nil {
-		log.Printf("[FrameHandler] Invalid parameters for method request: %v\n", err)
-		errObj := &contracts.JSONRPCError{
-			Code:    contracts.ErrInvalidParams,
-			Message: fmt.Sprintf("Invalid parameters: %v", err),
-		}
-		h.pushResponse(sessionID, rpcID, nil, errObj)
-		return websocket.FrameRejectedKeepConnection, nil
-	}
-	if err := reqParams.Validate(); err != nil {
-		log.Printf("[FrameHandler] Invalid parameters for method request: %v\n", err)
-		errObj := &contracts.JSONRPCError{
-			Code:    contracts.ErrInvalidParams,
-			Message: fmt.Sprintf("Invalid parameters: %v", err),
-		}
-		h.pushResponse(sessionID, rpcID, nil, errObj)
-		return websocket.FrameRejectedKeepConnection, nil
-	}
-
-	if h.stateMgr.GetSystemState() == contracts.StateNATSDegraded {
-		log.Println("[FrameHandler] Rejecting state request: local NATS service is degraded (unavailable)")
-		errObj, _ := contracts.NewInternalJSONRPCError(contracts.ErrServiceUnavailable, "Local NATS service is unavailable")
-		h.pushResponse(sessionID, rpcID, nil, errObj)
-		return websocket.FrameRejectedKeepConnection, nil
-	}
-
-	go h.executeStateRequest(ctx, sessionID, rpcID, reqParams)
-	return websocket.FrameAccepted, nil
-}
-
-func (h *frameHandler) executeStateRequest(ctx context.Context, sessionID string, rpcID json.RawMessage, reqParams contracts.CloudRequestCommandRequest) {
+func (h *frameHandler) executeStateRequest(ctx context.Context, tx *reqmgr.Transaction, reqParams contracts.CloudRequestCommandRequest) {
 	select {
 	case h.dispatchBuffer <- struct{}{}:
 		defer func() { <-h.dispatchBuffer }()
 	default:
 		log.Println("[FrameHandler] NATS dispatch buffer is full, rejecting on-demand state request")
-		h.pushStateRequestError(sessionID, rpcID, 2, "service busy: maximum concurrent state requests reached")
+		h.failStateRequest(tx, 2, "service busy: maximum concurrent state requests reached")
+		return
+	}
+
+	if err := h.reqMgr.MarkPreparingDispatch(tx.RPCID); err != nil {
+		log.Printf("[FrameHandler] MarkPreparingDispatch failed for state request: %v\n", err)
+		return
+	}
+	if err := h.reqMgr.MarkPendingPublish(tx.RPCID); err != nil {
+		log.Printf("[FrameHandler] MarkPendingPublish failed for state request: %v\n", err)
+		return
+	}
+	if err := h.reqMgr.MarkInFlight(tx.RPCID); err != nil {
+		log.Printf("[FrameHandler] MarkInFlight failed for state request: %v\n", err)
 		return
 	}
 
@@ -564,7 +571,7 @@ func (h *frameHandler) executeStateRequest(ctx context.Context, sessionID string
 	} else {
 		nClient := h.GetNATSClient()
 		if nClient == nil {
-			h.pushStateRequestError(sessionID, rpcID, 1, "downstream state collection timed out or unavailable")
+			h.failStateRequest(tx, 1, "downstream state collection timed out or unavailable")
 			return
 		}
 		env, err = nClient.RequestState(dispatchCtx, h.target)
@@ -574,18 +581,18 @@ func (h *frameHandler) executeStateRequest(ctx context.Context, sessionID string
 		log.Printf("[FrameHandler] On-demand RequestState failed: %v\n", err)
 		var stateErr *agentcore.StateGetError
 		if errors.As(err, &stateErr) && stateErr.Code == agentcore.CodeServiceBusy {
-			h.pushStateRequestError(sessionID, rpcID, 2, "service busy: maximum concurrent state requests reached")
+			h.failStateRequest(tx, 2, "service busy: maximum concurrent state requests reached")
 			return
 		}
-		h.pushStateRequestError(sessionID, rpcID, 1, "downstream state collection timed out or unavailable")
+		h.failStateRequest(tx, 1, "downstream state collection timed out or unavailable")
 		return
 	}
 
-	// Build Frame 2 (Asynchronous State Notification) before sending Frame 1 (Acknowledgment)
+	// Build Frame 2 (Asynchronous State Notification) before completing Frame 1 (Acknowledgment)
 	stateNotifBytes, err := contracts.BuildCloudStateNotification(h.serial, env.UUID, env.Payload, reqParams.RequestUUID)
 	if err != nil {
 		log.Printf("[FrameHandler] Failed to build on-demand state notification: %v\n", err)
-		h.pushStateRequestError(sessionID, rpcID, 1, "downstream state collection timed out or unavailable")
+		h.failStateRequest(tx, 1, "downstream state collection timed out or unavailable")
 		return
 	}
 
@@ -593,26 +600,24 @@ func (h *frameHandler) executeStateRequest(ctx context.Context, sessionID string
 	ackResp := contracts.JSONRPCResponse{
 		JSONRPC: contracts.JSONRPCVersion,
 		Result:  json.RawMessage(`{"status":{"error":0,"text":"Success"}}`),
-		ID:      rpcID,
+		ID:      tx.CloudRPCID,
 	}
 	ackBytes, err := json.Marshal(ackResp)
 	if err != nil {
 		log.Printf("[FrameHandler] Failed to marshal on-demand state ack: %v\n", err)
+		h.failStateRequest(tx, 1, "downstream state collection timed out or unavailable")
 		return
 	}
 
-	// Enqueue strictly in order at Priority 0 (queues.PriorityHighest):
-	// Frame 1 unblocks RESTAPI_RPC::WaitForCommand(), Frame 2 delivers state to StorageService.
-	if err := h.scheduler.Push(queues.OutboundMessage{
-		SessionID: sessionID,
-		Priority:  queues.PriorityHighest,
-		Payload:   ackBytes,
-	}); err != nil {
-		log.Printf("[FrameHandler] Failed to enqueue on-demand state ack: %v\n", err)
+	// Complete transaction in RequestManager: caches ackBytes and pushes Frame 1 at PriorityHighest.
+	if err := h.reqMgr.Complete(tx.RPCID, ackBytes); err != nil {
+		log.Printf("[FrameHandler] Complete failed for state request tx %s: %v\n", tx.RPCID, err)
 		return
 	}
+
+	// Push Frame 2 (state notification) immediately after Frame 1 at PriorityHighest.
 	if err := h.scheduler.Push(queues.OutboundMessage{
-		SessionID: sessionID,
+		SessionID: tx.CloudSessionID,
 		Priority:  queues.PriorityHighest,
 		Payload:   stateNotifBytes,
 	}); err != nil {
@@ -620,7 +625,7 @@ func (h *frameHandler) executeStateRequest(ctx context.Context, sessionID string
 	}
 }
 
-func (h *frameHandler) pushStateRequestError(sessionID string, rpcID json.RawMessage, errCode int, errText string) {
+func (h *frameHandler) failStateRequest(tx *reqmgr.Transaction, errCode int, errText string) {
 	statusObj := map[string]any{
 		"status": map[string]any{
 			"error": errCode,
@@ -631,15 +636,13 @@ func (h *frameHandler) pushStateRequestError(sessionID string, rpcID json.RawMes
 	resp := contracts.JSONRPCResponse{
 		JSONRPC: contracts.JSONRPCVersion,
 		Result:  resultBytes,
-		ID:      rpcID,
+		ID:      tx.CloudRPCID,
 	}
 	respBytes, err := json.Marshal(resp)
 	if err != nil {
 		return
 	}
-	_ = h.scheduler.Push(queues.OutboundMessage{
-		SessionID: sessionID,
-		Priority:  queues.PriorityHighest,
-		Payload:   respBytes,
-	})
+	if failErr := h.reqMgr.Fail(tx.RPCID, respBytes); failErr != nil && !errors.Is(failErr, reqmgr.ErrAlreadyTerminal) && !errors.Is(failErr, reqmgr.ErrTransactionNotFound) {
+		log.Printf("[FrameHandler] Unexpected error from Fail() for state request tx %s: %v\n", tx.RPCID, failErr)
+	}
 }

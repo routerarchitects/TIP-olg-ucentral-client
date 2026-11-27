@@ -3,28 +3,46 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Telecominfraproject/olg-nats-agent-core/agentcore"
 	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/contracts"
 	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/queues"
+	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/reqmgr"
 	"github.com/routerarchitects/TIP-olg-ucentral-client/pkg/websocket"
 )
 
 func newStateTestFrameHandler(t *testing.T, fn func(context.Context, string) (agentcore.StateEnvelope, error)) (*frameHandler, *queues.PriorityScheduler) {
 	t.Helper()
 	scheduler := queues.NewPriorityScheduler(16, 16)
+	cache := reqmgr.NewTransactionCache()
+	reqMgr, err := reqmgr.NewRequestManager(
+		2*time.Second,
+		reqmgr.CacheTTLConfig{},
+		cache,
+		scheduler,
+		&mockStore{},
+		5,
+		5*time.Minute,
+		10,
+	)
+	if err != nil {
+		t.Fatalf("failed to create request manager: %v", err)
+	}
 	stateMgr := &systemStateManager{
 		natsLink: contracts.LinkConnected,
 		wsLink:   contracts.LinkConnected,
 	}
 	h := &frameHandler{
+		reqMgr:               reqMgr,
 		stateMgr:             stateMgr,
 		scheduler:            scheduler,
 		serial:               "60cf84f22290",
 		dispatchBuffer:       make(chan struct{}, 10),
 		timeoutDispatch:      2 * time.Second,
+		timeoutActionDefault: 5 * time.Second,
 		payloadLimitAbsolute: 12 * 1024 * 1024,
 		payloadLimitDefault:  1024 * 1024,
 		target:               "vyos",
@@ -286,5 +304,97 @@ func TestPeriodicState_HandleNATSState_Lossless_And_PriorityMedium(t *testing.T)
 	// Verify coalescer was committed
 	if _, ok := coalescer.Peek(); ok {
 		t.Fatalf("expected coalescer to be committed after successful push")
+	}
+}
+
+func TestComponent_OnDemandState_DuplicateAndCachedReplay(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	calls := 0
+
+	h, scheduler := newStateTestFrameHandler(t, func(ctx context.Context, _ string) (agentcore.StateEnvelope, error) {
+		calls++
+		if calls == 1 {
+			close(started)
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return agentcore.StateEnvelope{}, ctx.Err()
+			}
+		}
+		return agentcore.StateEnvelope{
+			Version: "1.0",
+			Target:  "vyos",
+			UUID:    "1793880893",
+			Payload: json.RawMessage(`{"unit":{"uptime":120}}`),
+		}, nil
+	})
+
+	reqJSON := []byte(`{"jsonrpc":"2.0","id":201,"method":"request","params":{"message":"state","request_uuid":"req-201"}}`)
+
+	// 1. First request enters RequestManager
+	disp, err := h.HandleFrame(context.Background(), websocket.InboundFrame{
+		SessionID: "sess-dup",
+		Payload:   reqJSON,
+	})
+	if err != nil || disp != websocket.FrameAccepted {
+		t.Fatalf("expected FrameAccepted, got disp=%v err=%v", disp, err)
+	}
+
+	<-started
+
+	// 2. Duplicate in-flight request with same session and RPC ID must be rejected
+	dispDup, err := h.HandleFrame(context.Background(), websocket.InboundFrame{
+		SessionID: "sess-dup",
+		Payload:   reqJSON,
+	})
+	if err != nil || dispDup != websocket.FrameRejectedKeepConnection {
+		t.Fatalf("expected FrameRejectedKeepConnection for duplicate in-flight request, got disp=%v err=%v", dispDup, err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// Drain duplicate error response ("Device is busy")
+	dupFrame, err := scheduler.Next(ctx)
+	if err != nil {
+		t.Fatalf("expected duplicate busy frame, got %v", err)
+	}
+	if !strings.Contains(string(dupFrame.Payload), "Device is busy") {
+		t.Fatalf("expected 'Device is busy' error, got %s", string(dupFrame.Payload))
+	}
+
+	// Let first request complete (pushes Frame 1 ack and Frame 2 state notification)
+	close(release)
+
+	frame1, err := scheduler.Next(ctx)
+	if err != nil {
+		t.Fatalf("expected frame 1 ack, got %v", err)
+	}
+	frame2, err := scheduler.Next(ctx)
+	if err != nil {
+		t.Fatalf("expected frame 2 notification, got %v", err)
+	}
+	if !strings.Contains(string(frame1.Payload), `"error":0`) || !strings.Contains(string(frame2.Payload), `"method":"state"`) {
+		t.Fatalf("unexpected frames: f1=%s f2=%s", string(frame1.Payload), string(frame2.Payload))
+	}
+
+	// 3. Re-send identical completed request: must replay cached response without invoking requestStateFn again
+	dispReplay, err := h.HandleFrame(context.Background(), websocket.InboundFrame{
+		SessionID: "sess-dup",
+		Payload:   reqJSON,
+	})
+	if err != nil || dispReplay != websocket.FrameAccepted {
+		t.Fatalf("expected FrameAccepted on cached replay, got disp=%v err=%v", dispReplay, err)
+	}
+	replayFrame, err := scheduler.Next(ctx)
+	if err != nil {
+		t.Fatalf("expected replayed ack frame, got %v", err)
+	}
+	if string(replayFrame.Payload) != string(frame1.Payload) {
+		t.Fatalf("expected cached replay %s, got %s", string(frame1.Payload), string(replayFrame.Payload))
+	}
+	if calls != 1 {
+		t.Fatalf("expected requestStateFn called once, got %d", calls)
 	}
 }

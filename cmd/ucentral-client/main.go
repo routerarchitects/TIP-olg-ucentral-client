@@ -122,21 +122,28 @@ func main() {
 	// Initialize the bounded Command Result Queue (REQ-013)
 	resultQueue := make(chan agentcore.ResultEnvelope, cfg.Queues.CommandResultCapacity)
 
-	// Helper to subscribe to NATS results
-	subscribeResults := func(nc *nats.NATSClient) error {
-		err := nc.SubscribeResults(ctx, cfg.NATS.Target, func(res agentcore.ResultEnvelope) {
+	// Helper to subscribe to NATS results and state
+	subscribeAll := func(nc *nats.NATSClient) error {
+		if err := nc.SubscribeResults(ctx, cfg.NATS.Target, func(res agentcore.ResultEnvelope) {
 			handleNATSResult(ctx, res, resultQueue, components, cfg.Serial)
-		})
-		if err != nil {
+		}); err != nil {
 			log.Printf("ERROR: Failed to subscribe to NATS results: %v\n", err)
+			return err
 		}
-		return err
+		if err := nc.SubscribeState(ctx, cfg.NATS.Target, func(_ context.Context, env agentcore.StateEnvelope) error {
+			handleNATSState(env, components, cfg.Serial)
+			return nil
+		}); err != nil {
+			log.Printf("ERROR: Failed to subscribe to NATS state: %v\n", err)
+			return err
+		}
+		return nil
 	}
 
 	// Subscribe if client is ready; otherwise start retry loop in background (resilience against boot outages)
 	var subscribed bool
 	if components.NatsClient != nil {
-		if err := subscribeResults(components.NatsClient); err == nil {
+		if err := subscribeAll(components.NatsClient); err == nil {
 			subscribed = true
 		} else {
 			log.Printf("[NATS] Initial subscription failed, closing client and entering recovery loop: %v\n", err)
@@ -164,7 +171,7 @@ func main() {
 						log.Printf("[NATS] Dynamic NATS initialization failed: %v\n", err)
 						continue
 					}
-					if err := subscribeResults(nc); err != nil {
+					if err := subscribeAll(nc); err != nil {
 						log.Printf("[NATS] Dynamic subscription failed: %v, closing client\n", err)
 						_ = nc.Close(context.Background())
 						continue
@@ -228,6 +235,7 @@ func main() {
 
 type AppComponents struct {
 	Scheduler              *queues.PriorityScheduler
+	StateCoalescer         *queues.StateCoalescer
 	ReqManager             *reqmgr.DefaultRequestManager
 	NatsClient             *nats.NATSClient
 	WsClient               *websocket.WSClient
@@ -241,6 +249,33 @@ type AppComponents struct {
 	PayloadLimitCertUpdate int
 	PayloadLimitDefault    int
 	Target                 string
+}
+
+func handleNATSState(env agentcore.StateEnvelope, components *AppComponents, serial string) {
+	notifBytes, err := contracts.BuildCloudStateNotification(serial, env.UUID, env.Payload, "")
+	if err != nil {
+		log.Printf("[NATS STATE] Dropping invalid state payload: %v\n", err)
+		return
+	}
+
+	components.StateCoalescer.Update(notifBytes)
+
+	snap, ok := components.StateCoalescer.Peek()
+	if !ok {
+		return
+	}
+
+	if err := components.Scheduler.Push(queues.OutboundMessage{
+		Priority: queues.PriorityMedium,
+		Payload:  snap.Payload,
+	}); err != nil {
+		if errors.Is(err, queues.ErrQueueFull) {
+			return
+		}
+		log.Printf("[NATS STATE] Failed to push state to scheduler: %v\n", err)
+		return
+	}
+	components.StateCoalescer.Commit(snap.Generation)
 }
 
 func processNATSResult(ctx context.Context, res agentcore.ResultEnvelope, components *AppComponents, serial string) {
@@ -567,6 +602,7 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 	log.Println("Initializing Outbound Schedulers...")
 	scheduler := queues.NewPriorityScheduler(cfg.Queues.WSWriterCapacity, cfg.Queues.EmergencyCapacity)
 	_ = queues.NewTelemetryRingBuffer(cfg.Queues.TelemetryCapacity)
+	stateCoalescer := queues.NewStateCoalescer()
 
 	// Initialize Storage and Cache components
 	log.Println("Initializing Operation Store...")
@@ -642,6 +678,7 @@ func initializeComponents(ctx context.Context, cfg *config.Config, cacheTTLConfi
 
 	return &AppComponents{
 		Scheduler:              scheduler,
+		StateCoalescer:         stateCoalescer,
 		ReqManager:             reqManager,
 		NatsClient:             natsClient,
 		WsClient:               wsClient,

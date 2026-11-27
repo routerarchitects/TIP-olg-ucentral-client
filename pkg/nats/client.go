@@ -51,6 +51,8 @@ func NewNATSClient(agentName string, cfg config.NATSConfig, onStateChange func(c
 			ResultPattern:    "result.%s",
 			StatusPattern:    "status.%s",
 			HealthPattern:    "health.%s",
+			StatePattern:     "state.%s",
+			StateGetPattern:  "state.get.%s",
 		},
 		KV: agentcore.KVConfig{
 			Bucket:           "cfg_desired",
@@ -278,8 +280,44 @@ func (n *NATSClient) SubscribeHealth(ctx context.Context, handler func(msg *nats
 	return nil, errors.New("SubscribeHealth not implemented in agentcore")
 }
 
-func (n *NATSClient) SubscribeState(ctx context.Context, handler func(msg *nats.Msg)) (*nats.Subscription, error) {
-	return nil, errors.New("SubscribeState not implemented in agentcore")
+func (n *NATSClient) SubscribeState(ctx context.Context, target string, handler func(ctx context.Context, env agentcore.StateEnvelope) error) error {
+	if ctx == nil || ctx.Err() != nil {
+		return errors.New("invalid or canceled context")
+	}
+	if err := contracts.ValidateNATSTarget(target); err != nil {
+		return fmt.Errorf("invalid target: %w", err)
+	}
+	if handler == nil {
+		return errors.New("handler cannot be nil")
+	}
+	if n.agentClient == nil {
+		return errors.New("agentClient is not initialized")
+	}
+
+	return n.agentClient.RegisterStateHandler(target, func(hctx context.Context, msg agentcore.StateEnvelope) error {
+		if msg.Target != target {
+			log.Printf("dropping NATS state message with target mismatch: got=%q expected=%q", msg.Target, target)
+			return fmt.Errorf("target mismatch: got %q, expected %q", msg.Target, target)
+		}
+		if len(msg.Payload) == 0 || !json.Valid(msg.Payload) {
+			log.Printf("dropping NATS state message with invalid JSON payload for target=%q", target)
+			return errors.New("state payload must be valid non-empty JSON")
+		}
+		return handler(hctx, msg)
+	})
+}
+
+func (n *NATSClient) RequestState(ctx context.Context, target string) (agentcore.StateEnvelope, error) {
+	if ctx == nil || ctx.Err() != nil {
+		return agentcore.StateEnvelope{}, errors.New("invalid or canceled context")
+	}
+	if err := contracts.ValidateNATSTarget(target); err != nil {
+		return agentcore.StateEnvelope{}, fmt.Errorf("invalid target: %w", err)
+	}
+	if n.agentClient == nil {
+		return agentcore.StateEnvelope{}, errors.New("agentClient is not initialized")
+	}
+	return n.agentClient.RequestState(ctx, target)
 }
 
 func (n *NATSClient) GetDesiredConfigMetadata(ctx context.Context) (uint64, string, error) {

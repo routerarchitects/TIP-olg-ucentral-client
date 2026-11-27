@@ -90,6 +90,7 @@ type frameHandler struct {
 	payloadLimitCertUpdate int
 	payloadLimitDefault    int
 	target                 string
+	requestStateFn         func(ctx context.Context, target string) (agentcore.StateEnvelope, error)
 }
 
 func (h *frameHandler) GetNATSClient() *nats.NATSClient {
@@ -264,46 +265,78 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 
 	isNotification := len(rpcReq.ID) == 0 || string(rpcReq.ID) == "null"
 
-	// Get NATS command/action mappings
-	command, action, isStateChanging := getCommandAction(rpcReq.Method)
-	if command == "" {
-		log.Printf("[FrameHandler] Method not found: %s\n", rpcReq.Method)
-		if !isNotification {
-			errObj := &contracts.JSONRPCError{
-				Code:    contracts.ErrMethodNotFound,
-				Message: fmt.Sprintf("Method %s not found", rpcReq.Method),
-			}
-			h.pushResponse(frame.SessionID, rpcReq.ID, nil, errObj)
-		}
-		return websocket.FrameRejectedKeepConnection, nil
-	}
+	var (
+		command         contracts.CommandType
+		action          contracts.ActionType
+		isStateChanging bool
+		uuidVal         = "0"
+		stateReqParams  contracts.CloudRequestCommandRequest
+	)
 
-	// Validate method-specific parameter payload (Validate incoming API inputs)
-	var uuidVal = "0"
-	var valErr error
-	if command == contracts.CommandConfigure {
-		var cfgReq contracts.CloudConfigureRequest
-		if valErr = json.Unmarshal(rpcReq.Params, &cfgReq); valErr == nil {
-			var effUUID int64
-			effUUID, valErr = cfgReq.ValidateAndGetUUID()
-			if valErr == nil && effUUID > 0 {
-				uuidVal = strconv.FormatInt(effUUID, 10)
-			}
+	if rpcReq.Method == "request" {
+		if isNotification {
+			log.Println("[FrameHandler] Rejecting notification for method request: ID is required")
+			return websocket.FrameRejectedKeepConnection, nil
 		}
-	} else {
-		valErr = contracts.ValidateCommandPayload(command, action, rpcReq.Params)
-	}
-
-	if valErr != nil {
-		log.Printf("[FrameHandler] Invalid parameters for method %s: %v\n", rpcReq.Method, valErr)
-		if !isNotification {
+		if err := json.Unmarshal(rpcReq.Params, &stateReqParams); err != nil {
+			log.Printf("[FrameHandler] Invalid parameters for method request: %v\n", err)
 			errObj := &contracts.JSONRPCError{
 				Code:    contracts.ErrInvalidParams,
-				Message: fmt.Sprintf("Invalid parameters: %v", valErr),
+				Message: fmt.Sprintf("Invalid parameters: %v", err),
 			}
 			h.pushResponse(frame.SessionID, rpcReq.ID, nil, errObj)
+			return websocket.FrameRejectedKeepConnection, nil
 		}
-		return websocket.FrameRejectedKeepConnection, nil
+		if err := stateReqParams.Validate(); err != nil {
+			log.Printf("[FrameHandler] Invalid parameters for method request: %v\n", err)
+			errObj := &contracts.JSONRPCError{
+				Code:    contracts.ErrInvalidParams,
+				Message: fmt.Sprintf("Invalid parameters: %v", err),
+			}
+			h.pushResponse(frame.SessionID, rpcReq.ID, nil, errObj)
+			return websocket.FrameRejectedKeepConnection, nil
+		}
+	} else {
+		// Get NATS command/action mappings
+		command, action, isStateChanging = getCommandAction(rpcReq.Method)
+		if command == "" {
+			log.Printf("[FrameHandler] Method not found: %s\n", rpcReq.Method)
+			if !isNotification {
+				errObj := &contracts.JSONRPCError{
+					Code:    contracts.ErrMethodNotFound,
+					Message: fmt.Sprintf("Method %s not found", rpcReq.Method),
+				}
+				h.pushResponse(frame.SessionID, rpcReq.ID, nil, errObj)
+			}
+			return websocket.FrameRejectedKeepConnection, nil
+		}
+
+		// Validate method-specific parameter payload (Validate incoming API inputs)
+		var valErr error
+		if command == contracts.CommandConfigure {
+			var cfgReq contracts.CloudConfigureRequest
+			if valErr = json.Unmarshal(rpcReq.Params, &cfgReq); valErr == nil {
+				var effUUID int64
+				effUUID, valErr = cfgReq.ValidateAndGetUUID()
+				if valErr == nil && effUUID > 0 {
+					uuidVal = strconv.FormatInt(effUUID, 10)
+				}
+			}
+		} else {
+			valErr = contracts.ValidateCommandPayload(command, action, rpcReq.Params)
+		}
+
+		if valErr != nil {
+			log.Printf("[FrameHandler] Invalid parameters for method %s: %v\n", rpcReq.Method, valErr)
+			if !isNotification {
+				errObj := &contracts.JSONRPCError{
+					Code:    contracts.ErrInvalidParams,
+					Message: fmt.Sprintf("Invalid parameters: %v", valErr),
+				}
+				h.pushResponse(frame.SessionID, rpcReq.ID, nil, errObj)
+			}
+			return websocket.FrameRejectedKeepConnection, nil
+		}
 	}
 
 	// State-changing or security-sensitive check for notifications (REQ-029)
@@ -358,7 +391,11 @@ func (h *frameHandler) HandleFrame(ctx context.Context, frame websocket.InboundF
 	}
 
 	// Handle transaction execution asynchronously (or synchronously for queries)
-	go h.executeTransaction(ctx, tx, command, action, rpcReq.Params, uuidVal)
+	if rpcReq.Method == "request" {
+		go h.executeStateRequest(ctx, tx, stateReqParams)
+	} else {
+		go h.executeTransaction(ctx, tx, command, action, rpcReq.Params, uuidVal)
+	}
 
 	return websocket.FrameAccepted, nil
 }
@@ -497,5 +534,115 @@ func (h *frameHandler) failTransactionWithCode(tx *reqmgr.Transaction, err error
 	default:
 		// internal lifecycle error
 		log.Printf("[FrameHandler] Unexpected error from Fail() for tx %s: %v\n", tx.RPCID, failErr)
+	}
+}
+
+func (h *frameHandler) executeStateRequest(ctx context.Context, tx *reqmgr.Transaction, reqParams contracts.CloudRequestCommandRequest) {
+	select {
+	case h.dispatchBuffer <- struct{}{}:
+		defer func() { <-h.dispatchBuffer }()
+	default:
+		log.Println("[FrameHandler] NATS dispatch buffer is full, rejecting on-demand state request")
+		h.failStateRequest(tx, 2, "service busy: maximum concurrent state requests reached")
+		return
+	}
+
+	if err := h.reqMgr.MarkPreparingDispatch(tx.RPCID); err != nil {
+		log.Printf("[FrameHandler] MarkPreparingDispatch failed for state request: %v\n", err)
+		return
+	}
+	if err := h.reqMgr.MarkPendingPublish(tx.RPCID); err != nil {
+		log.Printf("[FrameHandler] MarkPendingPublish failed for state request: %v\n", err)
+		return
+	}
+	if err := h.reqMgr.MarkInFlight(tx.RPCID); err != nil {
+		log.Printf("[FrameHandler] MarkInFlight failed for state request: %v\n", err)
+		return
+	}
+
+	dispatchCtx, cancel := context.WithTimeout(ctx, h.timeoutDispatch)
+	defer cancel()
+
+	var env agentcore.StateEnvelope
+	var err error
+
+	if h.requestStateFn != nil {
+		env, err = h.requestStateFn(dispatchCtx, h.target)
+	} else {
+		nClient := h.GetNATSClient()
+		if nClient == nil {
+			h.failStateRequest(tx, 1, "downstream state collection timed out or unavailable")
+			return
+		}
+		env, err = nClient.RequestState(dispatchCtx, h.target)
+	}
+
+	if err != nil {
+		log.Printf("[FrameHandler] On-demand RequestState failed: %v\n", err)
+		var stateErr *agentcore.StateGetError
+		if errors.As(err, &stateErr) && stateErr.Code == agentcore.CodeServiceBusy {
+			h.failStateRequest(tx, 2, "service busy: maximum concurrent state requests reached")
+			return
+		}
+		h.failStateRequest(tx, 1, "downstream state collection timed out or unavailable")
+		return
+	}
+
+	// Build Frame 2 (Asynchronous State Notification) before completing Frame 1 (Acknowledgment)
+	stateNotifBytes, err := contracts.BuildCloudStateNotification(h.serial, env.UUID, env.Payload, reqParams.RequestUUID)
+	if err != nil {
+		log.Printf("[FrameHandler] Failed to build on-demand state notification: %v\n", err)
+		h.failStateRequest(tx, 1, "downstream state collection timed out or unavailable")
+		return
+	}
+
+	// Build Frame 1 (Acknowledgment)
+	ackResp := contracts.JSONRPCResponse{
+		JSONRPC: contracts.JSONRPCVersion,
+		Result:  json.RawMessage(`{"status":{"error":0,"text":"Success"}}`),
+		ID:      tx.CloudRPCID,
+	}
+	ackBytes, err := json.Marshal(ackResp)
+	if err != nil {
+		log.Printf("[FrameHandler] Failed to marshal on-demand state ack: %v\n", err)
+		h.failStateRequest(tx, 1, "downstream state collection timed out or unavailable")
+		return
+	}
+
+	// Complete transaction in RequestManager: caches ackBytes and pushes Frame 1 at PriorityHighest.
+	if err := h.reqMgr.Complete(tx.RPCID, ackBytes); err != nil {
+		log.Printf("[FrameHandler] Complete failed for state request tx %s: %v\n", tx.RPCID, err)
+		return
+	}
+
+	// Push Frame 2 (state notification) immediately after Frame 1 at PriorityHighest.
+	if err := h.scheduler.Push(queues.OutboundMessage{
+		SessionID: tx.CloudSessionID,
+		Priority:  queues.PriorityHighest,
+		Payload:   stateNotifBytes,
+	}); err != nil {
+		log.Printf("[FrameHandler] Failed to enqueue on-demand state notification: %v\n", err)
+	}
+}
+
+func (h *frameHandler) failStateRequest(tx *reqmgr.Transaction, errCode int, errText string) {
+	statusObj := map[string]any{
+		"status": map[string]any{
+			"error": errCode,
+			"text":  errText,
+		},
+	}
+	resultBytes, _ := json.Marshal(statusObj)
+	resp := contracts.JSONRPCResponse{
+		JSONRPC: contracts.JSONRPCVersion,
+		Result:  resultBytes,
+		ID:      tx.CloudRPCID,
+	}
+	respBytes, err := json.Marshal(resp)
+	if err != nil {
+		return
+	}
+	if failErr := h.reqMgr.Fail(tx.RPCID, respBytes); failErr != nil && !errors.Is(failErr, reqmgr.ErrAlreadyTerminal) && !errors.Is(failErr, reqmgr.ErrTransactionNotFound) {
+		log.Printf("[FrameHandler] Unexpected error from Fail() for state request tx %s: %v\n", tx.RPCID, failErr)
 	}
 }
